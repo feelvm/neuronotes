@@ -1,9 +1,9 @@
 <script lang="ts">
-  // ----- Utilities -----
-  const today = new Date();
+  import { onMount } from "svelte";
+  import { browser } from "$app/environment";
 
+  // ----- Utilities -----
   function startOfWeek(date: Date, weekStartsOn = 1) {
-    // 0 = Sunday ... 6 = Saturday; default Monday (1)
     const d = new Date(date);
     const day = d.getDay();
     const diff = (day < weekStartsOn ? 7 : 0) + day - weekStartsOn;
@@ -18,38 +18,19 @@
     return d;
   }
 
- function ymd(date: Date) {
-   const y = date.getFullYear();
-   const m = String(date.getMonth() + 1).padStart(2, "0");
-   const d = String(date.getDate()).padStart(2, "0");
-   return `${y}-${m}-${d}`;
- }
-function dmy(date: Date) {
-  const dd = String(date.getDate()).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const yyyy = date.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
-}
-
-  function prettyDate(date: Date) {
-    return date.toLocaleDateString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric"
-    });
+  function ymd(date: Date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
   }
 
-type EventsByDate = Record<string, CalendarEvent[]>;
-
- $: eventsByDate = calendarEvents.reduce((acc, e) => {
-   (acc[e.date] ||= []).push(e);
-   return acc;
- }, {} as EventsByDate);
-
-// Keep each day’s events sorted by time
- $: Object.values(eventsByDate).forEach((list) => {
-   list.sort((a, b) => (a.time || "").localeCompare(b.time || ""));
- });
+  function dmy(date: Date) {
+    const dd = String(date.getDate()).padStart(2, "0");
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const yyyy = date.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  }
 
   // ----- Local storage helpers -----
   function loadLS<T>(key: string, fallback: T): T {
@@ -67,7 +48,7 @@ type EventsByDate = Record<string, CalendarEvent[]>;
   }
 
   // ----- Nav State (auth mock) -----
-  let isLoggedIn = loadLS<boolean>("auth:isLoggedIn", false);
+  let isLoggedIn = false;
   function toggleAuth() {
     isLoggedIn = !isLoggedIn;
     saveLS("auth:isLoggedIn", isLoggedIn);
@@ -81,19 +62,8 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     updatedAt: number;
   };
 
-  let notes: Note[] = loadLS<Note[]>("notes", [
-    {
-      id: crypto.randomUUID(),
-      title: "Welcome",
-      contentHTML:
-        "<p>This is your notes area. Click and start typing. Content saves automatically.</p>",
-      updatedAt: Date.now()
-    }
-  ]);
-  let selectedNoteId: string = loadLS<string>(
-    "notes:selected",
-    notes.length ? notes[0].id : ""
-  );
+  let notes: Note[] = [];
+  let selectedNoteId = "";
 
   function selectNote(id: string) {
     selectedNoteId = id;
@@ -149,19 +119,20 @@ type EventsByDate = Record<string, CalendarEvent[]>;
   // ----- Weekly Calendar State -----
   type CalendarEvent = {
     id: string;
-    date: string; // DD-MM-YYYY
+    date: string; // YYYY-MM-DD
     title: string;
     time?: string; // HH:MM
   };
 
-  let calendarEvents: CalendarEvent[] =
-    loadLS<CalendarEvent[]>("calendar:events", []);
+  let calendarEvents: CalendarEvent[] = [];
 
   function persistCalendar() {
     saveLS("calendar:events", calendarEvents);
   }
 
-  let weekStart = startOfWeek(today, 1); // Monday as start
+  // SSR-safe placeholders
+  let today = new Date(0);
+  let weekStart = new Date(0);
 
   function prevWeek() {
     weekStart = addDays(weekStart, -7);
@@ -170,18 +141,29 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     weekStart = addDays(weekStart, 7);
   }
 
-  $: weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  // Only one reactive assignment for weekDays, guarded for browser
+  $: weekDays = browser
+    ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+    : [];
 
-  function eventsForDay(d: Date) {
-    const dayKey = ymd(d);
-    return calendarEvents
-      .filter((e) => e.date === dayKey)
-      .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-  }
+  // ----- 1. REMOVED the old eventsForDay function -----
+
+  // ----- 2. ADDED a reactive declaration to group events by day -----
+  // This will automatically re-run whenever `calendarEvents` changes.
+  $: eventsByDay = calendarEvents.reduce((acc, event) => {
+    const dayKey = event.date;
+    if (!acc[dayKey]) {
+      acc[dayKey] = [];
+    }
+    acc[dayKey].push(event);
+    // Sort events within the day as they are added
+    acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+    return acc;
+  }, {} as Record<string, CalendarEvent[]>);
 
   let newEventTitle = "";
   let newEventTime = "";
-  let newEventDate = ymd(today);
+  let newEventDate = "1970-01-01";
 
   function addEvent() {
     if (!newEventTitle.trim() || !newEventDate) return;
@@ -206,28 +188,10 @@ type EventsByDate = Record<string, CalendarEvent[]>;
   }
 
   // ----- Kanban State -----
-  type Task = {
-    id: string;
-    text: string;
-  };
-  type Column = {
-    id: string;
-    title: string;
-    tasks: Task[];
-  };
+  type Task = { id: string; text: string };
+  type Column = { id: string; title: string; tasks: Task[] };
 
-  let kanban: Column[] = loadLS<Column[]>("kanban", [
-    {
-      id: crypto.randomUUID(),
-      title: "Todo",
-      tasks: [
-        { id: crypto.randomUUID(), text: "Try the app" },
-        { id: crypto.randomUUID(), text: "Add your tasks" }
-      ]
-    },
-    { id: crypto.randomUUID(), title: "Doing", tasks: [] },
-    { id: crypto.randomUUID(), title: "Done", tasks: [] }
-  ]);
+  let kanban: Column[] = [];
 
   function persistKanban() {
     saveLS("kanban", kanban);
@@ -273,7 +237,7 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     persistKanban();
   }
 
-  // Drag-and-drop for tasks
+  // Drag-and-drop
   let dragTask: { colId: string; taskId: string } | null = null;
 
   function onTaskDragStart(colId: string, taskId: string, ev: DragEvent) {
@@ -281,19 +245,15 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     ev.dataTransfer?.setData("text/plain", JSON.stringify(dragTask));
     ev.dataTransfer?.setDragImage(new Image(), 0, 0);
   }
-
   function onTaskDragOver(ev: DragEvent) {
     ev.preventDefault();
   }
-
   function onColumnDrop(targetColId: string, ev: DragEvent) {
     ev.preventDefault();
     const data = ev.dataTransfer?.getData("text/plain");
     if (!data) return;
     const payload = JSON.parse(data) as { colId: string; taskId: string };
-
-    if (!payload) return;
-    if (payload.colId === targetColId) return;
+    if (!payload || payload.colId === targetColId) return;
 
     const fromCol = kanban.find((c) => c.id === payload.colId);
     const toCol = kanban.find((c) => c.id === targetColId);
@@ -307,9 +267,53 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     kanban = [...kanban];
     persistKanban();
   }
-</script>
 
+  // ----- Client-only initialization -----
+  onMount(() => {
+    isLoggedIn = loadLS<boolean>("auth:isLoggedIn", false);
+
+    notes = loadLS<Note[]>("notes", []);
+    if (notes.length === 0) {
+      notes = [
+        {
+          id: crypto.randomUUID(),
+          title: "Welcome",
+          contentHTML:
+            "<p>This is your notes area. Click and start typing. Content saves automatically.</p>",
+          updatedAt: Date.now()
+        }
+      ];
+    }
+    selectedNoteId = loadLS<string>("notes:selected", notes[0]?.id ?? "");
+
+    calendarEvents = loadLS<CalendarEvent[]>("calendar:events", []);
+
+    kanban = loadLS<Column[]>("kanban", [
+      {
+        id: crypto.randomUUID(),
+        title: "Todo",
+        tasks: [
+          { id: crypto.randomUUID(), text: "Try the app" },
+          { id: crypto.randomUUID(), text: "Add your tasks" }
+        ]
+      },
+      { id: crypto.randomUUID(), title: "Doing", tasks: [] },
+      { id: crypto.randomUUID(), title: "Done", tasks: [] }
+    ]);
+
+    today = new Date();
+    weekStart = startOfWeek(today, 1);
+    newEventDate = ymd(today);
+  });
+</script>
 <style>
+  :global(html, body) {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #0b1020;
+  }
+
   :root {
     --bg: #0b1020;
     --panel: #11172b;
@@ -326,21 +330,12 @@ type EventsByDate = Record<string, CalendarEvent[]>;
 
   * {
     box-sizing: border-box;
-    
-  }
-
-  :global(html, body) {
-    margin: 0;
-    padding: 0;
-    background: #0b1020; /* optional, to match your app bg */
-    height: 100%;
   }
 
   body,
   html,
   #app {
     height: 100%;
-    
   }
 
   .app {
@@ -351,7 +346,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     flex-direction: column;
   }
 
-  /* Nav */
   .nav {
     height: 50px;
     display: flex;
@@ -363,7 +357,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
   }
   .nav .brand {
     font-weight: 700;
-    letter-spacing: 0.3px;
   }
   .nav .spacer {
     flex: 1;
@@ -380,7 +373,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     border-color: var(--accent);
   }
 
-  /* Layout */
   .main {
     flex: 1;
     overflow: hidden;
@@ -415,10 +407,9 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     font-weight: 600;
   }
 
-  /* Notes panel (left) */
   .notes {
     display: grid;
-    grid-template-columns: 160px 1fr;
+    grid-template-columns: 220px 1fr;
     height: 100%;
   }
 
@@ -448,7 +439,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
   }
   .note-item.active {
     background: rgba(95, 140, 255, 0.15);
@@ -458,11 +448,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .note-item .delete {
-    color: var(--danger);
-    opacity: 0.9;
-    font-size: 12px;
   }
   .note-editor {
     display: flex;
@@ -497,13 +482,11 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     box-shadow: 0 0 0 2px rgba(95, 140, 255, 0.2) inset;
   }
 
-  /* Right side split */
   .right {
     display: grid;
-    grid-template-rows: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     gap: 12px;
     height: 100%;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     min-height: 0;
   }
 
@@ -525,26 +508,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     gap: 6px;
     min-width: 0;
   }
- .calendar-grid .event {
-   font-size: 12px;
-   line-height: 1.2;
-  }
- .calendar-grid .event > div:first-child {
-   flex: 1 1 auto;
-   min-width: 0;
-   overflow: hidden;
- }
- .calendar-grid .event > div:first-child span:last-child {
-   overflow: hidden;
-   text-overflow: ellipsis;
-   white-space: nowrap;
- }
- .calendar-grid .event .small-btn {
-   flex: 0 0 auto;
-   padding: 4px 8px;
-   font-size: 12px;
-   line-height: 1;
- }
   .calendar-cell .date {
     font-size: 12px;
     color: var(--muted);
@@ -559,6 +522,8 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     gap: 6px;
     align-items: center;
     font-size: 12px;
+    line-height: 1.2;
+    position: relative;
   }
   .event .time {
     color: var(--accent-2);
@@ -569,9 +534,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     gap: 8px;
     align-items: center;
     margin-left: auto;
-  }
-  .calendar-controls .btn {
-    padding: 6px 10px;
   }
   .calendar-add {
     display: flex;
@@ -607,16 +569,37 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     color: var(--danger);
   }
 
+  .calendar-grid .event > div:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .calendar-grid .event > div:first-child span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .calendar-grid .event .small-btn {
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 1;
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1;
+  }
+
   /* Kanban */
   .kanban-board {
     padding: 12px;
     display: flex;
     gap: 12px;
-    overflow: auto;
-    flex: 1 1 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex: 1;
     min-height: 0;
-   overflow-x: auto;
-   overflow-y: hidden;
   }
   .kanban-col {
     min-width: 220px;
@@ -628,8 +611,7 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     max-height: 100%;
     flex-wrap: nowrap;
     height: 100%;
-   overflow-y: auto;
-   overflow-x: hidden;
+    min-height: 0;
   }
   .kanban-col-header {
     display: flex;
@@ -645,17 +627,16 @@ type EventsByDate = Record<string, CalendarEvent[]>;
     border: none;
     outline: none;
     font-weight: 600;
-    
   }
   .kanban-tasks {
     padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    overflow: auto;
-    flex: 1 1 auto; 
-    min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .kanban-task {
     background: #121a3a;
@@ -680,27 +661,36 @@ type EventsByDate = Record<string, CalendarEvent[]>;
   .kanban-actions {
     display: flex;
     flex: 0 0 auto;
-    gap: 8px;
+    gap: 10px;
     padding: 10px;
     border-top: 1px solid var(--border);
   }
   .kanban-actions input {
     flex: 1 1 auto;
-    min-width: 0;
     background: #0f1633;
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
+    min-width: 0;
+  }
+  .kanban-actions .small-btn {
+    flex: 0 0 84px;
+    padding: 6px 12px;
+    font-size: 12px;
   }
 
-.kanban-actions .small-btn {
-  flex: 0 0 54px; /* wider button; tweak 72–100px to taste */
-  padding: 6px 12px;
-  font-size: 10px;
-}
+  .kanban-board,
+  .kanban-tasks {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .kanban-board::-webkit-scrollbar,
+  .kanban-tasks::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
 
-  /* Responsive */
   @media (max-width: 1100px) {
     .main {
       grid-template-columns: 1fr;
@@ -715,17 +705,6 @@ type EventsByDate = Record<string, CalendarEvent[]>;
       display: none;
     }
   }
-
-.kanban-board,
-.kanban-tasks {
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE 10+ */
-}
-.kanban-board::-webkit-scrollbar,
-.kanban-tasks::-webkit-scrollbar {
-  width: 0;
-  height: 0; /* WebKit */
-}
 </style>
 
 <div class="app">
@@ -776,7 +755,10 @@ type EventsByDate = Record<string, CalendarEvent[]>;
               class="note-title"
               bind:value={currentNote.title}
               on:input={(e) =>
-                updateNoteTitle(currentNote, (e.target as HTMLInputElement).value)}
+                updateNoteTitle(
+                  currentNote,
+                  (e.target as HTMLInputElement).value
+                )}
               placeholder="Note title..."
             />
 
@@ -789,8 +771,8 @@ type EventsByDate = Record<string, CalendarEvent[]>;
                   updateNoteContent(
                     currentNote,
                     (e.currentTarget as HTMLElement).innerHTML
-                  )}>
-              </div>
+                  )}
+              />
             </div>
           {:else}
             <div style="padding:12px">No notes. Create one to get started.</div>
@@ -804,61 +786,64 @@ type EventsByDate = Record<string, CalendarEvent[]>;
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            Week of {dmy(weekStart)}
+            {#if browser}Week of {dmy(weekStart)}{:else}Calendar{/if}
           </div>
-          <div class="calendar-controls">
-            <button class="small-btn" on:click={prevWeek}>&larr; Prev</button>
-            <button class="small-btn" on:click={() => (weekStart = startOfWeek(today, 1))}>
-              Today
-            </button>
-            <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
-          </div>
-        </div>
-
-        <div class="calendar-grid">
-          {#each weekDays as d (ymd(d))}
-            <div class="calendar-cell">
-              <div class="date">{dmy(d)}</div>
-              {#each eventsForDay(d) as ev (ev.id)}
-                <div class="event">
-                  <div style="display:flex; gap:6px; align-items:center;">
-                    {#if ev.time}
-                      <span class="time">{ev.time}</span>
-                    {/if}
-                    <span>{ev.title}</span>
-                  </div>
-                  <button
-                    class="small-btn danger"
-                    on:click={() => deleteEvent(ev.id)}
-                    title="Delete event"
-                  >
-                    ×
-                  </button>
-                </div>
-              {/each}
+          {#if browser}
+            <div class="calendar-controls">
+              <button class="small-btn" on:click={prevWeek}>&larr; Prev</button>
+              <button
+                class="small-btn"
+                on:click={() => (weekStart = startOfWeek(today, 1))}
+              >
+                Today
+              </button>
+              <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
             </div>
-          {/each}
+          {/if}
         </div>
 
-        <div class="calendar-add">
-          <input
-            type="date"
-            bind:value={newEventDate}
-            aria-label="Event date"
-          />
-          <input
-            type="time"
-            bind:value={newEventTime}
-            aria-label="Event time"
-          />
-          <input
-            type="text"
-            bind:value={newEventTitle}
-            placeholder="Event title"
-            aria-label="Event title"
-          />
-          <button class="small-btn" on:click={addEvent}>Add</button>
+        {#if browser}
+<div class="calendar-grid">
+  {#each weekDays as d (ymd(d))}
+    <div class="calendar-cell">
+      <div class="date">{dmy(d)}</div>
+      <!-- Use the `eventsByDay` map here. The `|| []` handles days with no events. -->
+      {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
+        <div class="event">
+          <div>
+            {#if ev.time}<span class="time">{ev.time}</span>{/if}
+            <span>{ev.title}</span>
+          </div>
+          <button
+            class="small-btn danger"
+            on:click={() => deleteEvent(ev.id)}
+            title="Delete event"
+          >
+            ×
+          </button>
         </div>
+      {/each}
+    </div>
+  {/each}
+</div>
+          <div class="calendar-add">
+            <input
+              type="date"
+              bind:value={newEventDate}
+              aria-label="Event date"
+            />
+            <input type="time" bind:value={newEventTime} aria-label="Event time" />
+            <input
+              type="text"
+              bind:value={newEventTitle}
+              placeholder="Event title"
+              aria-label="Event title"
+            />
+            <button class="small-btn" on:click={addEvent}>Add</button>
+          </div>
+        {:else}
+          <div style="padding:12px; color: var(--muted);">Loading…</div>
+        {/if}
       </div>
 
       <div class="panel">
