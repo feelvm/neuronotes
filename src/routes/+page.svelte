@@ -47,7 +47,7 @@
     } catch {}
   }
 
-  // ----- Nav State (auth mock) -----
+  // ----- Nav State (to do later) -----
   let isLoggedIn = false;
   function toggleAuth() {
     isLoggedIn = !isLoggedIn;
@@ -130,7 +130,7 @@
     saveLS("calendar:events", calendarEvents);
   }
 
-  // SSR-safe placeholders
+  // SSR placeholders
   let today = new Date(0);
   let weekStart = new Date(0);
 
@@ -141,22 +141,16 @@
     weekStart = addDays(weekStart, 7);
   }
 
-  // Only one reactive assignment for weekDays, guarded for browser
   $: weekDays = browser
     ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
     : [];
 
-  // ----- 1. REMOVED the old eventsForDay function -----
-
-  // ----- 2. ADDED a reactive declaration to group events by day -----
-  // This will automatically re-run whenever `calendarEvents` changes.
   $: eventsByDay = calendarEvents.reduce((acc, event) => {
     const dayKey = event.date;
     if (!acc[dayKey]) {
       acc[dayKey] = [];
     }
     acc[dayKey].push(event);
-    // Sort events within the day as they are added
     acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
     return acc;
   }, {} as Record<string, CalendarEvent[]>);
@@ -189,7 +183,12 @@
 
   // ----- Kanban State -----
   type Task = { id: string; text: string };
-  type Column = { id: string; title: string; tasks: Task[] };
+  type Column = {
+    id: string;
+    title: string;
+    tasks: Task[];
+    isCollapsed: boolean;
+  };
 
   let kanban: Column[] = [];
 
@@ -200,7 +199,12 @@
   function addColumn() {
     kanban = [
       ...kanban,
-      { id: crypto.randomUUID(), title: "New Column", tasks: [] }
+      {
+        id: crypto.randomUUID(),
+        title: "New Column",
+        tasks: [],
+        isCollapsed: false
+      }
     ];
     persistKanban();
   }
@@ -237,7 +241,16 @@
     persistKanban();
   }
 
-  // Drag-and-drop
+  function toggleColumnCollapse(colId: string) {
+    const col = kanban.find((c) => c.id === colId);
+    if (col) {
+      col.isCollapsed = !col.isCollapsed;
+      kanban = [...kanban];
+      persistKanban();
+    }
+  }
+
+  // Drag and Drop
   let dragTask: { colId: string; taskId: string } | null = null;
 
   function onTaskDragStart(colId: string, taskId: string, ev: DragEvent) {
@@ -268,7 +281,7 @@
     persistKanban();
   }
 
-  // ----- Client-only initialization -----
+  // ----- Client only initialization -----
   onMount(() => {
     isLoggedIn = loadLS<boolean>("auth:isLoggedIn", false);
 
@@ -288,44 +301,57 @@
 
     calendarEvents = loadLS<CalendarEvent[]>("calendar:events", []);
 
-    kanban = loadLS<Column[]>("kanban", [
-      {
-        id: crypto.randomUUID(),
-        title: "Todo",
-        tasks: [
-          { id: crypto.randomUUID(), text: "Try the app" },
-          { id: crypto.randomUUID(), text: "Add your tasks" }
-        ]
-      },
-      { id: crypto.randomUUID(), title: "Doing", tasks: [] },
-      { id: crypto.randomUUID(), title: "Done", tasks: [] }
-    ]);
+    const loadedKanban = loadLS<Column[]>("kanban", []);
+    if (loadedKanban.length > 0) {
+      kanban = loadedKanban.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }));
+    } else {
+      kanban = [
+        {
+          id: crypto.randomUUID(),
+          title: "Todo",
+          tasks: [
+            { id: crypto.randomUUID(), text: "Try the app" },
+            { id: crypto.randomUUID(), text: "Add your tasks" }
+          ],
+          isCollapsed: false
+        },
+        {
+          id: crypto.randomUUID(),
+          title: "Doing",
+          tasks: [],
+          isCollapsed: false
+        },
+        { id: crypto.randomUUID(), title: "Done", tasks: [], isCollapsed: false }
+      ];
+    }
 
     today = new Date();
     weekStart = startOfWeek(today, 1);
     newEventDate = ymd(today);
   });
 </script>
+
 <style>
+  :root {
+    --bg: #1a1a1a;
+    --panel-bg: #212121;
+    --panel-bg-darker: #1e1e1e;
+    --text: #e0e0e0;
+    --text-muted: #888;
+    --border: #333;
+    --accent-red: #ff4757;
+    --accent-purple: #8c7ae6;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+
   :global(html, body) {
     margin: 0;
     padding: 0;
     height: 100%;
-    background: #0b1020;
-  }
-
-  :root {
-    --bg: #0b1020;
-    --panel: #11172b;
-    --panel-2: #0f1528;
-    --muted: #7d8ab0;
-    --text: #e7ebfb;
-    --accent: #5f8cff;
-    --accent-2: #87b0ff;
-    --danger: #ff6b6b;
-    --ok: #2ecc71;
-    --border: #223053;
-    --shadow: rgba(0, 0, 0, 0.25);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
   }
 
   * {
@@ -339,8 +365,11 @@
   }
 
   .app {
-    background: linear-gradient(180deg, #0b1020, #0a0f1e);
-    color: var(--text);
+    background: radial-gradient(
+      circle at 10% 20%,
+      rgba(255, 71, 87, 0.1),
+      transparent 40%
+    );
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -350,10 +379,11 @@
     height: 50px;
     display: flex;
     align-items: center;
-    padding: 0 16px;
+    padding: 0 24px;
     border-bottom: 1px solid var(--border);
-    background: rgba(15, 21, 40, 0.8);
+    background: rgba(26, 26, 26, 0.8);
     backdrop-filter: blur(8px);
+    flex-shrink: 0;
   }
   .nav .brand {
     font-weight: 700;
@@ -362,15 +392,16 @@
     flex: 1;
   }
   .nav .btn {
-    background: var(--panel);
+    background: var(--panel-bg);
     border: 1px solid var(--border);
     color: var(--text);
     padding: 8px 12px;
     border-radius: 8px;
     cursor: pointer;
+    transition: border-color 0.2s;
   }
   .nav .btn:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-red);
   }
 
   .main {
@@ -378,15 +409,14 @@
     overflow: hidden;
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    padding: 12px;
+    gap: 24px;
+    padding: 24px;
   }
 
   .panel {
-    background: var(--panel);
+    background: var(--panel-bg);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 8px 24px var(--shadow);
+    border-radius: 16px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -395,12 +425,12 @@
   }
 
   .panel-header {
-    padding: 10px 12px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     gap: 8px;
-    background: var(--panel-2);
+    flex-shrink: 0;
   }
 
   .panel-title {
@@ -409,17 +439,16 @@
 
   .notes {
     display: grid;
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: 180px 1fr;
     height: 100%;
   }
 
   .note-list {
     border-right: 1px solid var(--border);
     overflow: auto;
-    background: linear-gradient(180deg, #0e1430, #0e1430);
   }
   .note-list-header {
-    padding: 8px;
+    padding: 16px;
     display: flex;
     gap: 8px;
     align-items: center;
@@ -427,21 +456,22 @@
   }
   .note-list .btn {
     width: 100%;
-    background: var(--accent);
+    background: var(--accent-red);
     border: 1px solid transparent;
-    color: #0a0f1e;
+    color: white;
     font-weight: 600;
   }
   .note-item {
-    padding: 10px 10px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    transition: background-color 0.2s;
   }
   .note-item.active {
-    background: rgba(95, 140, 255, 0.15);
+    background: rgba(255, 71, 87, 0.15);
   }
   .note-item .title {
     font-size: 14px;
@@ -458,14 +488,14 @@
     background: transparent;
     border: none;
     outline: none;
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 600;
     color: var(--text);
-    padding: 12px;
+    padding: 16px;
     border-bottom: 1px solid var(--border);
   }
   .note-content {
-    padding: 12px;
+    padding: 16px;
     flex: 1;
     overflow: auto;
   }
@@ -474,18 +504,18 @@
     outline: none;
     border-radius: 8px;
     padding: 12px;
-    background: #0f1633;
+    background: var(--panel-bg-darker);
     border: 1px solid var(--border);
+    transition: border-color 0.2s;
   }
   .contenteditable:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(95, 140, 255, 0.2) inset;
+    border-color: var(--accent-red);
   }
 
   .right {
     display: grid;
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 12px;
+    gap: 24px;
     height: 100%;
     min-height: 0;
   }
@@ -510,11 +540,11 @@
   }
   .calendar-cell .date {
     font-size: 12px;
-    color: var(--muted);
+    color: var(--text-muted);
   }
   .event {
-    background: rgba(95, 140, 255, 0.2);
-    border: 1px solid var(--accent);
+    background: rgba(140, 122, 230, 0.2);
+    border: 1px solid var(--accent-purple);
     border-radius: 8px;
     padding: 6px 8px;
     display: flex;
@@ -523,10 +553,9 @@
     align-items: center;
     font-size: 12px;
     line-height: 1.2;
-    position: relative;
   }
   .event .time {
-    color: var(--accent-2);
+    color: var(--accent-purple);
     font-variant-numeric: tabular-nums;
   }
   .calendar-controls {
@@ -538,88 +567,76 @@
   .calendar-add {
     display: flex;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 12px 16px;
     border-top: 1px solid var(--border);
-    background: var(--panel-2);
   }
   .calendar-add input {
-    background: #0f1633;
+    background: var(--panel-bg-darker);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
   }
   .small-btn {
-    background: var(--panel-2);
+    background: var(--panel-bg);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 6px 5px;
+    padding: 6px 10px;
     border-radius: 8px;
     cursor: pointer;
-    min-width: 0;
-    flex: 1 1 0;
-    white-space: nowrap;
-    text-align: center;
-    font-size: clamp(5px, 5vw, 10px);
+    font-size: 12px;
+    font-weight: 500;
+    transition: border-color 0.2s;
   }
   .small-btn:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-red);
   }
   .danger {
-    color: var(--danger);
+    color: var(--accent-red);
   }
-
-  .calendar-grid .event > div:first-child {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .calendar-grid .event > div:first-child span:last-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .calendar-grid .event .small-btn {
-    flex: 0 0 auto;
-    position: relative;
-    z-index: 1;
-    padding: 4px 8px;
-    font-size: 12px;
-    line-height: 1;
+  .danger:hover {
+    border-color: var(--accent-red);
+    background: rgba(255, 71, 87, 0.1);
   }
 
   /* Kanban */
   .kanban-board {
-    padding: 12px;
+    padding: 16px;
     display: flex;
-    gap: 12px;
+    gap: 16px;
     overflow-x: auto;
     overflow-y: hidden;
     flex: 1;
     min-height: 0;
+    align-items: flex-start;
   }
   .kanban-col {
-    min-width: 220px;
-    background: #0f1633;
+    width: 240px;
+    min-width: 240px;
+    background: var(--panel-bg-darker);
     border: 1px solid var(--border);
     border-radius: 12px;
     display: flex;
     flex-direction: column;
     max-height: 100%;
-    flex-wrap: nowrap;
-    height: 100%;
-    min-height: 0;
+    flex-shrink: 0;
+    transition: all 0.2s ease-in-out;
+  }
+  .kanban-col.collapsed {
+    width: 60px;
+    min-width: 60px;
+    height: auto;
   }
   .kanban-col-header {
     display: flex;
     gap: 8px;
     align-items: center;
-    padding: 5px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
-    flex-wrap: nowrap;
+  }
+  .kanban-col.collapsed .kanban-col-header {
+    justify-content: center;
+    border-bottom: none;
   }
   .kanban-col-header input {
     background: transparent;
@@ -627,22 +644,29 @@
     border: none;
     outline: none;
     font-weight: 600;
+    width: 100%;
+    min-width: 0;
+  }
+  .kanban-col.collapsed .kanban-col-header input {
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
   }
   .kanban-tasks {
-    padding: 10px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     overflow-y: auto;
-    overflow-x: hidden;
-    flex: 1 1 auto;
-    min-height: 0;
+    flex: 1;
   }
   .kanban-task {
-    background: #121a3a;
+    background: var(--panel-bg);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 8px;
+    padding: 10px;
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 8px;
@@ -650,6 +674,7 @@
   }
   .kanban-task:active {
     cursor: grabbing;
+    border-color: var(--accent-red);
   }
   .kanban-task input {
     min-width: 0;
@@ -660,14 +685,13 @@
   }
   .kanban-actions {
     display: flex;
-    flex: 0 0 auto;
     gap: 10px;
-    padding: 10px;
+    padding: 12px;
     border-top: 1px solid var(--border);
   }
   .kanban-actions input {
-    flex: 1 1 auto;
-    background: #0f1633;
+    flex: 1;
+    background: var(--panel-bg-darker);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 6px 8px;
@@ -675,18 +699,16 @@
     min-width: 0;
   }
   .kanban-actions .small-btn {
-    flex: 0 0 84px;
-    padding: 6px 12px;
-    font-size: 12px;
+    background: var(--accent-red);
+    border-color: transparent;
+    color: white;
   }
 
-  .kanban-board,
-  .kanban-tasks {
+  .kanban-board {
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
-  .kanban-board::-webkit-scrollbar,
-  .kanban-tasks::-webkit-scrollbar {
+  .kanban-board::-webkit-scrollbar {
     width: 0;
     height: 0;
   }
@@ -709,7 +731,7 @@
 
 <div class="app">
   <div class="nav">
-    <div class="brand">Productivity Hub</div>
+    <div class="brand">NEURONOTES</div>
     <div class="spacer"></div>
     {#if isLoggedIn}
       <button class="btn" on:click={toggleAuth}>Account</button>
@@ -775,13 +797,15 @@
               />
             </div>
           {:else}
-            <div style="padding:12px">No notes. Create one to get started.</div>
+            <div style="padding:16px; color: var(--text-muted);">
+              No notes. Create one to get started.
+            </div>
           {/if}
         </div>
       </div>
     </section>
 
-    <!-- Right: Calendar (top) and Kanban (bottom) -->
+    <!-- Right: Calendar and Kanban -->
     <section class="right">
       <div class="panel">
         <div class="panel-header">
@@ -803,36 +827,40 @@
         </div>
 
         {#if browser}
-<div class="calendar-grid">
-  {#each weekDays as d (ymd(d))}
-    <div class="calendar-cell">
-      <div class="date">{dmy(d)}</div>
-      <!-- Use the `eventsByDay` map here. The `|| []` handles days with no events. -->
-      {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
-        <div class="event">
-          <div>
-            {#if ev.time}<span class="time">{ev.time}</span>{/if}
-            <span>{ev.title}</span>
+          <div class="calendar-grid">
+            {#each weekDays as d (ymd(d))}
+              <div class="calendar-cell">
+                <div class="date">{dmy(d)}</div>
+                {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
+                  <div class="event">
+                    <div>
+                      {#if ev.time}<span class="time">{ev.time}</span>{/if}
+                      <span>{ev.title}</span>
+                    </div>
+                    <button
+                      class="small-btn danger"
+                      on:click={() => deleteEvent(ev.id)}
+                      title="Delete event"
+                    >
+                      ×
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/each}
           </div>
-          <button
-            class="small-btn danger"
-            on:click={() => deleteEvent(ev.id)}
-            title="Delete event"
-          >
-            ×
-          </button>
-        </div>
-      {/each}
-    </div>
-  {/each}
-</div>
+
           <div class="calendar-add">
             <input
               type="date"
               bind:value={newEventDate}
               aria-label="Event date"
             />
-            <input type="time" bind:value={newEventTime} aria-label="Event time" />
+            <input
+              type="time"
+              bind:value={newEventTime}
+              aria-label="Event time"
+            />
             <input
               type="text"
               bind:value={newEventTitle}
@@ -842,7 +870,7 @@
             <button class="small-btn" on:click={addEvent}>Add</button>
           </div>
         {:else}
-          <div style="padding:12px; color: var(--muted);">Loading…</div>
+          <div style="padding:16px; color: var(--text-muted);">Loading…</div>
         {/if}
       </div>
 
@@ -857,75 +885,87 @@
           {#each kanban as col (col.id)}
             <div
               class="kanban-col"
+              class:collapsed={col.isCollapsed}
               on:dragover={onTaskDragOver}
               on:drop={(e) => onColumnDrop(col.id, e)}
             >
               <div class="kanban-col-header">
+                <button
+                  class="small-btn"
+                  on:click={() => toggleColumnCollapse(col.id)}
+                  title={col.isCollapsed ? 'Expand' : 'Collapse'}
+                >
+                  {col.isCollapsed ? '⤢' : '⤡'}
+                </button>
                 <input
                   value={col.title}
                   on:input={(e) =>
                     renameColumn(col, (e.target as HTMLInputElement).value)}
                 />
-                <button
-                  class="small-btn danger"
-                  on:click={() => deleteColumn(col.id)}
-                  title="Delete column"
-                >
-                  Delete
-                </button>
-              </div>
-
-              <div class="kanban-tasks">
-                {#each col.tasks as t (t.id)}
-                  <div
-                    class="kanban-task"
-                    draggable="true"
-                    on:dragstart={(e) => onTaskDragStart(col.id, t.id, e)}
+                {#if !col.isCollapsed}
+                  <button
+                    class="small-btn danger"
+                    on:click={() => deleteColumn(col.id)}
+                    title="Delete column"
                   >
-                    <input
-                      value={t.text}
-                      on:input={(e) =>
-                        renameTask(
-                          col,
-                          t.id,
-                          (e.target as HTMLInputElement).value
-                        )}
-                    />
-                    <button
-                      class="small-btn danger"
-                      on:click={() => deleteTask(col, t.id)}
-                      title="Delete task"
-                    >
-                      ×
-                    </button>
-                  </div>
-                {/each}
+                    Delete
+                  </button>
+                {/if}
               </div>
 
-              <div class="kanban-actions">
-                <input
-                  type="text"
-                  placeholder="New task..."
-                  on:keydown={(e) => {
-                    const target = e.target as HTMLInputElement;
-                    if (e.key === "Enter") {
-                      addTask(col, target.value);
-                      target.value = "";
-                    }
-                  }}
-                />
-                <button
-                  class="small-btn"
-                  on:click={(e) => {
-                    const input = (e.currentTarget as HTMLElement)
-                      .previousElementSibling as HTMLInputElement;
-                    addTask(col, input.value);
-                    input.value = "";
-                  }}
-                >
-                  Add
-                </button>
-              </div>
+              {#if !col.isCollapsed}
+                <div class="kanban-tasks">
+                  {#each col.tasks as t (t.id)}
+                    <div
+                      class="kanban-task"
+                      draggable="true"
+                      on:dragstart={(e) => onTaskDragStart(col.id, t.id, e)}
+                    >
+                      <input
+                        value={t.text}
+                        on:input={(e) =>
+                          renameTask(
+                            col,
+                            t.id,
+                            (e.target as HTMLInputElement).value
+                          )}
+                      />
+                      <button
+                        class="small-btn danger"
+                        on:click={() => deleteTask(col, t.id)}
+                        title="Delete task"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+
+                <div class="kanban-actions">
+                  <input
+                    type="text"
+                    placeholder="New task..."
+                    on:keydown={(e) => {
+                      const target = e.target as HTMLInputElement;
+                      if (e.key === 'Enter') {
+                        addTask(col, target.value);
+                        target.value = '';
+                      }
+                    }}
+                  />
+                  <button
+                    class="small-btn"
+                    on:click={(e) => {
+                      const input = (e.currentTarget as HTMLElement)
+                        .previousElementSibling as HTMLInputElement;
+                      addTask(col, input.value);
+                      input.value = '';
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
