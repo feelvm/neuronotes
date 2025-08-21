@@ -285,44 +285,18 @@
   onMount(() => {
     isLoggedIn = loadLS<boolean>("auth:isLoggedIn", false);
 
+    // Load notes, defaulting to an empty array for new users
     notes = loadLS<Note[]>("notes", []);
-    if (notes.length === 0) {
-      notes = [
-        {
-          id: crypto.randomUUID(),
-          title: "Welcome",
-          contentHTML:
-            "<p>This is your notes area. Click and start typing. Content saves automatically.</p>",
-          updatedAt: Date.now()
-        }
-      ];
-    }
     selectedNoteId = loadLS<string>("notes:selected", notes[0]?.id ?? "");
 
     calendarEvents = loadLS<CalendarEvent[]>("calendar:events", []);
 
+    // Load kanban, defaulting to an empty array for new users
     const loadedKanban = loadLS<Column[]>("kanban", []);
     if (loadedKanban.length > 0) {
       kanban = loadedKanban.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }));
     } else {
-      kanban = [
-        {
-          id: crypto.randomUUID(),
-          title: "Todo",
-          tasks: [
-            { id: crypto.randomUUID(), text: "Try the app" },
-            { id: crypto.randomUUID(), text: "Add your tasks" }
-          ],
-          isCollapsed: false
-        },
-        {
-          id: crypto.randomUUID(),
-          title: "Doing",
-          tasks: [],
-          isCollapsed: false
-        },
-        { id: crypto.randomUUID(), title: "Done", tasks: [], isCollapsed: false }
-      ];
+      kanban = [];
     }
 
     today = new Date();
@@ -447,20 +421,6 @@
     border-right: 1px solid var(--border);
     overflow: auto;
   }
-  .note-list-header {
-    padding: 16px;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    border-bottom: 1px solid var(--border);
-  }
-  .note-list .btn {
-    width: 100%;
-    background: var(--accent-red);
-    border: 1px solid transparent;
-    color: white;
-    font-weight: 600;
-  }
   .note-item {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
@@ -537,10 +497,18 @@
     flex-direction: column;
     gap: 6px;
     min-width: 0;
+    transition: background-color 0.2s;
+  }
+  .calendar-cell.today {
+    background-color: rgba(255, 71, 87, 0.1);
   }
   .calendar-cell .date {
     font-size: 12px;
     color: var(--text-muted);
+  }
+  .calendar-cell.today .date {
+    color: var(--accent-red);
+    font-weight: 600;
   }
   .event {
     background: rgba(140, 122, 230, 0.2);
@@ -576,6 +544,15 @@
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
+  }
+  .calendar-add input::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+    cursor: pointer;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+  }
+  .calendar-add input::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
   }
   .small-btn {
     background: var(--panel-bg);
@@ -644,7 +621,7 @@
     border: none;
     outline: none;
     font-weight: 600;
-    width: 100%;
+    flex: 1;
     min-width: 0;
   }
   .kanban-col.collapsed .kanban-col-header input {
@@ -704,11 +681,13 @@
     color: white;
   }
 
-  .kanban-board {
+  .kanban-board,
+  .kanban-tasks {
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
-  .kanban-board::-webkit-scrollbar {
+  .kanban-board::-webkit-scrollbar,
+  .kanban-tasks::-webkit-scrollbar {
     width: 0;
     height: 0;
   }
@@ -751,9 +730,6 @@
 
       <div class="notes">
         <aside class="note-list">
-          <div class="note-list-header">
-            <button class="btn" on:click={addNote}>+ Add Note</button>
-          </div>
           {#each notes as n (n.id)}
             <div
               class="note-item {selectedNoteId === n.id ? 'active' : ''}"
@@ -829,7 +805,7 @@
         {#if browser}
           <div class="calendar-grid">
             {#each weekDays as d (ymd(d))}
-              <div class="calendar-cell">
+              <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
                 <div class="date">{dmy(d)}</div>
                 {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
                   <div class="event">
