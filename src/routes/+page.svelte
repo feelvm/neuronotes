@@ -116,6 +116,17 @@
     persistNotes();
   }
 
+  // ----- Paste Handler for notes -----
+  function handlePaste(event: ClipboardEvent) {
+    // Prevent the default paste action which would insert rich text
+    event.preventDefault();
+
+    // Get the pasted content as plain text
+    const text = event.clipboardData?.getData("text/plain") || "";
+
+    document.execCommand("insertText", false, text);
+  }
+
   // ----- Weekly Calendar State -----
   type CalendarEvent = {
     id: string;
@@ -291,7 +302,6 @@
 
     calendarEvents = loadLS<CalendarEvent[]>("calendar:events", []);
 
-    // Load kanban, defaulting to an empty array for new users
     const loadedKanban = loadLS<Column[]>("kanban", []);
     if (loadedKanban.length > 0) {
       kanban = loadedKanban.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }));
@@ -420,6 +430,11 @@
   .note-list {
     border-right: 1px solid var(--border);
     overflow: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .note-list::-webkit-scrollbar {
+    display: none;
   }
   .note-item {
     padding: 12px 16px;
@@ -443,6 +458,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
   }
   .note-title {
     background: transparent;
@@ -458,6 +474,8 @@
     padding: 16px;
     flex: 1;
     overflow: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
   .contenteditable {
     min-height: 100%;
@@ -467,6 +485,7 @@
     background: var(--panel-bg-darker);
     border: 1px solid var(--border);
     transition: border-color 0.2s;
+    overflow-wrap: break-word;
   }
   .contenteditable:focus {
     border-color: var(--accent-red);
@@ -770,6 +789,7 @@
                     currentNote,
                     (e.currentTarget as HTMLElement).innerHTML
                   )}
+                on:paste={handlePaste}
               />
             </div>
           {:else}
