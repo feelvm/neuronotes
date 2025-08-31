@@ -1,8 +1,41 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
+  import * as db from "$lib/db";
+  import type {
+    Workspace,
+    Note,
+    CalendarEvent,
+    Column,
+    Kanban,
+    Task
+  } from "$lib/db";
+  import DOMPurify from "dompurify";
+
+  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  // ----- Actions -----
+  function focus(node: HTMLElement) {
+    node.focus();
+    return {
+      destroy() {}
+    };
+  }
 
   // ----- Utilities -----
+  function debounce<T extends (...args: any[]) => any>(
+    func: T,
+    timeout = 300
+  ) {
+    let timer: ReturnType<typeof setTimeout>;
+    return (...args: Parameters<T>) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        func.apply(this, args);
+      }, timeout);
+    };
+  }
+
   function startOfWeek(date: Date, weekStartsOn = 1) {
     const d = new Date(date);
     const day = d.getDay();
@@ -11,20 +44,17 @@
     d.setHours(0, 0, 0, 0);
     return d;
   }
-
   function addDays(date: Date, n: number) {
     const d = new Date(date);
     d.setDate(d.getDate() + n);
     return d;
   }
-
   function ymd(date: Date) {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, "0");
     const d = String(date.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
-
   function dmy(date: Date) {
     const dd = String(date.getDate()).padStart(2, "0");
     const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -32,116 +62,136 @@
     return `${dd}-${mm}-${yyyy}`;
   }
 
-  // ----- Local storage helpers -----
-  function loadLS<T>(key: string, fallback: T): T {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : fallback;
-    } catch {
-      return fallback;
-    }
-  }
-  function saveLS<T>(key: string, value: T) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {}
+  // ----- Workspace State -----
+  let workspaces: Workspace[] = [];
+  let activeWorkspaceId = "";
+  let editingWorkspaceId: string | null = null;
+
+  $: activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
+
+  async function switchWorkspace(id: string) {
+    if (id === activeWorkspaceId) return;
+    activeWorkspaceId = id;
+    await db.put("settings", { key: "activeWorkspaceId", value: id });
+    await loadActiveWorkspaceData();
   }
 
-  // ----- Nav State (to do later) -----
-  let isLoggedIn = false;
-  function toggleAuth() {
-    isLoggedIn = !isLoggedIn;
-    saveLS("auth:isLoggedIn", isLoggedIn);
+  async function addWorkspace() {
+    const name = prompt("Enter new workspace name:", "New Workspace");
+    if (!name || !name.trim()) return;
+
+    const newWorkspace: Workspace = {
+      id: crypto.randomUUID(),
+      name: name.trim()
+    };
+    await db.put("workspaces", newWorkspace);
+    workspaces = [...workspaces, newWorkspace];
+    await switchWorkspace(newWorkspace.id);
+  }
+
+  async function renameWorkspace(id: string, newName: string) {
+    const ws = workspaces.find((w) => w.id === id);
+    if (ws && newName.trim()) {
+      ws.name = newName.trim();
+      await db.put("workspaces", ws);
+      workspaces = [...workspaces];
+    }
+    editingWorkspaceId = null;
+  }
+
+  async function deleteWorkspace(id: string) {
+    if (workspaces.length <= 1) {
+      alert("Cannot delete the last workspace.");
+      return;
+    }
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return;
+
+    if (
+      !confirm(
+        `Are you sure you want to delete "${ws.name}"? All its data will be lost.`
+      )
+    ) {
+      return;
+    }
+
+    const notesToDelete = await db.getAllByIndex<Note>("notes", "workspaceId", id);
+    for (const note of notesToDelete) {
+      await db.remove("notes", note.id);
+    }
+    const eventsToDelete = await db.getAllByIndex<CalendarEvent>(
+      "calendarEvents",
+      "workspaceId",
+      id
+    );
+    for (const event of eventsToDelete) {
+      await db.remove("calendarEvents", event.id);
+    }
+    await db.remove("kanban", id);
+    await db.remove("workspaces", id);
+
+    workspaces = workspaces.filter((w) => w.id !== id);
+
+    if (activeWorkspaceId === id) {
+      await switchWorkspace(workspaces[0].id);
+    }
   }
 
   // ----- Notes State -----
-  type Note = {
-    id: string;
-    title: string;
-    contentHTML: string;
-    updatedAt: number;
-  };
-
   let notes: Note[] = [];
   let selectedNoteId = "";
 
-  function selectNote(id: string) {
+  async function selectNote(id: string) {
     selectedNoteId = id;
-    saveLS("notes:selected", selectedNoteId);
+    await db.put("settings", {
+      key: `selectedNoteId:${activeWorkspaceId}`,
+      value: id
+    });
   }
 
-  function addNote() {
+  async function addNote() {
     const n: Note = {
       id: crypto.randomUUID(),
       title: "Untitled",
       contentHTML: "",
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      workspaceId: activeWorkspaceId
     };
+    await db.put("notes", n);
     notes = [n, ...notes];
-    selectedNoteId = n.id;
-    persistNotes();
+    await selectNote(n.id);
   }
 
-  function deleteNote(id: string) {
-    const idx = notes.findIndex((n) => n.id === id);
-    if (idx >= 0) {
-      notes.splice(idx, 1);
-      notes = [...notes];
-      if (selectedNoteId === id) {
-        selectedNoteId = notes[0]?.id ?? "";
-      }
-      persistNotes();
+  async function deleteNote(id: string) {
+    await db.remove("notes", id);
+    notes = notes.filter((n) => n.id !== id);
+    if (selectedNoteId === id) {
+      await selectNote(notes[0]?.id ?? "");
     }
-  }
-
-  function persistNotes() {
-    saveLS("notes", notes);
-    saveLS("notes:selected", selectedNoteId);
   }
 
   $: currentNote =
     notes.find((n) => n.id === selectedNoteId) ?? (notes[0] ?? null);
 
-  function updateNoteTitle(note: Note, title: string) {
-    note.title = title;
+  async function updateNote(note: Note) {
     note.updatedAt = Date.now();
-    notes = [...notes];
-    persistNotes();
+    // +++ SECURITY: Sanitize HTML content before saving
+    if (browser) {
+      note.contentHTML = DOMPurify.sanitize(note.contentHTML);
+    }
+    await db.put("notes", note);
   }
 
-  function updateNoteContent(note: Note, html: string) {
-    note.contentHTML = html;
-    note.updatedAt = Date.now();
-    notes = [...notes];
-    persistNotes();
-  }
+  const debouncedUpdateNote = debounce(updateNote, 400);
 
-  // ----- Paste Handler for notes -----
   function handlePaste(event: ClipboardEvent) {
-    // Prevent the default paste action which would insert rich text
     event.preventDefault();
-
-    // Get the pasted content as plain text
     const text = event.clipboardData?.getData("text/plain") || "";
-
     document.execCommand("insertText", false, text);
   }
 
   // ----- Weekly Calendar State -----
-  type CalendarEvent = {
-    id: string;
-    date: string; // YYYY-MM-DD
-    title: string;
-    time?: string; // HH:MM
-  };
-
   let calendarEvents: CalendarEvent[] = [];
-
-  function persistCalendar() {
-    saveLS("calendar:events", calendarEvents);
-  }
-
-  // SSR placeholders
   let today = new Date(0);
   let weekStart = new Date(0);
 
@@ -155,12 +205,9 @@
   $: weekDays = browser
     ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
     : [];
-
   $: eventsByDay = calendarEvents.reduce((acc, event) => {
     const dayKey = event.date;
-    if (!acc[dayKey]) {
-      acc[dayKey] = [];
-    }
+    if (!acc[dayKey]) acc[dayKey] = [];
     acc[dayKey].push(event);
     acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
     return acc;
@@ -170,41 +217,40 @@
   let newEventTime = "";
   let newEventDate = "1970-01-01";
 
-  function addEvent() {
+  async function addEvent() {
     if (!newEventTitle.trim() || !newEventDate) return;
-    calendarEvents = [
-      ...calendarEvents,
-      {
-        id: crypto.randomUUID(),
-        date: newEventDate,
-        title: newEventTitle.trim(),
-        time: newEventTime || undefined
-      }
-    ];
+    const newEvent: CalendarEvent = {
+      id: crypto.randomUUID(),
+      date: newEventDate,
+      title: newEventTitle.trim(),
+      time: newEventTime || undefined,
+      workspaceId: activeWorkspaceId
+    };
+    await db.put("calendarEvents", newEvent);
+    calendarEvents = [...calendarEvents, newEvent];
     newEventTitle = "";
     newEventTime = "";
     newEventDate = ymd(today);
-    persistCalendar();
   }
 
-  function deleteEvent(id: string) {
+  async function deleteEvent(id: string) {
+    await db.remove("calendarEvents", id);
     calendarEvents = calendarEvents.filter((e) => e.id !== id);
-    persistCalendar();
   }
 
   // ----- Kanban State -----
-  type Task = { id: string; text: string };
-  type Column = {
-    id: string;
-    title: string;
-    tasks: Task[];
-    isCollapsed: boolean;
-  };
-
   let kanban: Column[] = [];
+  let editingColumnId: string | null = null;
+  let editingTaskId: string | null = null;
 
-  function persistKanban() {
-    saveLS("kanban", kanban);
+  async function persistKanban() {
+    if (!activeWorkspaceId || !kanban) return;
+    const kanbanData: Kanban = { workspaceId: activeWorkspaceId, columns: kanban };
+    await db.put("kanban", kanbanData);
+  }
+
+  $: if (browser && kanban.length > 0) {
+    persistKanban();
   }
 
   function addColumn() {
@@ -217,39 +263,38 @@
         isCollapsed: false
       }
     ];
-    persistKanban();
   }
 
   function renameColumn(col: Column, title: string) {
-    col.title = title;
-    kanban = [...kanban];
-    persistKanban();
+    if (title.trim()) {
+      col.title = title.trim();
+      kanban = [...kanban];
+    }
+    editingColumnId = null;
   }
 
   function deleteColumn(colId: string) {
     kanban = kanban.filter((c) => c.id !== colId);
-    persistKanban();
   }
 
   function addTask(col: Column, text: string) {
     if (!text.trim()) return;
     col.tasks.push({ id: crypto.randomUUID(), text: text.trim() });
     kanban = [...kanban];
-    persistKanban();
   }
 
   function renameTask(col: Column, taskId: string, text: string) {
     const t = col.tasks.find((x) => x.id === taskId);
-    if (!t) return;
-    t.text = text;
-    kanban = [...kanban];
-    persistKanban();
+    if (t && text.trim()) {
+      t.text = text.trim();
+      kanban = [...kanban];
+    }
+    editingTaskId = null;
   }
 
   function deleteTask(col: Column, taskId: string) {
     col.tasks = col.tasks.filter((t) => t.id !== taskId);
     kanban = [...kanban];
-    persistKanban();
   }
 
   function toggleColumnCollapse(colId: string) {
@@ -257,21 +302,43 @@
     if (col) {
       col.isCollapsed = !col.isCollapsed;
       kanban = [...kanban];
-      persistKanban();
     }
   }
 
-  // Drag and Drop
-  let dragTask: { colId: string; taskId: string } | null = null;
+  // ----- Drag and Drop -----
+  let isDragging = false;
+  let draggedTaskGhost: { id: string; text: string; x: number; y: number } | null =
+    null;
 
-  function onTaskDragStart(colId: string, taskId: string, ev: DragEvent) {
-    dragTask = { colId, taskId };
-    ev.dataTransfer?.setData("text/plain", JSON.stringify(dragTask));
+  function onTaskDragStart(
+    colId: string,
+    task: Task,
+    ev: DragEvent
+  ) {
+    isDragging = true;
+    draggedTaskGhost = { id: task.id, text: task.text, x: ev.clientX, y: ev.clientY };
+    ev.dataTransfer?.setData("text/plain", JSON.stringify({ colId, taskId: task.id }));
+    ev.dataTransfer!.effectAllowed = "move";
     ev.dataTransfer?.setDragImage(new Image(), 0, 0);
+    window.addEventListener('dragover', updateGhostPosition);
   }
+
+  function updateGhostPosition(ev: DragEvent) {
+    if (!draggedTaskGhost) return;
+    if (ev.clientX === 0 && ev.clientY === 0) {
+      return;
+    }
+    draggedTaskGhost = {
+      ...draggedTaskGhost,
+      x: ev.clientX,
+      y: ev.clientY
+    };
+  }
+
   function onTaskDragOver(ev: DragEvent) {
     ev.preventDefault();
   }
+
   function onColumnDrop(targetColId: string, ev: DragEvent) {
     ev.preventDefault();
     const data = ev.dataTransfer?.getData("text/plain");
@@ -289,25 +356,70 @@
     const [moved] = fromCol.tasks.splice(idx, 1);
     toCol.tasks.push(moved);
     kanban = [...kanban];
-    persistKanban();
   }
 
-  // ----- Client only initialization -----
-  onMount(() => {
-    isLoggedIn = loadLS<boolean>("auth:isLoggedIn", false);
+  function handleDragEnd() {
+    isDragging = false;
+    draggedTaskGhost = null;
+    window.removeEventListener('dragover', updateGhostPosition);
+  }
 
-    // Load notes, defaulting to an empty array for new users
-    notes = loadLS<Note[]>("notes", []);
-    selectedNoteId = loadLS<string>("notes:selected", notes[0]?.id ?? "");
+  // ----- Data Loading -----
+  async function loadActiveWorkspaceData() {
+    if (!browser || !activeWorkspaceId) return;
 
-    calendarEvents = loadLS<CalendarEvent[]>("calendar:events", []);
+    const loadedNotes = await db.getAllByIndex<Note>(
+      "notes",
+      "workspaceId",
+      activeWorkspaceId
+    );
+    notes = loadedNotes.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    const loadedKanban = loadLS<Column[]>("kanban", []);
-    if (loadedKanban.length > 0) {
-      kanban = loadedKanban.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }));
+    const selectedNoteSetting = await db.get(
+      "settings",
+      `selectedNoteId:${activeWorkspaceId}`
+    );
+    selectedNoteId = selectedNoteSetting?.value ?? notes[0]?.id ?? "";
+
+    calendarEvents = await db.getAllByIndex<CalendarEvent>(
+      "calendarEvents",
+      "workspaceId",
+      activeWorkspaceId
+    );
+
+    const kanbanData = await db.get<Kanban>("kanban", activeWorkspaceId);
+    kanban = kanbanData
+      ? kanbanData.columns.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }))
+      : [];
+  }
+
+  // ----- Lifecycle -----
+  onMount(async () => {
+    const loadedWorkspaces = await db.getAll<Workspace>("workspaces");
+    if (loadedWorkspaces.length > 0) {
+      workspaces = loadedWorkspaces;
     } else {
-      kanban = [];
+      const defaultWorkspace = {
+        id: crypto.randomUUID(),
+        name: "My Workspace"
+      };
+      await db.put("workspaces", defaultWorkspace);
+      workspaces = [defaultWorkspace];
     }
+
+    const lastActive = await db.get("settings", "activeWorkspaceId");
+    const lastActiveId = lastActive?.value ?? "";
+    if (lastActiveId && workspaces.some((w) => w.id === lastActiveId)) {
+      activeWorkspaceId = lastActiveId;
+    } else {
+      activeWorkspaceId = workspaces[0].id;
+      await db.put("settings", {
+        key: "activeWorkspaceId",
+        value: activeWorkspaceId
+      });
+    }
+
+    await loadActiveWorkspaceData();
 
     today = new Date();
     weekStart = startOfWeek(today, 1);
@@ -327,6 +439,10 @@
     --accent-purple: #8c7ae6;
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
       Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+
+  :global(html) {
+    scroll-behavior: smooth;
   }
 
   :global(html, body) {
@@ -368,23 +484,102 @@
     background: rgba(26, 26, 26, 0.8);
     backdrop-filter: blur(8px);
     flex-shrink: 0;
+    gap: 24px;
   }
   .nav .brand {
     font-weight: 700;
   }
   .nav .spacer {
     flex: 1;
+    min-width: 24px;
   }
-  .nav .btn {
+  .nav-right-placeholder {
+    width: 100px;
+    flex-shrink: 0;
+  }
+
+  /* Workspace Tabs Styles */
+  .workspace-tabs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .workspace-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .workspace-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-radius: 8px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    font-size: 13px;
+  }
+  .workspace-tab:hover {
+    border-color: var(--text-muted);
+  }
+  .workspace-tab.active {
+    border-color: var(--accent-red);
+    background: rgba(255, 71, 87, 0.1);
+  }
+  .workspace-name {
+    padding: 2px 0;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .workspace-tab input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    width: 120px;
+    padding: 2px 0;
+    font-family: var(--font-sans);
+  }
+  .delete-ws-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    opacity: 0.7;
+    transition: all 0.2s;
+  }
+  .delete-ws-btn:hover {
+    color: var(--accent-red);
+    background: rgba(255, 71, 87, 0.2);
+    opacity: 1;
+  }
+  .add-workspace-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
     background: var(--panel-bg);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 8px 12px;
-    border-radius: 8px;
     cursor: pointer;
-    transition: border-color 0.2s;
+    font-size: 16px;
+    transition: all 0.2s;
+    flex-shrink: 0;
   }
-  .nav .btn:hover {
+  .add-workspace-btn:hover {
     border-color: var(--accent-red);
   }
 
@@ -525,6 +720,11 @@
     font-size: 12px;
     color: var(--text-muted);
   }
+  .calendar-cell .day-name {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: -2px;
+  }
   .calendar-cell.today .date {
     color: var(--accent-red);
     font-weight: 600;
@@ -605,6 +805,7 @@
     flex: 1;
     min-height: 0;
     align-items: flex-start;
+    scroll-behavior: smooth;
   }
   .kanban-col {
     width: 240px;
@@ -634,6 +835,15 @@
     justify-content: center;
     border-bottom: none;
   }
+  .kanban-col-title-text {
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+    cursor: text;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .kanban-col-header input {
     background: transparent;
     color: var(--text);
@@ -642,6 +852,8 @@
     font-weight: 600;
     flex: 1;
     min-width: 0;
+    font-family: var(--font-sans);
+    font-size: 1rem;
   }
   .kanban-col.collapsed .kanban-col-header input {
     text-align: center;
@@ -657,6 +869,7 @@
     gap: 10px;
     overflow-y: auto;
     flex: 1;
+    scroll-behavior: smooth;
   }
   .kanban-task {
     background: var(--panel-bg);
@@ -667,10 +880,19 @@
     grid-template-columns: 1fr auto;
     gap: 8px;
     cursor: grab;
+    transition: opacity 0.2s;
+  }
+  .kanban-task.dragging {
+    opacity: 0.4;
   }
   .kanban-task:active {
     cursor: grabbing;
     border-color: var(--accent-red);
+  }
+  .kanban-task-text {
+    min-width: 0;
+    cursor: text;
+    overflow-wrap: break-word;
   }
   .kanban-task input {
     min-width: 0;
@@ -678,6 +900,8 @@
     border: none;
     outline: none;
     color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 1rem;
   }
   .kanban-actions {
     display: flex;
@@ -711,31 +935,152 @@
     height: 0;
   }
 
-  @media (max-width: 1100px) {
+  .kanban-task-ghost {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9999;
+    background: var(--panel-bg);
+    border: 1px solid var(--accent-red);
+    border-radius: 10px;
+    padding: 10px;
+    width: 218px; /* 240px col - 2*12px padding - 2*1px border */
+    transform: translate(-50%, -50%) rotate(3deg);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+    opacity: 0.95;
+  }
+
+  /* ----- Responsive Styles ----- */
+  @media (max-width: 1200px) {
     .main {
       grid-template-columns: 1fr;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scroll-behavior: smooth;
+    }
+    .panel {
+      min-height: 500px;
     }
     .right {
       grid-template-rows: 1fr 1fr;
     }
+  }
+
+  @media (max-width: 768px) {
+    .main {
+      padding: 12px;
+      gap: 12px;
+    }
+    .nav {
+      padding: 0 12px;
+      gap: 12px;
+    }
+    .nav .spacer {
+      display: none;
+    }
+    .nav-right-placeholder {
+      display: none;
+    }
     .notes {
       grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(0, 1fr);
     }
     .note-list {
-      display: none;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      max-height: 150px;
+    }
+    .right {
+      grid-template-rows: auto auto;
+      grid-template-columns: 1fr;
+    }
+    .calendar-grid {
+      grid-template-columns: 1fr;
+      border-top: none;
+      border-left: none;
+    }
+    .calendar-cell {
+      border-left: 1px solid var(--border);
+    }
+    .calendar-add {
+      flex-wrap: wrap;
+    }
+    .calendar-add input[type="text"] {
+      flex-basis: 100%;
+    }
+    .panel-header {
+      padding: 8px 12px;
+    }
+    .panel-title {
+      font-size: 14px;
+    }
+    .small-btn {
+      padding: 4px 8px;
+      font-size: 11px;
     }
   }
 </style>
 
+{#if isDragging && draggedTaskGhost}
+  <div
+    class="kanban-task-ghost"
+    style="left: {draggedTaskGhost.x}px; top: {draggedTaskGhost.y}px;"
+  >
+    {draggedTaskGhost.text}
+  </div>
+{/if}
+
 <div class="app">
   <div class="nav">
     <div class="brand">NEURONOTES</div>
+
+    <div class="workspace-tabs">
+      {#each workspaces as ws (ws.id)}
+        <div
+          class="workspace-tab"
+          class:active={ws.id === activeWorkspaceId}
+          on:click={() => switchWorkspace(ws.id)}
+        >
+          {#if editingWorkspaceId === ws.id}
+            <input
+              value={ws.name}
+              use:focus
+              on:blur={(e) =>
+                renameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
+              on:keydown={(e) => {
+                if (e.key === 'Enter')
+                  (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') editingWorkspaceId = null;
+              }}
+            />
+          {:else}
+            <div
+              class="workspace-name"
+              on:dblclick={() => (editingWorkspaceId = ws.id)}
+              title="Double-click to rename"
+            >
+              {ws.name}
+            </div>
+          {/if}
+          <button
+            class="delete-ws-btn"
+            title="Delete Workspace"
+            on:click|stopPropagation={() => deleteWorkspace(ws.id)}
+          >
+            ×
+          </button>
+        </div>
+      {/each}
+      <button
+        class="add-workspace-btn"
+        on:click={addWorkspace}
+        title="New Workspace"
+      >
+        +
+      </button>
+    </div>
+
     <div class="spacer"></div>
-    {#if isLoggedIn}
-      <button class="btn" on:click={toggleAuth}>Account</button>
-    {:else}
-      <button class="btn" on:click={toggleAuth}>Login</button>
-    {/if}
+    <div class="nav-right-placeholder"></div>
   </div>
 
   <div class="main">
@@ -770,12 +1115,11 @@
           {#if currentNote}
             <input
               class="note-title"
-              bind:value={currentNote.title}
-              on:input={(e) =>
-                updateNoteTitle(
-                  currentNote,
-                  (e.target as HTMLInputElement).value
-                )}
+              value={currentNote.title}
+              on:input={(e) => {
+                currentNote.title = (e.target as HTMLInputElement).value;
+                debouncedUpdateNote(currentNote);
+              }}
               placeholder="Note title..."
             />
 
@@ -783,12 +1127,13 @@
               <div
                 class="contenteditable"
                 contenteditable="true"
-                bind:innerHTML={currentNote.contentHTML}
-                on:input={(e) =>
-                  updateNoteContent(
-                    currentNote,
-                    (e.currentTarget as HTMLElement).innerHTML
-                  )}
+                innerHTML={currentNote.contentHTML}
+                on:input={(e) => {
+                  currentNote.contentHTML = (
+                    e.currentTarget as HTMLElement
+                  ).innerHTML;
+                  debouncedUpdateNote(currentNote);
+                }}
                 on:paste={handlePaste}
               />
             </div>
@@ -824,9 +1169,10 @@
 
         {#if browser}
           <div class="calendar-grid">
-            {#each weekDays as d (ymd(d))}
+            {#each weekDays as d, i (ymd(d))}
               <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
                 <div class="date">{dmy(d)}</div>
+                <div class="day-name">{DAY_NAMES[i]}</div>
                 {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
                   <div class="event">
                     <div>
@@ -893,11 +1239,29 @@
                 >
                   {col.isCollapsed ? '⤢' : '⤡'}
                 </button>
-                <input
-                  value={col.title}
-                  on:input={(e) =>
-                    renameColumn(col, (e.target as HTMLInputElement).value)}
-                />
+
+                {#if editingColumnId === col.id}
+                  <input
+                    value={col.title}
+                    use:focus
+                    on:blur={(e) =>
+                      renameColumn(col, (e.target as HTMLInputElement).value)}
+                    on:keydown={(e) => {
+                      if (e.key === 'Enter')
+                        (e.target as HTMLInputElement).blur();
+                      if (e.key === 'Escape') editingColumnId = null;
+                    }}
+                  />
+                {:else}
+                  <div
+                    class="kanban-col-title-text"
+                    on:dblclick={() => (editingColumnId = col.id)}
+                    title="Double-click to rename"
+                  >
+                    {col.title}
+                  </div>
+                {/if}
+
                 {#if !col.isCollapsed}
                   <button
                     class="small-btn danger"
@@ -914,18 +1278,36 @@
                   {#each col.tasks as t (t.id)}
                     <div
                       class="kanban-task"
+                      class:dragging={isDragging && draggedTaskGhost?.id === t.id}
                       draggable="true"
-                      on:dragstart={(e) => onTaskDragStart(col.id, t.id, e)}
+                      on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
+                      on:dragend={handleDragEnd}
                     >
-                      <input
-                        value={t.text}
-                        on:input={(e) =>
-                          renameTask(
-                            col,
-                            t.id,
-                            (e.target as HTMLInputElement).value
-                          )}
-                      />
+                      {#if editingTaskId === t.id}
+                        <input
+                          value={t.text}
+                          use:focus
+                          on:blur={(e) =>
+                            renameTask(
+                              col,
+                              t.id,
+                              (e.target as HTMLInputElement).value
+                            )}
+                          on:keydown={(e) => {
+                            if (e.key === 'Enter')
+                              (e.target as HTMLInputElement).blur();
+                            if (e.key === 'Escape') editingTaskId = null;
+                          }}
+                        />
+                      {:else}
+                        <div
+                          class="kanban-task-text"
+                          on:dblclick={() => (editingTaskId = t.id)}
+                          title="Double-click to rename"
+                        >
+                          {t.text}
+                        </div>
+                      {/if}
                       <button
                         class="small-btn danger"
                         on:click={() => deleteTask(col, t.id)}
