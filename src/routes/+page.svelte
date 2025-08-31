@@ -10,8 +10,8 @@
     Kanban,
     Task
   } from "$lib/db";
-  import DOMPurify from "dompurify";
-
+  
+  let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // ----- Actions -----
@@ -176,7 +176,7 @@
   async function updateNote(note: Note) {
     note.updatedAt = Date.now();
     // +++ SECURITY: Sanitize HTML content before saving
-    if (browser) {
+    if (browser && DOMPurify) {
       note.contentHTML = DOMPurify.sanitize(note.contentHTML);
     }
     await db.put("notes", note);
@@ -395,6 +395,8 @@
 
   // ----- Lifecycle -----
   onMount(async () => {
+    DOMPurify = (await import("dompurify")).default;
+    
     const loadedWorkspaces = await db.getAll<Workspace>("workspaces");
     if (loadedWorkspaces.length > 0) {
       workspaces = loadedWorkspaces;
