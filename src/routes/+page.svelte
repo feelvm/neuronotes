@@ -830,6 +830,7 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    font-size: 15px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
   }
@@ -865,10 +866,11 @@
     pointer-events: none;
   }
   .kanban-tasks {
-    padding: 12px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    font-size: 14px;
     overflow-y: auto;
     flex: 1;
     scroll-behavior: smooth;
@@ -877,10 +879,10 @@
     background: var(--panel-bg);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 10px;
+    padding: 6px;
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 8px;
+    gap: 6px;
     cursor: grab;
     transition: opacity 0.2s;
   }
