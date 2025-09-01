@@ -10,7 +10,7 @@
     Kanban,
     Task
   } from "$lib/db";
-  
+
   let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -28,12 +28,26 @@
     timeout = 300
   ) {
     let timer: ReturnType<typeof setTimeout>;
-    return (...args: Parameters<T>) => {
+    let pendingArgs: Parameters<T> | null = null;
+
+    const debounced = (...args: Parameters<T>) => {
+      pendingArgs = args;
       clearTimeout(timer);
       timer = setTimeout(() => {
         func.apply(this, args);
+        pendingArgs = null;
       }, timeout);
     };
+
+    debounced.flush = () => {
+      clearTimeout(timer);
+      if (pendingArgs) {
+        func.apply(this, pendingArgs);
+        pendingArgs = null;
+      }
+    };
+
+    return debounced;
   }
 
   function startOfWeek(date: Date, weekStartsOn = 1) {
@@ -71,6 +85,7 @@
 
   async function switchWorkspace(id: string) {
     if (id === activeWorkspaceId) return;
+    debouncedUpdateNote.flush();
     activeWorkspaceId = id;
     await db.put("settings", { key: "activeWorkspaceId", value: id });
     await loadActiveWorkspaceData();
@@ -115,7 +130,11 @@
       return;
     }
 
-    const notesToDelete = await db.getAllByIndex<Note>("notes", "workspaceId", id);
+    const notesToDelete = await db.getAllByIndex<Note>(
+      "notes",
+      "workspaceId",
+      id
+    );
     for (const note of notesToDelete) {
       await db.remove("notes", note.id);
     }
@@ -142,6 +161,8 @@
   let selectedNoteId = "";
 
   async function selectNote(id: string) {
+    if (selectedNoteId === id) return;
+    debouncedUpdateNote.flush();
     selectedNoteId = id;
     await db.put("settings", {
       key: `selectedNoteId:${activeWorkspaceId}`,
@@ -174,12 +195,19 @@
     notes.find((n) => n.id === selectedNoteId) ?? (notes[0] ?? null);
 
   async function updateNote(note: Note) {
-    note.updatedAt = Date.now();
-    // +++ SECURITY: Sanitize HTML content before saving
+    const noteToSave = { ...note, updatedAt: Date.now() };
+
     if (browser && DOMPurify) {
-      note.contentHTML = DOMPurify.sanitize(note.contentHTML);
+      noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
     }
-    await db.put("notes", note);
+    await db.put("notes", noteToSave);
+
+    const index = notes.findIndex((n) => n.id === noteToSave.id);
+    if (index !== -1) {
+      notes[index] = noteToSave;
+      notes.sort((a, b) => b.updatedAt - a.updatedAt);
+      notes = notes; // Trigger Svelte's reactivity
+    }
   }
 
   const debouncedUpdateNote = debounce(updateNote, 400);
@@ -245,7 +273,10 @@
 
   async function persistKanban() {
     if (!activeWorkspaceId || !kanban) return;
-    const kanbanData: Kanban = { workspaceId: activeWorkspaceId, columns: kanban };
+    const kanbanData: Kanban = {
+      workspaceId: activeWorkspaceId,
+      columns: kanban
+    };
     await db.put("kanban", kanbanData);
   }
 
@@ -307,20 +338,28 @@
 
   // ----- Drag and Drop -----
   let isDragging = false;
-  let draggedTaskGhost: { id: string; text: string; x: number; y: number } | null =
-    null;
+  let draggedTaskGhost: {
+    id: string;
+    text: string;
+    x: number;
+    y: number;
+  } | null = null;
 
-  function onTaskDragStart(
-    colId: string,
-    task: Task,
-    ev: DragEvent
-  ) {
+  function onTaskDragStart(colId: string, task: Task, ev: DragEvent) {
     isDragging = true;
-    draggedTaskGhost = { id: task.id, text: task.text, x: ev.clientX, y: ev.clientY };
-    ev.dataTransfer?.setData("text/plain", JSON.stringify({ colId, taskId: task.id }));
+    draggedTaskGhost = {
+      id: task.id,
+      text: task.text,
+      x: ev.clientX,
+      y: ev.clientY
+    };
+    ev.dataTransfer?.setData(
+      "text/plain",
+      JSON.stringify({ colId, taskId: task.id })
+    );
     ev.dataTransfer!.effectAllowed = "move";
     ev.dataTransfer?.setDragImage(new Image(), 0, 0);
-    window.addEventListener('dragover', updateGhostPosition);
+    window.addEventListener("dragover", updateGhostPosition);
   }
 
   function updateGhostPosition(ev: DragEvent) {
@@ -361,7 +400,7 @@
   function handleDragEnd() {
     isDragging = false;
     draggedTaskGhost = null;
-    window.removeEventListener('dragover', updateGhostPosition);
+    window.removeEventListener("dragover", updateGhostPosition);
   }
 
   // ----- Data Loading -----
@@ -396,7 +435,7 @@
   // ----- Lifecycle -----
   onMount(async () => {
     DOMPurify = (await import("dompurify")).default;
-    
+
     const loadedWorkspaces = await db.getAll<Workspace>("workspaces");
     if (loadedWorkspaces.length > 0) {
       workspaces = loadedWorkspaces;
@@ -947,7 +986,7 @@
     border: 1px solid var(--accent-red);
     border-radius: 10px;
     padding: 10px;
-    width: 218px; /* 240px col - 2*12px padding - 2*1px border */
+    width: 218px;
     transform: translate(-50%, -50%) rotate(3deg);
     box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
     opacity: 0.95;
@@ -1051,9 +1090,8 @@
               on:blur={(e) =>
                 renameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
               on:keydown={(e) => {
-                if (e.key === 'Enter')
-                  (e.target as HTMLInputElement).blur();
-                if (e.key === 'Escape') editingWorkspaceId = null;
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                if (e.key === "Escape") editingWorkspaceId = null;
               }}
             />
           {:else}
@@ -1117,30 +1155,24 @@
 
         <div class="note-editor">
           {#if currentNote}
-            <input
-              class="note-title"
-              value={currentNote.title}
-              on:input={(e) => {
-                currentNote.title = (e.target as HTMLInputElement).value;
-                debouncedUpdateNote(currentNote);
-              }}
-              placeholder="Note title..."
-            />
-
-            <div class="note-content">
-              <div
-                class="contenteditable"
-                contenteditable="true"
-                innerHTML={currentNote.contentHTML}
-                on:input={(e) => {
-                  currentNote.contentHTML = (
-                    e.currentTarget as HTMLElement
-                  ).innerHTML;
-                  debouncedUpdateNote(currentNote);
-                }}
-                on:paste={handlePaste}
+            {#key currentNote.id}
+              <input
+                class="note-title"
+                bind:value={currentNote.title}
+                on:input={() => debouncedUpdateNote(currentNote)}
+                placeholder="Note title..."
               />
-            </div>
+
+              <div class="note-content">
+                <div
+                  class="contenteditable"
+                  contenteditable="true"
+                  bind:innerHTML={currentNote.contentHTML}
+                  on:input={() => debouncedUpdateNote(currentNote)}
+                  on:paste={handlePaste}
+                />
+              </div>
+            {/key}
           {:else}
             <div style="padding:16px; color: var(--text-muted);">
               No notes. Create one to get started.
@@ -1239,9 +1271,9 @@
                 <button
                   class="small-btn"
                   on:click={() => toggleColumnCollapse(col.id)}
-                  title={col.isCollapsed ? 'Expand' : 'Collapse'}
+                  title={col.isCollapsed ? "Expand" : "Collapse"}
                 >
-                  {col.isCollapsed ? '⤢' : '⤡'}
+                  {col.isCollapsed ? "⤢" : "⤡"}
                 </button>
 
                 {#if editingColumnId === col.id}
@@ -1251,9 +1283,9 @@
                     on:blur={(e) =>
                       renameColumn(col, (e.target as HTMLInputElement).value)}
                     on:keydown={(e) => {
-                      if (e.key === 'Enter')
+                      if (e.key === "Enter")
                         (e.target as HTMLInputElement).blur();
-                      if (e.key === 'Escape') editingColumnId = null;
+                      if (e.key === "Escape") editingColumnId = null;
                     }}
                   />
                 {:else}
@@ -1282,7 +1314,8 @@
                   {#each col.tasks as t (t.id)}
                     <div
                       class="kanban-task"
-                      class:dragging={isDragging && draggedTaskGhost?.id === t.id}
+                      class:dragging={isDragging &&
+                        draggedTaskGhost?.id === t.id}
                       draggable="true"
                       on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
                       on:dragend={handleDragEnd}
@@ -1298,9 +1331,9 @@
                               (e.target as HTMLInputElement).value
                             )}
                           on:keydown={(e) => {
-                            if (e.key === 'Enter')
+                            if (e.key === "Enter")
                               (e.target as HTMLInputElement).blur();
-                            if (e.key === 'Escape') editingTaskId = null;
+                            if (e.key === "Escape") editingTaskId = null;
                           }}
                         />
                       {:else}
@@ -1329,9 +1362,9 @@
                     placeholder="New task..."
                     on:keydown={(e) => {
                       const target = e.target as HTMLInputElement;
-                      if (e.key === 'Enter') {
+                      if (e.key === "Enter") {
                         addTask(col, target.value);
-                        target.value = '';
+                        target.value = "";
                       }
                     }}
                   />
@@ -1341,7 +1374,7 @@
                       const input = (e.currentTarget as HTMLElement)
                         .previousElementSibling as HTMLInputElement;
                       addTask(col, input.value);
-                      input.value = '';
+                      input.value = "";
                     }}
                   >
                     Add
