@@ -5,6 +5,7 @@
   import type {
     Workspace,
     Note,
+    Folder,
     CalendarEvent,
     Column,
     Kanban,
@@ -138,6 +139,14 @@
     for (const note of notesToDelete) {
       await db.remove("notes", note.id);
     }
+    const foldersToDelete = await db.getAllByIndex<Folder>(
+      "folders",
+      "workspaceId",
+      id
+    );
+    for (const folder of foldersToDelete) {
+      await db.remove("folders", folder.id);
+    }
     const eventsToDelete = await db.getAllByIndex<CalendarEvent>(
       "calendarEvents",
       "workspaceId",
@@ -156,9 +165,41 @@
     }
   }
 
-  // ----- Notes State -----
+  // ----- Notes & Folders State -----
   let notes: Note[] = [];
+  let folders: Folder[] = [];
   let selectedNoteId = "";
+  let currentFolderId: string | null = null;
+  let dragOverFolderId: string | null = null;
+  let dropIndex: number | null = null;
+  let editingFolderId: string | null = null;
+  let isEditingHeaderName = false;
+  let dragOverRoot = false;
+
+  type DisplayItem = (Note & { type: "note" }) | (Folder & { type: "folder" });
+  let displayList: DisplayItem[] = [];
+
+  $: {
+    if (currentFolderId === null) {
+      const rootNotes = notes
+        .filter((n) => n.folderId === null)
+        .map((n) => ({ ...n, type: "note" as const }));
+      const allFolders = folders.map((f) => ({
+        ...f,
+        type: "folder" as const
+      }));
+      displayList = [...allFolders, ...rootNotes].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0)
+      );
+    } else {
+      displayList = notes
+        .filter((n) => n.folderId === currentFolderId)
+        .map((n) => ({ ...n, type: "note" as const }))
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    }
+  }
+
+  $: currentFolder = folders.find((f) => f.id === currentFolderId);
 
   async function selectNote(id: string) {
     if (selectedNoteId === id) return;
@@ -171,28 +212,97 @@
   }
 
   async function addNote() {
+    const notesInCurrentView = displayList.filter(
+      (item) => item.type === "note"
+    );
     const n: Note = {
       id: crypto.randomUUID(),
       title: "Untitled",
       contentHTML: "",
       updatedAt: Date.now(),
-      workspaceId: activeWorkspaceId
+      workspaceId: activeWorkspaceId,
+      folderId: currentFolderId,
+      order: notesInCurrentView.length
     };
     await db.put("notes", n);
-    notes = [n, ...notes];
+    notes = [...notes, n];
     await selectNote(n.id);
+  }
+
+  async function addFolder() {
+    const name = prompt("Enter new folder name:", "New Folder");
+    if (!name || !name.trim()) return;
+    const f: Folder = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      workspaceId: activeWorkspaceId,
+      order: displayList.length
+    };
+    await db.put("folders", f);
+    folders = [...folders, f];
+  }
+
+  async function renameFolder(id: string, newName: string) {
+    const folder = folders.find((f) => f.id === id);
+    if (folder && newName.trim()) {
+      folder.name = newName.trim();
+      await db.put("folders", folder);
+      folders = [...folders];
+    }
+    editingFolderId = null;
+    isEditingHeaderName = false;
+  }
+
+  async function deleteFolder(folderId: string) {
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder) return;
+    if (
+      !confirm(
+        `Are you sure you want to delete the folder "${folder.name}"? All notes inside will be PERMANENTLY DELETED.`
+      )
+    ) {
+      return;
+    }
+
+    // Find notes to delete from the database
+    const notesToDelete = await db.getAllByIndex<Note>(
+      "notes",
+      "workspaceId_folderId",
+      [activeWorkspaceId, folderId]
+    );
+
+    // Create promises to delete each note
+    const deleteNotePromises = notesToDelete.map((note) =>
+      db.remove("notes", note.id)
+    );
+    await Promise.all(deleteNotePromises);
+
+    // Delete the folder itself from the database
+    await db.remove("folders", folderId);
+
+    // Update local state atomically
+    const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
+    notes = notes.filter((n) => !deletedNoteIds.has(n.id));
+    folders = folders.filter((f) => f.id !== folderId);
+
+    await goBack();
   }
 
   async function deleteNote(id: string) {
     await db.remove("notes", id);
     notes = notes.filter((n) => n.id !== id);
     if (selectedNoteId === id) {
-      await selectNote(notes[0]?.id ?? "");
+      await selectNote(
+        displayList.find((item) => item.type === "note")?.id ?? ""
+      );
     }
   }
 
   $: currentNote =
-    notes.find((n) => n.id === selectedNoteId) ?? (notes[0] ?? null);
+    notes.find((n) => n.id === selectedNoteId) ??
+    notes.find((n) => n.folderId === currentFolderId) ??
+    notes.find((n) => n.folderId === null) ??
+    null;
 
   async function updateNote(note: Note) {
     const noteToSave = { ...note, updatedAt: Date.now() };
@@ -205,8 +315,7 @@
     const index = notes.findIndex((n) => n.id === noteToSave.id);
     if (index !== -1) {
       notes[index] = noteToSave;
-      notes.sort((a, b) => b.updatedAt - a.updatedAt);
-      notes = notes; // Trigger Svelte's reactivity
+      notes = [...notes];
     }
   }
 
@@ -216,6 +325,112 @@
     event.preventDefault();
     const text = event.clipboardData?.getData("text/plain") || "";
     document.execCommand("insertText", false, text);
+  }
+
+  // ----- Folder Navigation -----
+  async function openFolder(folderId: string) {
+    currentFolderId = folderId;
+  }
+
+  async function goBack() {
+    currentFolderId = null;
+  }
+
+  function handleDragStart(ev: DragEvent, item: DisplayItem) {
+    ev.dataTransfer?.setData("application/json", JSON.stringify(item));
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+  }
+
+  async function handleDropOnFolder(ev: DragEvent, targetFolder: Folder) {
+    ev.preventDefault();
+    dragOverFolderId = null;
+    const data = ev.dataTransfer?.getData("application/json");
+    if (!data) return;
+    const draggedItem = JSON.parse(data) as DisplayItem;
+
+    if (
+      draggedItem.type === "note" &&
+      draggedItem.folderId !== targetFolder.id
+    ) {
+      const noteToMove = notes.find((n) => n.id === draggedItem.id);
+      if (noteToMove) {
+        noteToMove.folderId = targetFolder.id;
+        noteToMove.updatedAt = Date.now();
+        const notesInTargetFolder = notes.filter(
+          (n) => n.folderId === targetFolder.id
+        );
+        noteToMove.order = notesInTargetFolder.length;
+
+        await db.put("notes", noteToMove);
+        notes = [...notes];
+      }
+    }
+  }
+
+  async function handleDropOnRoot(ev: DragEvent) {
+    dragOverRoot = false;
+    const data = ev.dataTransfer?.getData("application/json");
+    if (!data) return;
+    const draggedItem = JSON.parse(data) as DisplayItem;
+
+    if (draggedItem.type === "note" && draggedItem.folderId !== null) {
+      const noteToMove = notes.find((n) => n.id === draggedItem.id);
+      if (noteToMove) {
+        noteToMove.folderId = null; // Move to root
+        noteToMove.updatedAt = Date.now();
+
+        const rootItemCount =
+          folders.length + notes.filter((n) => n.folderId === null).length;
+        noteToMove.order = rootItemCount;
+
+        await db.put("notes", noteToMove);
+        notes = [...notes]; // Trigger reactivity
+      }
+    }
+  }
+
+  function handleDragOver(ev: DragEvent, index: number) {
+    ev.preventDefault();
+    dropIndex = index;
+  }
+
+  async function handleReorderDrop(ev: DragEvent, targetIndex: number) {
+    ev.preventDefault();
+    dropIndex = null;
+    const data = ev.dataTransfer?.getData("application/json");
+    if (!data) return;
+    const draggedItem = JSON.parse(data) as DisplayItem;
+
+    const currentViewList = [...displayList];
+    const draggedIndex = currentViewList.findIndex(
+      (item) => item.id === draggedItem.id
+    );
+    if (draggedIndex === -1) return;
+
+    const [movedItem] = currentViewList.splice(draggedIndex, 1);
+    currentViewList.splice(targetIndex, 0, movedItem);
+
+    const promises = currentViewList.map((item, index) => {
+      item.order = index;
+      if (item.type === "folder") {
+        const folder = folders.find((f) => f.id === item.id);
+        if (folder) {
+          folder.order = index;
+          return db.put("folders", folder);
+        }
+      } else {
+        const note = notes.find((n) => n.id === item.id);
+        if (note) {
+          note.order = index;
+          return db.put("notes", note);
+        }
+      }
+      return Promise.resolve();
+    });
+    await Promise.all(promises);
+
+    folders = [...folders];
+    notes = [...notes];
   }
 
   // ----- Weekly Calendar State -----
@@ -233,13 +448,16 @@
   $: weekDays = browser
     ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
     : [];
-  $: eventsByDay = calendarEvents.reduce((acc, event) => {
-    const dayKey = event.date;
-    if (!acc[dayKey]) acc[dayKey] = [];
-    acc[dayKey].push(event);
-    acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-    return acc;
-  }, {} as Record<string, CalendarEvent[]>);
+  $: eventsByDay = calendarEvents.reduce(
+    (acc, event) => {
+      const dayKey = event.date;
+      if (!acc[dayKey]) acc[dayKey] = [];
+      acc[dayKey].push(event);
+      acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+      return acc;
+    },
+    {} as Record<string, CalendarEvent[]>
+  );
 
   let newEventTitle = "";
   let newEventTime = "";
@@ -336,7 +554,7 @@
     }
   }
 
-  // ----- Drag and Drop -----
+  // ----- Kanban Drag and Drop -----
   let isDragging = false;
   let draggedTaskGhost: {
     id: string;
@@ -354,7 +572,7 @@
       y: ev.clientY
     };
     ev.dataTransfer?.setData(
-      "text/plain",
+      "application/json",
       JSON.stringify({ colId, taskId: task.id })
     );
     ev.dataTransfer!.effectAllowed = "move";
@@ -380,7 +598,7 @@
 
   function onColumnDrop(targetColId: string, ev: DragEvent) {
     ev.preventDefault();
-    const data = ev.dataTransfer?.getData("text/plain");
+    const data = ev.dataTransfer?.getData("application/json");
     if (!data) return;
     const payload = JSON.parse(data) as { colId: string; taskId: string };
     if (!payload || payload.colId === targetColId) return;
@@ -407,12 +625,21 @@
   async function loadActiveWorkspaceData() {
     if (!browser || !activeWorkspaceId) return;
 
+    currentFolderId = null;
+
+    const loadedFolders = await db.getAllByIndex<Folder>(
+      "folders",
+      "workspaceId",
+      activeWorkspaceId
+    );
+    folders = loadedFolders.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
     const loadedNotes = await db.getAllByIndex<Note>(
       "notes",
       "workspaceId",
       activeWorkspaceId
     );
-    notes = loadedNotes.sort((a, b) => b.updatedAt - a.updatedAt);
+    notes = loadedNotes;
 
     const selectedNoteSetting = await db.get(
       "settings",
@@ -432,9 +659,33 @@
       : [];
   }
 
+  async function runDataMigration() {
+    const MIGRATION_KEY = "neuronotes_v1_migration_complete";
+    if (localStorage.getItem(MIGRATION_KEY)) {
+      return;
+    }
+    console.log("Running one-time data migration for notes...");
+    const allNotes = await db.getAll<Note>("notes");
+    const notesToUpdate = allNotes.filter(
+      (note) => typeof note.folderId === "undefined"
+    );
+
+    if (notesToUpdate.length > 0) {
+      const promises = notesToUpdate.map((note) => {
+        note.folderId = null;
+        return db.put("notes", note);
+      });
+      await Promise.all(promises);
+      console.log(`Migrated ${notesToUpdate.length} notes.`);
+    }
+    localStorage.setItem(MIGRATION_KEY, "true");
+  }
+
   // ----- Lifecycle -----
   onMount(async () => {
     DOMPurify = (await import("dompurify")).default;
+
+    await runDataMigration();
 
     const loadedWorkspaces = await db.getAll<Workspace>("workspaces");
     if (loadedWorkspaces.length > 0) {
@@ -656,6 +907,16 @@
   .panel-title {
     font-weight: 600;
   }
+  .panel-title input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 0;
+  }
 
   .notes {
     display: grid;
@@ -672,7 +933,8 @@
   .note-list::-webkit-scrollbar {
     display: none;
   }
-  .note-item {
+  .note-item,
+  .folder-item {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
@@ -680,15 +942,45 @@
     align-items: center;
     justify-content: space-between;
     transition: background-color 0.2s;
+    position: relative;
+  }
+  .folder-item {
+    background-color: rgba(140, 122, 230, 0.1);
+    font-weight: 500;
+  }
+  .folder-item.drag-over {
+    background-color: rgba(140, 122, 230, 0.3);
+    outline: 2px solid var(--accent-purple);
   }
   .note-item.active {
     background: rgba(255, 71, 87, 0.15);
   }
-  .note-item .title {
+  .note-item .title,
+  .folder-item .title {
     font-size: 14px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1;
+  }
+  .folder-item input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 500;
+    width: 100%;
+  }
+  .drop-indicator {
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: var(--accent-red);
+    pointer-events: none;
   }
   .note-editor {
     display: flex;
@@ -992,6 +1284,26 @@
     opacity: 0.95;
   }
 
+  /* --- Move to root --- */
+  .back-to-root-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 14px;
+    text-align: center;
+    background-color: var(--panel-bg-darker);
+    border: 2px dashed var(--border);
+    margin: 4px;
+    border-radius: 8px;
+    transition: all 0.2s;
+  }
+  .back-to-root-item.drag-over {
+    border-color: var(--accent-red);
+    color: var(--accent-red);
+    background-color: rgba(255, 71, 87, 0.1);
+  }
+
   /* ----- Responsive Styles ----- */
   @media (max-width: 1200px) {
     .main {
@@ -1129,27 +1441,149 @@
     <!-- Left: Notes -->
     <section class="panel">
       <div class="panel-header">
-        <div class="panel-title">Notes</div>
+        {#if currentFolder}
+          <button class="small-btn" on:click={goBack} title="Go back"
+            >&larr;</button
+          >
+          <div
+            class="panel-title"
+            on:dblclick={() => (isEditingHeaderName = true)}
+            title="Double-click to rename"
+          >
+            {#if isEditingHeaderName}
+              <input
+                value={currentFolder.name}
+                use:focus
+                on:blur={(e) =>
+                  renameFolder(
+                    currentFolder.id,
+                    (e.target as HTMLInputElement).value
+                  )}
+                on:keydown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') isEditingHeaderName = false;
+                }}
+              />
+            {:else}
+              / {currentFolder.name}
+            {/if}
+          </div>
+        {:else}
+          <div class="panel-title">Notes</div>
+        {/if}
         <div class="spacer"></div>
-        <button class="small-btn" on:click={addNote}>New Note</button>
+        {#if currentFolder}
+          <button
+            class="small-btn danger"
+            on:click={() => deleteFolder(currentFolder.id)}
+            >Delete Folder</button
+          >
+        {/if}
+        <button class="small-btn" on:click={addFolder}>+ Folder</button>
+        <button class="small-btn" on:click={addNote}>+ Note</button>
       </div>
 
       <div class="notes">
-        <aside class="note-list">
-          {#each notes as n (n.id)}
+        <aside
+          class="note-list"
+          on:dragleave={() => {
+            dropIndex = null;
+          }}
+        >
+          <!-- --- Move to Root --- -->
+          {#if currentFolder}
             <div
-              class="note-item {selectedNoteId === n.id ? 'active' : ''}"
-              on:click={() => selectNote(n.id)}
+              class="back-to-root-item"
+              class:drag-over={dragOverRoot}
+              on:dragover={(e) => {
+                e.preventDefault();
+                dragOverRoot = true;
+              }}
+              on:dragleave={() => (dragOverRoot = false)}
+              on:drop|preventDefault={handleDropOnRoot}
             >
-              <div class="title">{n.title || "Untitled"}</div>
-              <button
-                class="small-btn danger"
-                on:click|stopPropagation={() => deleteNote(n.id)}
-                title="Delete note"
-              >
-                Delete
-              </button>
+              ...
             </div>
+          {/if}
+
+          {#each displayList as item, i (item.id)}
+            {#if item.type === "folder"}
+              <div
+                class="folder-item"
+                class:drag-over={dragOverFolderId === item.id}
+                draggable="true"
+                on:click={(e) => {
+                  if (editingFolderId !== item.id) openFolder(item.id);
+                }}
+                on:dragstart={(e) => handleDragStart(e, item)}
+                on:dragover={(e) => {
+                  handleDragOver(e, i);
+                  if (e.dataTransfer?.types.includes('application/json')) {
+                    const data = e.dataTransfer.getData('application/json');
+                    if (data) {
+                      const dragged = JSON.parse(data);
+                      if (dragged.type === 'note') {
+                        dragOverFolderId = item.id;
+                      }
+                    }
+                  }
+                }}
+                on:dragleave={() => (dragOverFolderId = null)}
+                on:drop|preventDefault={(e) => {
+                  const data = e.dataTransfer.getData('application/json');
+                  if (data && JSON.parse(data).type === 'note') {
+                    handleDropOnFolder(e, item);
+                  } else {
+                    handleReorderDrop(e, i);
+                  }
+                }}
+              >
+                {#if dropIndex === i}
+                  <div class="drop-indicator"></div>
+                {/if}
+                {#if editingFolderId === item.id}
+                  <input
+                    value={item.name}
+                    use:focus
+                    on:blur={(e) =>
+                      renameFolder(item.id, (e.target as HTMLInputElement).value)}
+                    on:keydown={(e) => {
+                      if (e.key === 'Enter')
+                        (e.target as HTMLInputElement).blur();
+                      if (e.key === 'Escape') editingFolderId = null;
+                    }}
+                  />
+                {:else}
+                  <div
+                    class="title"
+                    on:dblclick|stopPropagation={() => (editingFolderId = item.id)}
+                  >
+                    📁 {item.name}
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <div
+                class="note-item {selectedNoteId === item.id ? 'active' : ''}"
+                on:click={() => selectNote(item.id)}
+                draggable="true"
+                on:dragstart={(e) => handleDragStart(e, item)}
+                on:dragover={(e) => handleDragOver(e, i)}
+                on:drop|preventDefault={(e) => handleReorderDrop(e, i)}
+              >
+                {#if dropIndex === i}
+                  <div class="drop-indicator"></div>
+                {/if}
+                <div class="title">{item.title || "Untitled"}</div>
+                <button
+                  class="small-btn danger"
+                  on:click|stopPropagation={() => deleteNote(item.id)}
+                  title="Delete note"
+                >
+                  Delete
+                </button>
+              </div>
+            {/if}
           {/each}
         </aside>
 
@@ -1175,7 +1609,13 @@
             {/key}
           {:else}
             <div style="padding:16px; color: var(--text-muted);">
-              No notes. Create one to get started.
+              {#if displayList.length === 0 && !currentFolder}
+                Create a note or folder to get started.
+              {:else if displayList.length === 0 && currentFolder}
+                This folder is empty. Create a new note.
+              {:else if !notes.some((n) => n.id === selectedNoteId)}
+                Select a note to view its content.
+              {/if}
             </div>
           {/if}
         </div>

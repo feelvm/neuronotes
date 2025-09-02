@@ -11,8 +11,5 @@ As NEURONOTES is still in early development, there are many cool things to expec
 - Formatting
 - Image import ( free manipulation by default )
 - Window resizing
-- Workspaces
 - Accountability dashboard
-- Notes folder
 - Archiving
-- Optimazations for mobile browsers ( current display is unusable )

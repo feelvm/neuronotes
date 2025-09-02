@@ -1,16 +1,24 @@
 import { browser } from "$app/environment";
 
 const DB_NAME = "NeuronotesDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 // Data structures
 export type Workspace = { id: string; name: string };
+export type Folder = {
+  id: string;
+  name: string;
+  workspaceId: string;
+  order: number;
+}; // <-- NEW
 export type Note = {
   id: string;
   title: string;
   contentHTML: string;
   updatedAt: number;
   workspaceId: string;
+  folderId: string | null;
+  order: number;
 };
 export type CalendarEvent = {
   id: string;
@@ -39,7 +47,9 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDB(): Promise<IDBDatabase> {
   if (!browser) {
-    return Promise.reject(new Error("IndexedDB can only be used in the browser."));
+    return Promise.reject(
+      new Error("IndexedDB can only be used in the browser.")
+    );
   }
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
@@ -56,6 +66,9 @@ function openDB(): Promise<IDBDatabase> {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
+        const oldVersion = event.oldVersion;
+        // Use the transaction provided by the event
+        const transaction = (event.target as IDBOpenDBRequest).transaction;
 
         // Workspaces store
         if (!db.objectStoreNames.contains("workspaces")) {
@@ -65,7 +78,27 @@ function openDB(): Promise<IDBDatabase> {
         // Notes store with an index on workspaceId
         if (!db.objectStoreNames.contains("notes")) {
           const notesStore = db.createObjectStore("notes", { keyPath: "id" });
-          notesStore.createIndex("workspaceId", "workspaceId", { unique: false });
+          notesStore.createIndex("workspaceId", "workspaceId", {
+            unique: false
+          });
+
+          notesStore.createIndex(
+            "workspaceId_folderId",
+            ["workspaceId", "folderId"],
+            { unique: false }
+          );
+        } else if (oldVersion < 2) {
+          // Upgrade notes store for existing users
+          if (transaction) {
+            const notesStore = transaction.objectStore("notes");
+            if (!notesStore.indexNames.contains("workspaceId_folderId")) {
+              notesStore.createIndex(
+                "workspaceId_folderId",
+                ["workspaceId", "folderId"],
+                { unique: false }
+              );
+            }
+          }
         }
 
         // Calendar events store with an index on workspaceId
@@ -73,7 +106,9 @@ function openDB(): Promise<IDBDatabase> {
           const eventsStore = db.createObjectStore("calendarEvents", {
             keyPath: "id"
           });
-          eventsStore.createIndex("workspaceId", "workspaceId", { unique: false });
+          eventsStore.createIndex("workspaceId", "workspaceId", {
+            unique: false
+          });
         }
 
         // Kanban store
@@ -85,6 +120,16 @@ function openDB(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains("settings")) {
           db.createObjectStore("settings", { keyPath: "key" });
         }
+
+        // Folders store
+        if (!db.objectStoreNames.contains("folders")) {
+          const foldersStore = db.createObjectStore("folders", {
+            keyPath: "id"
+          });
+          foldersStore.createIndex("workspaceId", "workspaceId", {
+            unique: false
+          });
+        }
       };
     });
   }
@@ -92,7 +137,10 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 // CRUD helpers
-async function get<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
+async function get<T>(
+  storeName: string,
+  key: IDBValidKey
+): Promise<T | undefined> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, "readonly");
@@ -139,7 +187,7 @@ async function remove(storeName: string, key: IDBValidKey): Promise<void> {
 async function getAllByIndex<T>(
   storeName: string,
   indexName: string,
-  query: IDBValidKey
+  query: IDBValidKey | IDBKeyRange
 ): Promise<T[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
