@@ -10,7 +10,7 @@ export type Folder = {
   name: string;
   workspaceId: string;
   order: number;
-}; // <-- NEW
+};
 export type Note = {
   id: string;
   title: string;
@@ -19,6 +19,12 @@ export type Note = {
   workspaceId: string;
   folderId: string | null;
   order: number;
+  type?: "text" | "spreadsheet";
+  spreadsheet?: {
+    data: string[][];
+    rowHeights: Record<number, number>;
+    colWidths: Record<number, number>;
+  };
 };
 export type CalendarEvent = {
   id: string;

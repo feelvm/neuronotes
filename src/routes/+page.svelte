@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
+  import SpreadsheetComponent from "$lib/components/Spreadsheet.svelte";
   import * as db from "$lib/db";
   import type {
     Workspace,
@@ -11,7 +12,6 @@
     Kanban,
     Task
   } from "$lib/db";
-
   let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -47,7 +47,6 @@
         pendingArgs = null;
       }
     };
-
     return debounced;
   }
 
@@ -83,7 +82,6 @@
   let editingWorkspaceId: string | null = null;
 
   $: activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
-
   async function switchWorkspace(id: string) {
     if (id === activeWorkspaceId) return;
     debouncedUpdateNote.flush();
@@ -122,7 +120,6 @@
     }
     const ws = workspaces.find((w) => w.id === id);
     if (!ws) return;
-
     if (
       !confirm(
         `Are you sure you want to delete "${ws.name}"? All its data will be lost.`
@@ -159,7 +156,6 @@
     await db.remove("workspaces", id);
 
     workspaces = workspaces.filter((w) => w.id !== id);
-
     if (activeWorkspaceId === id) {
       await switchWorkspace(workspaces[0].id);
     }
@@ -178,7 +174,6 @@
 
   type DisplayItem = (Note & { type: "note" }) | (Folder & { type: "folder" });
   let displayList: DisplayItem[] = [];
-
   $: {
     if (currentFolderId === null) {
       const rootNotes = notes
@@ -200,7 +195,6 @@
   }
 
   $: currentFolder = folders.find((f) => f.id === currentFolderId);
-
   async function selectNote(id: string) {
     if (selectedNoteId === id) return;
     debouncedUpdateNote.flush();
@@ -223,6 +217,37 @@
       workspaceId: activeWorkspaceId,
       folderId: currentFolderId,
       order: notesInCurrentView.length
+    };
+    await db.put("notes", n);
+    notes = [...notes, n];
+    await selectNote(n.id);
+  }
+
+  function createEmptySpreadsheet(rows = 50, cols = 20) {
+    const data = Array.from({ length: rows }, () =>
+      Array.from({ length: cols }, () => "")
+    );
+    const colWidths: Record<number, number> = {};
+    for (let i = 0; i < cols; i++) colWidths[i] = 100;
+    const rowHeights: Record<number, number> = {};
+    for (let i = 0; i < rows; i++) rowHeights[i] = 25;
+    return { data, colWidths, rowHeights };
+  }
+
+  async function addSpreadsheetNote() {
+    const notesInCurrentView = displayList.filter(
+      (item) => item.type === "note"
+    );
+    const n: Note = {
+      id: crypto.randomUUID(),
+      title: "Untitled Spreadsheet",
+      contentHTML: "",
+      updatedAt: Date.now(),
+      workspaceId: activeWorkspaceId,
+      folderId: currentFolderId,
+      order: notesInCurrentView.length,
+      type: "spreadsheet",
+      spreadsheet: createEmptySpreadsheet()
     };
     await db.put("notes", n);
     notes = [...notes, n];
@@ -264,23 +289,19 @@
       return;
     }
 
-    // Find notes to delete from the database
     const notesToDelete = await db.getAllByIndex<Note>(
       "notes",
       "workspaceId_folderId",
       [activeWorkspaceId, folderId]
     );
 
-    // Create promises to delete each note
     const deleteNotePromises = notesToDelete.map((note) =>
       db.remove("notes", note.id)
     );
     await Promise.all(deleteNotePromises);
 
-    // Delete the folder itself from the database
     await db.remove("folders", folderId);
 
-    // Update local state atomically
     const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
     notes = notes.filter((n) => !deletedNoteIds.has(n.id));
     folders = folders.filter((f) => f.id !== folderId);
@@ -303,15 +324,12 @@
     notes.find((n) => n.folderId === currentFolderId) ??
     notes.find((n) => n.folderId === null) ??
     null;
-
   async function updateNote(note: Note) {
     const noteToSave = { ...note, updatedAt: Date.now() };
-
     if (browser && DOMPurify) {
       noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
     }
     await db.put("notes", noteToSave);
-
     const index = notes.findIndex((n) => n.id === noteToSave.id);
     if (index !== -1) {
       notes[index] = noteToSave;
@@ -372,13 +390,12 @@
     const data = ev.dataTransfer?.getData("application/json");
     if (!data) return;
     const draggedItem = JSON.parse(data) as DisplayItem;
-
     if (draggedItem.type === "note" && draggedItem.folderId !== null) {
       const noteToMove = notes.find((n) => n.id === draggedItem.id);
       if (noteToMove) {
-        noteToMove.folderId = null; // Move to root
+        noteToMove.folderId = null;
+        // Move to root
         noteToMove.updatedAt = Date.now();
-
         const rootItemCount =
           folders.length + notes.filter((n) => n.folderId === null).length;
         noteToMove.order = rootItemCount;
@@ -409,7 +426,6 @@
 
     const [movedItem] = currentViewList.splice(draggedIndex, 1);
     currentViewList.splice(targetIndex, 0, movedItem);
-
     const promises = currentViewList.map((item, index) => {
       item.order = index;
       if (item.type === "folder") {
@@ -419,7 +435,8 @@
           return db.put("folders", folder);
         }
       } else {
-        const note = notes.find((n) => n.id === item.id);
+        const note =
+          notes.find((n) => n.id === item.id);
         if (note) {
           note.order = index;
           return db.put("notes", note);
@@ -458,11 +475,9 @@
     },
     {} as Record<string, CalendarEvent[]>
   );
-
   let newEventTitle = "";
   let newEventTime = "";
   let newEventDate = "1970-01-01";
-
   async function addEvent() {
     if (!newEventTitle.trim() || !newEventDate) return;
     const newEvent: CalendarEvent = {
@@ -488,7 +503,6 @@
   let kanban: Column[] = [];
   let editingColumnId: string | null = null;
   let editingTaskId: string | null = null;
-
   async function persistKanban() {
     if (!activeWorkspaceId || !kanban) return;
     const kanbanData: Kanban = {
@@ -562,7 +576,6 @@
     x: number;
     y: number;
   } | null = null;
-
   function onTaskDragStart(colId: string, task: Task, ev: DragEvent) {
     isDragging = true;
     draggedTaskGhost = {
@@ -602,14 +615,12 @@
     if (!data) return;
     const payload = JSON.parse(data) as { colId: string; taskId: string };
     if (!payload || payload.colId === targetColId) return;
-
     const fromCol = kanban.find((c) => c.id === payload.colId);
     const toCol = kanban.find((c) => c.id === targetColId);
     if (!fromCol || !toCol) return;
 
     const idx = fromCol.tasks.findIndex((t) => t.id === payload.taskId);
     if (idx < 0) return;
-
     const [moved] = fromCol.tasks.splice(idx, 1);
     toCol.tasks.push(moved);
     kanban = [...kanban];
@@ -624,7 +635,6 @@
   // ----- Data Loading -----
   async function loadActiveWorkspaceData() {
     if (!browser || !activeWorkspaceId) return;
-
     currentFolderId = null;
 
     const loadedFolders = await db.getAllByIndex<Folder>(
@@ -633,7 +643,6 @@
       activeWorkspaceId
     );
     folders = loadedFolders.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-
     const loadedNotes = await db.getAllByIndex<Note>(
       "notes",
       "workspaceId",
@@ -652,7 +661,6 @@
       "workspaceId",
       activeWorkspaceId
     );
-
     const kanbanData = await db.get<Kanban>("kanban", activeWorkspaceId);
     kanban = kanbanData
       ? kanbanData.columns.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }))
@@ -669,7 +677,13 @@
     const notesToUpdate = allNotes.filter(
       (note) => typeof note.folderId === "undefined"
     );
-
+    // Also migrate notes that don't have a 'type'
+    const notesWithoutType = allNotes.filter(
+      (note) => typeof note.type === "undefined"
+    );
+    notesWithoutType.forEach((note) => {
+      note.type = "text";
+    });
     if (notesToUpdate.length > 0) {
       const promises = notesToUpdate.map((note) => {
         note.folderId = null;
@@ -677,6 +691,13 @@
       });
       await Promise.all(promises);
       console.log(`Migrated ${notesToUpdate.length} notes.`);
+    }
+    if (notesWithoutType.length > 0) {
+      const promises = notesWithoutType.map((note) => db.put("notes", note));
+      await Promise.all(promises);
+      console.log(
+        `Migrated ${notesWithoutType.length} notes to add 'type' field.`
+      );
     }
     localStorage.setItem(MIGRATION_KEY, "true");
   }
@@ -1017,6 +1038,12 @@
   }
   .contenteditable:focus {
     border-color: var(--accent-red);
+  }
+
+  .spreadsheet-wrapper {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .right {
@@ -1438,7 +1465,6 @@
   </div>
 
   <div class="main">
-    <!-- Left: Notes -->
     <section class="panel">
       <div class="panel-header">
         {#if currentFolder}
@@ -1480,6 +1506,7 @@
           >
         {/if}
         <button class="small-btn" on:click={addFolder}>+ Folder</button>
+        <button class="small-btn" on:click={addSpreadsheetNote}>+ Sheet</button>
         <button class="small-btn" on:click={addNote}>+ Note</button>
       </div>
 
@@ -1490,7 +1517,6 @@
             dropIndex = null;
           }}
         >
-          <!-- --- Move to Root --- -->
           {#if currentFolder}
             <div
               class="back-to-root-item"
@@ -1590,22 +1616,36 @@
         <div class="note-editor">
           {#if currentNote}
             {#key currentNote.id}
-              <input
-                class="note-title"
-                bind:value={currentNote.title}
-                on:input={() => debouncedUpdateNote(currentNote)}
-                placeholder="Note title..."
-              />
-
-              <div class="note-content">
-                <div
-                  class="contenteditable"
-                  contenteditable="true"
-                  bind:innerHTML={currentNote.contentHTML}
+              {#if currentNote.type === "spreadsheet"}
+                <input
+                  class="note-title"
+                  bind:value={currentNote.title}
                   on:input={() => debouncedUpdateNote(currentNote)}
-                  on:paste={handlePaste}
+                  placeholder="Spreadsheet title..."
                 />
-              </div>
+                <div class="spreadsheet-wrapper">
+                  <SpreadsheetComponent
+                    bind:spreadsheetData={currentNote.spreadsheet}
+                    on:update={() => debouncedUpdateNote(currentNote)}
+                  />
+                </div>
+              {:else}
+                <input
+                  class="note-title"
+                  bind:value={currentNote.title}
+                  on:input={() => debouncedUpdateNote(currentNote)}
+                  placeholder="Note title..."
+                />
+                <div class="note-content">
+                  <div
+                    class="contenteditable"
+                    contenteditable="true"
+                    bind:innerHTML={currentNote.contentHTML}
+                    on:input={() => debouncedUpdateNote(currentNote)}
+                    on:paste={handlePaste}
+                  />
+                </div>
+              {/if}
             {/key}
           {:else}
             <div style="padding:16px; color: var(--text-muted);">
@@ -1622,7 +1662,6 @@
       </div>
     </section>
 
-    <!-- Right: Calendar and Kanban -->
     <section class="right">
       <div class="panel">
         <div class="panel-header">
