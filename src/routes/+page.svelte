@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
-  import SpreadsheetComponent from "$lib/components/Spreadsheet.svelte";
+  import Spreadsheet from "$lib/components/Spreadsheet.svelte";
   import * as db from "$lib/db";
   import type {
     Workspace,
@@ -10,12 +10,37 @@
     CalendarEvent,
     Column,
     Kanban,
-    Task
+    Task,
+    SpreadsheetCell
   } from "$lib/db";
+
   let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  let editorDiv: HTMLElement; // Reference to the contenteditable div
-  let selectedFontSize = 14; // To display the current font size
+  let editorDiv: HTMLElement;
+  let selectedFontSize = 14;
+  let spreadsheetComponentInstance: Spreadsheet;
+  let selectedSheetCell: { row: number; col: number } | null = null;
+  let sheetSelection: {
+    start: { row: number; col: number };
+    end: { row: number; col: number };
+  } | null = null;
+
+  $: canMergeOrUnmerge = (() => {
+    if (!sheetSelection) return false;
+    const { start, end } = sheetSelection;
+    const minRow = Math.min(start.row, end.row);
+    const minCol = Math.min(start.col, end.col);
+    const maxRow = Math.max(start.row, end.row);
+    const maxCol = Math.max(start.col, end.col);
+
+    if (minRow !== maxRow || minCol !== maxCol) return true;
+
+    if (currentNote?.spreadsheet) {
+      const cell = currentNote.spreadsheet.data[minRow][minCol];
+      return (cell.rowspan || 1) > 1 || (cell.colspan || 1) > 1;
+    }
+    return false;
+  })();
 
   // ----- Actions -----
   function focus(node: HTMLElement) {
@@ -262,6 +287,8 @@
   async function selectNote(id: string) {
     if (selectedNoteId === id) return;
     debouncedUpdateNote.flush();
+    selectedSheetCell = null; // Clear sheet selection when changing notes
+    sheetSelection = null;
     selectedNoteId = id;
     await db.put("settings", {
       key: `selectedNoteId:${activeWorkspaceId}`,
@@ -288,8 +315,8 @@
   }
 
   function createEmptySpreadsheet(rows = 50, cols = 20) {
-    const data = Array.from({ length: rows }, () =>
-      Array.from({ length: cols }, () => "")
+    const data: SpreadsheetCell[][] = Array.from({ length: rows }, () =>
+      Array.from({ length: cols }, () => ({ value: "" }))
     );
     const colWidths: Record<number, number> = {};
     for (let i = 0; i < cols; i++) colWidths[i] = 100;
@@ -353,11 +380,13 @@
       return;
     }
 
+    // Find notes to delete from the database
     const notesToDelete = await db.getAllByIndex<Note>(
       "notes",
       "workspaceId_folderId",
       [activeWorkspaceId, folderId]
     );
+    // Create promises to delete each note
     const deleteNotePromises = notesToDelete.map((note) =>
       db.remove("notes", note.id)
     );
@@ -383,11 +412,8 @@
     }
   }
 
-  $: currentNote =
-    notes.find((n) => n.id === selectedNoteId) ??
-    notes.find((n) => n.folderId === currentFolderId) ??
-    notes.find((n) => n.folderId === null) ??
-    null;
+  $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
+
   async function updateNote(note: Note) {
     const noteToSave = { ...note, updatedAt: Date.now() };
     if (browser && DOMPurify) {
@@ -412,10 +438,12 @@
   // ----- Folder Navigation -----
   async function openFolder(folderId: string) {
     currentFolderId = folderId;
+    selectedNoteId = ""; // FIX: Clear selected note to hide editor
   }
 
   async function goBack() {
     currentFolderId = null;
+    selectedNoteId = ""; // FIX: Clear selected note to hide editor
   }
 
   function handleDragStart(ev: DragEvent, item: DisplayItem) {
@@ -499,8 +527,7 @@
           return db.put("folders", folder);
         }
       } else {
-        const note =
-          notes.find((n) => n.id === item.id);
+        const note = notes.find((n) => n.id === item.id);
         if (note) {
           note.order = index;
           return db.put("notes", note);
@@ -567,6 +594,8 @@
   let kanban: Column[] = [];
   let editingColumnId: string | null = null;
   let editingTaskId: string | null = null;
+  let kanbanDropTarget: { colId: string; taskIndex: number } | null = null;
+
   async function persistKanban() {
     if (!activeWorkspaceId || !kanban) return;
     const kanbanData: Kanban = {
@@ -669,31 +698,51 @@
     };
   }
 
-  function onTaskDragOver(ev: DragEvent) {
+  function onTaskDragOver(
+    ev: DragEvent,
+    targetColId: string,
+    targetTaskIndex: number
+  ) {
     ev.preventDefault();
+    kanbanDropTarget = { colId: targetColId, taskIndex: targetTaskIndex };
   }
 
-  function onColumnDrop(targetColId: string, ev: DragEvent) {
+  function onColumnDrop(targetColId: string, ev: DragEvent, isTaskDrop = false) {
     ev.preventDefault();
+    if (isTaskDrop) ev.stopPropagation();
+
     const data = ev.dataTransfer?.getData("application/json");
     if (!data) return;
     const payload = JSON.parse(data) as { colId: string; taskId: string };
-    if (!payload || payload.colId === targetColId) return;
+
     const fromCol = kanban.find((c) => c.id === payload.colId);
     const toCol = kanban.find((c) => c.id === targetColId);
     if (!fromCol || !toCol) return;
 
-    const idx = fromCol.tasks.findIndex((t) => t.id === payload.taskId);
-    if (idx < 0) return;
-    const [moved] = fromCol.tasks.splice(idx, 1);
-    toCol.tasks.push(moved);
+    const fromIndex = fromCol.tasks.findIndex((t) => t.id === payload.taskId);
+    if (fromIndex < 0) return;
+
+    let toIndex = toCol.tasks.length;
+    if (kanbanDropTarget && kanbanDropTarget.colId === targetColId) {
+      toIndex = kanbanDropTarget.taskIndex;
+    }
+
+    if (fromCol.id === toCol.id && fromIndex < toIndex) {
+      toIndex--;
+    }
+
+    const [moved] = fromCol.tasks.splice(fromIndex, 1);
+    toCol.tasks.splice(toIndex, 0, moved);
+
     kanban = [...kanban];
+    kanbanDropTarget = null;
   }
 
   function handleDragEnd() {
     isDragging = false;
     draggedTaskGhost = null;
     window.removeEventListener("dragover", updateGhostPosition);
+    kanbanDropTarget = null;
   }
 
   // ----- Data Loading -----
@@ -741,13 +790,28 @@
     const notesToUpdate = allNotes.filter(
       (note) => typeof note.folderId === "undefined"
     );
-    // Also migrate notes that don't have a 'type'
-    const notesWithoutType = allNotes.filter(
-      (note) => typeof note.type === "undefined"
-    );
-    notesWithoutType.forEach((note) => {
-      note.type = "text";
+
+    const notesToMigrate = allNotes.filter((note) => {
+      const needsType = typeof note.type === "undefined";
+      const needsSpreadsheetUpgrade =
+        note.type === "spreadsheet" &&
+        note.spreadsheet &&
+        note.spreadsheet.data.length > 0 &&
+        typeof note.spreadsheet.data[0][0] === "string";
+      return needsType || needsSpreadsheetUpgrade;
     });
+
+    notesToMigrate.forEach((note) => {
+      if (typeof note.type === "undefined") {
+        note.type = "text";
+      }
+      if (note.type === "spreadsheet" && note.spreadsheet) {
+        note.spreadsheet.data = note.spreadsheet.data.map((row: string[]) =>
+          row.map((cell: string) => ({ value: cell }))
+        );
+      }
+    });
+
     if (notesToUpdate.length > 0) {
       const promises = notesToUpdate.map((note) => {
         note.folderId = null;
@@ -756,11 +820,11 @@
       await Promise.all(promises);
       console.log(`Migrated ${notesToUpdate.length} notes.`);
     }
-    if (notesWithoutType.length > 0) {
-      const promises = notesWithoutType.map((note) => db.put("notes", note));
+    if (notesToMigrate.length > 0) {
+      const promises = notesToMigrate.map((note) => db.put("notes", note));
       await Promise.all(promises);
       console.log(
-        `Migrated ${notesWithoutType.length} notes to add 'type' field.`
+        `Migrated ${notesToMigrate.length} notes for type and spreadsheet format.`
       );
     }
     localStorage.setItem(MIGRATION_KEY, "true");
@@ -802,7 +866,6 @@
     weekStart = startOfWeek(today, 1);
     newEventDate = ymd(today);
 
-    // Listen for selection changes to update the font size display
     document.addEventListener("selectionchange", updateSelectedFontSize);
 
     return () => {
@@ -1383,6 +1446,7 @@
     opacity: 0.95;
   }
 
+  /* --- Move to root --- */
   .back-to-root-item {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
@@ -1407,6 +1471,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    /* New styles for separation and positioning */
     margin-left: auto;
     padding-left: 16px;
     border-left: 1px solid var(--border);
@@ -1429,6 +1494,11 @@
   .toolbar-btn:hover {
     background-color: var(--panel-bg-darker);
     color: var(--text);
+  }
+  .toolbar-btn:disabled {
+    color: #555;
+    cursor: not-allowed;
+    background-color: transparent;
   }
   .font-size-controls {
     display: flex;
@@ -1637,6 +1707,7 @@
         <button class="small-btn" on:click={addSpreadsheetNote}>+ Sheet</button>
         <button class="small-btn" on:click={addNote}>+ Note</button>
 
+        <!-- Note Formatting Toolbar -->
         {#if currentNote && currentNote.type !== "spreadsheet"}
           <div class="format-toolbar">
             <div class="font-size-controls" title="Change font size">
@@ -1689,6 +1760,56 @@
               on:click={() => applyFormat("justifyRight")}
               on:mousedown={(e) => e.preventDefault()}
               title="Align right">◨</button
+            >
+          </div>
+        {/if}
+
+        <!-- Spreadsheet Formatting Toolbar -->
+        {#if currentNote && currentNote.type === "spreadsheet"}
+          <div class="format-toolbar">
+            <button
+              class="toolbar-btn"
+              on:click={() =>
+                spreadsheetComponentInstance.applyStyle("fontWeight", "bold")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Bold"
+              style="font-weight: bold;">B</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() =>
+                spreadsheetComponentInstance.applyStyle("fontStyle", "italic")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Italic"
+              style="font-style: italic;">I</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() =>
+                spreadsheetComponentInstance.applyStyle("textAlign", "left")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Align left">◧</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() =>
+                spreadsheetComponentInstance.applyStyle("textAlign", "center")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Align center">◫</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() =>
+                spreadsheetComponentInstance.applyStyle("textAlign", "right")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Align right">◨</button
+            >
+            <button
+              class="toolbar-btn"
+              disabled={!canMergeOrUnmerge}
+              on:click={() => spreadsheetComponentInstance.toggleMerge()}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Merge/Unmerge Cells">⧉</button
             >
           </div>
         {/if}
@@ -1808,8 +1929,11 @@
                   placeholder="Spreadsheet title..."
                 />
                 <div class="spreadsheet-wrapper">
-                  <SpreadsheetComponent
-                    bind:spreadsheetData={currentNote.spreadsheet}
+                  <Spreadsheet
+                    bind:this={spreadsheetComponentInstance}
+                    bind:spreadsheetData={currentNote.spreadsheet!}
+                    bind:selectedCell={selectedSheetCell}
+                    bind:selection={sheetSelection}
                     on:update={() => debouncedUpdateNote(currentNote)}
                   />
                 </div>
@@ -1833,12 +1957,13 @@
               {/if}
             {/key}
           {:else}
+            <!-- This part is now correctly shown when a folder is open -->
             <div style="padding:16px; color: var(--text-muted);">
-              {#if displayList.length === 0 && !currentFolder}
+              {#if currentFolder}
+                Select a note from the list or create a new one.
+              {:else if displayList.length === 0}
                 Create a note or folder to get started.
-              {:else if displayList.length === 0 && currentFolder}
-                This folder is empty. Create a new note.
-              {:else if !notes.some((n) => n.id === selectedNoteId)}
+              {:else}
                 Select a note to view its content.
               {/if}
             </div>
@@ -1928,8 +2053,10 @@
             <div
               class="kanban-col"
               class:collapsed={col.isCollapsed}
-              on:dragover={onTaskDragOver}
-              on:drop={(e) => onColumnDrop(col.id, e)}
+              on:dragover={(e) => {
+                onTaskDragOver(e, col.id, col.tasks.length);
+              }}
+              on:drop={(e) => onColumnDrop(col.id, e, false)}
             >
               <div class="kanban-col-header">
                 <button
@@ -1975,7 +2102,10 @@
 
               {#if !col.isCollapsed}
                 <div class="kanban-tasks">
-                  {#each col.tasks as t (t.id)}
+                  {#each col.tasks as t, i (t.id)}
+                    {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === i}
+                      <div class="drop-indicator"></div>
+                    {/if}
                     <div
                       class="kanban-task"
                       class:dragging={isDragging &&
@@ -1983,6 +2113,8 @@
                       draggable="true"
                       on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
                       on:dragend={handleDragEnd}
+                      on:dragover={(e) => onTaskDragOver(e, col.id, i)}
+                      on:drop={(e) => onColumnDrop(col.id, e, true)}
                     >
                       {#if editingTaskId === t.id}
                         <input
@@ -2018,6 +2150,9 @@
                       </button>
                     </div>
                   {/each}
+                  {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === col.tasks.length}
+                    <div class="drop-indicator"></div>
+                  {/if}
                 </div>
 
                 <div class="kanban-actions">

@@ -20,11 +20,23 @@ export type Note = {
   folderId: string | null;
   order: number;
   type?: "text" | "spreadsheet";
-  spreadsheet?: {
-    data: string[][];
-    rowHeights: Record<number, number>;
-    colWidths: Record<number, number>;
+  spreadsheet?: Spreadsheet;
+};
+export type SpreadsheetCell = {
+  value: string;
+  style?: {
+    fontWeight?: "bold" | "normal";
+    fontStyle?: "italic" | "normal";
+    textAlign?: "left" | "center" | "right";
   };
+  rowspan?: number;
+  colspan?: number;
+  merged?: boolean;
+};
+export type Spreadsheet = {
+  data: SpreadsheetCell[][];
+  rowHeights: Record<number, number>;
+  colWidths: Record<number, number>;
 };
 export type CalendarEvent = {
   id: string;
@@ -94,7 +106,6 @@ function openDB(): Promise<IDBDatabase> {
             { unique: false }
           );
         } else if (oldVersion < 2) {
-          // Upgrade notes store for existing users
           if (transaction) {
             const notesStore = transaction.objectStore("notes");
             if (!notesStore.indexNames.contains("workspaceId_folderId")) {
