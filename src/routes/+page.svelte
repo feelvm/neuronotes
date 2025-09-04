@@ -14,6 +14,8 @@
   } from "$lib/db";
   let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  let editorDiv: HTMLElement; // Reference to the contenteditable div
+  let selectedFontSize = 14; // To display the current font size
 
   // ----- Actions -----
   function focus(node: HTMLElement) {
@@ -74,6 +76,68 @@
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const yyyy = date.getFullYear();
     return `${dd}-${mm}-${yyyy}`;
+  }
+
+  // ----- Text Formatting -----
+  function applyFormat(command: string) {
+    if (editorDiv) editorDiv.focus(); // Ensure editor has focus
+    document.execCommand(command, false);
+  }
+
+  function modifyFontSize(amount: number) {
+    if (editorDiv) editorDiv.focus(); // Ensure editor has focus
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) return;
+
+    const parentElement =
+      range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentElement
+        : (range.commonAncestorContainer as HTMLElement);
+
+    if (parentElement && editorDiv.contains(parentElement)) {
+      const currentSize =
+        window.getComputedStyle(parentElement).fontSize || "14px";
+      const newSize = Math.max(8, parseInt(currentSize) + amount);
+
+      const contents = range.extractContents();
+      const span = document.createElement("span");
+      span.style.fontSize = `${newSize}px`;
+      span.appendChild(contents);
+      range.insertNode(span);
+
+      // Restore selection to allow for repeated clicks
+      selection.removeAllRanges();
+      const newRange = document.createRange();
+      newRange.selectNodeContents(span);
+      selection.addRange(newRange);
+
+      // Manually update the displayed font size
+      selectedFontSize = newSize;
+
+      // Trigger the input event manually to ensure debounced save is called
+      editorDiv.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
+  function updateSelectedFontSize() {
+    if (!browser || !editorDiv) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    const parentElement =
+      range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentElement
+        : (range.commonAncestorContainer as HTMLElement);
+
+    if (parentElement && editorDiv.contains(parentElement)) {
+      const sizeStr = window.getComputedStyle(parentElement).fontSize || "14px";
+      selectedFontSize = parseInt(sizeStr);
+    }
   }
 
   // ----- Workspace State -----
@@ -294,14 +358,14 @@
       "workspaceId_folderId",
       [activeWorkspaceId, folderId]
     );
-
     const deleteNotePromises = notesToDelete.map((note) =>
       db.remove("notes", note.id)
     );
     await Promise.all(deleteNotePromises);
 
+    // Delete the folder itself from the database
     await db.remove("folders", folderId);
-
+    // Update local state atomically
     const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
     notes = notes.filter((n) => !deletedNoteIds.has(n.id));
     folders = folders.filter((f) => f.id !== folderId);
@@ -737,6 +801,13 @@
     today = new Date();
     weekStart = startOfWeek(today, 1);
     newEventDate = ymd(today);
+
+    // Listen for selection changes to update the font size display
+    document.addEventListener("selectionchange", updateSelectedFontSize);
+
+    return () => {
+      document.removeEventListener("selectionchange", updateSelectedFontSize);
+    };
   });
 </script>
 
@@ -923,6 +994,7 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   .panel-title {
@@ -962,7 +1034,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    transition: background-color 0.2s;
+    transition: background-color: 0.2s;
     position: relative;
   }
   .folder-item {
@@ -1033,7 +1105,7 @@
     padding: 12px;
     background: var(--panel-bg-darker);
     border: 1px solid var(--border);
-    transition: border-color 0.2s;
+    transition: border-color: 0.2s;
     overflow-wrap: break-word;
   }
   .contenteditable:focus {
@@ -1071,7 +1143,7 @@
     flex-direction: column;
     gap: 6px;
     min-width: 0;
-    transition: background-color 0.2s;
+    transition: background-color: 0.2s;
   }
   .calendar-cell.today {
     background-color: rgba(255, 71, 87, 0.1);
@@ -1142,7 +1214,7 @@
     cursor: pointer;
     font-size: 12px;
     font-weight: 500;
-    transition: border-color 0.2s;
+    transition: border-color: 0.2s;
   }
   .small-btn:hover {
     border-color: var(--accent-red);
@@ -1311,7 +1383,6 @@
     opacity: 0.95;
   }
 
-  /* --- Move to root --- */
   .back-to-root-item {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
@@ -1331,6 +1402,54 @@
     background-color: rgba(255, 71, 87, 0.1);
   }
 
+  /* ----- Toolbar Styles ----- */
+  .format-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding-left: 16px;
+    border-left: 1px solid var(--border);
+  }
+  .toolbar-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s;
+    font-family: var(--font-sans);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .toolbar-btn:hover {
+    background-color: var(--panel-bg-darker);
+    color: var(--text);
+  }
+  .font-size-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background-color: var(--panel-bg-darker);
+    border-radius: 6px;
+    padding: 0 4px;
+  }
+  .font-size-controls .toolbar-btn {
+    width: 20px;
+    font-size: 12px;
+  }
+  .font-size-display {
+    font-size: 12px;
+    color: var(--text-muted);
+    min-width: 40px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ----- Responsive Styles ----- */
   @media (max-width: 1200px) {
     .main {
@@ -1344,6 +1463,13 @@
     }
     .right {
       grid-template-rows: 1fr 1fr;
+    }
+    .format-toolbar {
+      width: 100%;
+      margin: 8px 0 0 0;
+      padding: 8px 0 0 0;
+      border-top: 1px solid var(--border);
+      border-left: none;
     }
   }
 
@@ -1497,7 +1623,9 @@
         {:else}
           <div class="panel-title">Notes</div>
         {/if}
+
         <div class="spacer"></div>
+
         {#if currentFolder}
           <button
             class="small-btn danger"
@@ -1508,6 +1636,62 @@
         <button class="small-btn" on:click={addFolder}>+ Folder</button>
         <button class="small-btn" on:click={addSpreadsheetNote}>+ Sheet</button>
         <button class="small-btn" on:click={addNote}>+ Note</button>
+
+        {#if currentNote && currentNote.type !== "spreadsheet"}
+          <div class="format-toolbar">
+            <div class="font-size-controls" title="Change font size">
+              <button
+                class="toolbar-btn"
+                on:click={() => modifyFontSize(-2)}
+                on:mousedown={(e) => e.preventDefault()}>▼</button
+              >
+              <div class="font-size-display">{selectedFontSize}px</div>
+              <button
+                class="toolbar-btn"
+                on:click={() => modifyFontSize(2)}
+                on:mousedown={(e) => e.preventDefault()}>▲</button
+              >
+            </div>
+            <button
+              class="toolbar-btn"
+              on:click={() => applyFormat("bold")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Bold"
+              style="font-weight: bold;">B</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() => applyFormat("italic")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Italic"
+              style="font-style: italic;">I</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() => applyFormat("insertUnorderedList")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Dotted list">●</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() => applyFormat("justifyLeft")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Align left">◧</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() => applyFormat("justifyCenter")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Align center">◫</button
+            >
+            <button
+              class="toolbar-btn"
+              on:click={() => applyFormat("justifyRight")}
+              on:mousedown={(e) => e.preventDefault()}
+              title="Align right">◨</button
+            >
+          </div>
+        {/if}
       </div>
 
       <div class="notes">
@@ -1640,6 +1824,7 @@
                   <div
                     class="contenteditable"
                     contenteditable="true"
+                    bind:this={editorDiv}
                     bind:innerHTML={currentNote.contentHTML}
                     on:input={() => debouncedUpdateNote(currentNote)}
                     on:paste={handlePaste}
