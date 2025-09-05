@@ -88,8 +88,7 @@
         startHeight + diffY
       );
     }
-
-    spreadsheetData = spreadsheetData;
+    dispatch("update");
   }
 
   function handleMouseUp() {

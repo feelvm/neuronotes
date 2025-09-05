@@ -16,8 +16,8 @@
 
   let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  let editorDiv: HTMLElement;
-  let selectedFontSize = 14;
+  let editorDiv: HTMLElement; // Reference to the contenteditable div
+  let selectedFontSize = 14; // To display the current font size
   let spreadsheetComponentInstance: Spreadsheet;
   let selectedSheetCell: { row: number; col: number } | null = null;
   let sheetSelection: {
@@ -110,7 +110,7 @@
   }
 
   function modifyFontSize(amount: number) {
-    if (editorDiv) editorDiv.focus(); // Ensure editor has focus
+    if (editorDiv) editorDiv.focus();
 
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
@@ -134,16 +134,13 @@
       span.appendChild(contents);
       range.insertNode(span);
 
-      // Restore selection to allow for repeated clicks
       selection.removeAllRanges();
       const newRange = document.createRange();
       newRange.selectNodeContents(span);
       selection.addRange(newRange);
 
-      // Manually update the displayed font size
       selectedFontSize = newSize;
 
-      // Trigger the input event manually to ensure debounced save is called
       editorDiv.dispatchEvent(new Event("input", { bubbles: true }));
     }
   }
@@ -287,7 +284,7 @@
   async function selectNote(id: string) {
     if (selectedNoteId === id) return;
     debouncedUpdateNote.flush();
-    selectedSheetCell = null; // Clear sheet selection when changing notes
+    selectedSheetCell = null;
     sheetSelection = null;
     selectedNoteId = id;
     await db.put("settings", {
@@ -380,21 +377,18 @@
       return;
     }
 
-    // Find notes to delete from the database
     const notesToDelete = await db.getAllByIndex<Note>(
       "notes",
       "workspaceId_folderId",
       [activeWorkspaceId, folderId]
     );
-    // Create promises to delete each note
     const deleteNotePromises = notesToDelete.map((note) =>
       db.remove("notes", note.id)
     );
     await Promise.all(deleteNotePromises);
 
-    // Delete the folder itself from the database
     await db.remove("folders", folderId);
-    // Update local state atomically
+
     const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
     notes = notes.filter((n) => !deletedNoteIds.has(n.id));
     folders = folders.filter((f) => f.id !== folderId);
@@ -413,6 +407,11 @@
   }
 
   $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
+
+  function triggerNoteUpdate() {
+    if (!currentNote) return;
+    notes = [...notes];
+  }
 
   async function updateNote(note: Note) {
     const noteToSave = { ...note, updatedAt: Date.now() };
@@ -438,12 +437,12 @@
   // ----- Folder Navigation -----
   async function openFolder(folderId: string) {
     currentFolderId = folderId;
-    selectedNoteId = ""; // FIX: Clear selected note to hide editor
+    selectedNoteId = "";
   }
 
   async function goBack() {
     currentFolderId = null;
-    selectedNoteId = ""; // FIX: Clear selected note to hide editor
+    selectedNoteId = "";
   }
 
   function handleDragStart(ev: DragEvent, item: DisplayItem) {
@@ -1934,7 +1933,12 @@
                     bind:spreadsheetData={currentNote.spreadsheet!}
                     bind:selectedCell={selectedSheetCell}
                     bind:selection={sheetSelection}
-                    on:update={() => debouncedUpdateNote(currentNote)}
+                    on:update={() => {
+                      triggerNoteUpdate();
+                      if (currentNote) {
+                        debouncedUpdateNote(currentNote);
+                      }
+                    }}
                   />
                 </div>
               {:else}
@@ -1957,7 +1961,6 @@
               {/if}
             {/key}
           {:else}
-            <!-- This part is now correctly shown when a folder is open -->
             <div style="padding:16px; color: var(--text-muted);">
               {#if currentFolder}
                 Select a note from the list or create a new one.
