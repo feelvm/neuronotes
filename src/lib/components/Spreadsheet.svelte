@@ -88,6 +88,7 @@
         startHeight + diffY
       );
     }
+    spreadsheetData = spreadsheetData;
     dispatch("update");
   }
 
@@ -140,6 +141,7 @@
     for (let i = 0; i < rowspan; i++) {
       totalHeight += spreadsheetData.rowHeights[rowIndex + i] || MIN_HEIGHT;
     }
+    // Add the height of the borders between the merged rows
     totalHeight += rowspan - 1;
     return totalHeight;
   }
@@ -148,7 +150,7 @@
     style: keyof NonNullable<SpreadsheetCell["style"]>,
     value: string | undefined
   ) {
-    if (!selectedCell) return;
+    if (!selectedCell) return; // Safe guard
     const { row, col } = selectedCell;
     const cell = spreadsheetData.data[row][col];
     cell.style = cell.style || {};
