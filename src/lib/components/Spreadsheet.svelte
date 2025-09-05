@@ -88,6 +88,8 @@
         startHeight + diffY
       );
     }
+
+    spreadsheetData = spreadsheetData;
   }
 
   function handleMouseUp() {
@@ -139,7 +141,6 @@
     for (let i = 0; i < rowspan; i++) {
       totalHeight += spreadsheetData.rowHeights[rowIndex + i] || MIN_HEIGHT;
     }
-    // Add the height of the borders between the merged rows
     totalHeight += rowspan - 1;
     return totalHeight;
   }
@@ -148,7 +149,7 @@
     style: keyof NonNullable<SpreadsheetCell["style"]>,
     value: string | undefined
   ) {
-    if (!selectedCell) return; // Safe guard
+    if (!selectedCell) return;
     const { row, col } = selectedCell;
     const cell = spreadsheetData.data[row][col];
     cell.style = cell.style || {};
@@ -172,7 +173,6 @@
     const { minRow, maxRow, minCol, maxCol } = selectionArea;
     const topLeftCell = spreadsheetData.data[minRow][minCol];
 
-    // Check if we are unmerging
     if (
       selectionArea.rowCount === 1 &&
       selectionArea.colCount === 1 &&
@@ -190,7 +190,6 @@
       }
       topLeftCell.value = value;
     } else {
-      // Otherwise, we are merging
       const newRowspan = maxRow - minRow + 1;
       const newColspan = maxCol - minCol + 1;
       const valueToKeep = topLeftCell.value;
