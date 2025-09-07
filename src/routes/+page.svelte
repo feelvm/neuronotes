@@ -14,15 +14,141 @@
     SpreadsheetCell
   } from "$lib/db";
 
+  // ----- Panel Resizing and Minimizing State -----
+  let notesPanelWidth = 50; // percentage
+  let calendarPanelHeight = 50;
+  let isNoteListVisible = true;
+  let isNotesMinimized = false;
+  let isCalendarMinimized = false;
+  let isKanbanMinimized = false;
+
+  let lastNotesWidth = 50;
+  let lastCalendarHeight = 50;
+
+  let isVerticalResizing = false;
+  let isHorizontalResizing = false;
+  let notesPanelClientWidth = 0;
+
+  $: minimizedCount = (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
+  
+  $: if (isNotesMinimized) {
+    notesPanelWidth = 6;
+  } else if (notesPanelWidth < 7) {
+    notesPanelWidth = lastNotesWidth > 7 ?
+      lastNotesWidth : 50;
+  }
+
+  $: if (isCalendarMinimized) {
+    calendarPanelHeight = 6;
+  } else if (isKanbanMinimized) {
+    calendarPanelHeight = 94;
+  } else if (calendarPanelHeight < 7 || calendarPanelHeight > 93) {
+    calendarPanelHeight =
+      lastCalendarHeight > 7 && lastCalendarHeight < 93
+        ?
+        lastCalendarHeight
+        : 50;
+  }
+
+  $: if (minimizedCount === 2) {
+    if (!isNotesMinimized) {
+      notesPanelWidth = 94;
+    } else if (!isCalendarMinimized) {
+      calendarPanelHeight = 94;
+    } else if (!isKanbanMinimized) {
+      calendarPanelHeight = 6;
+    }
+  } else if (minimizedCount < 2) {
+    if (!isNotesMinimized && notesPanelWidth > 90) {
+      notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
+    }
+    if (!isCalendarMinimized && !isKanbanMinimized && calendarPanelHeight > 90) {
+      calendarPanelHeight = lastCalendarHeight > 7 && lastCalendarHeight < 93 ? lastCalendarHeight : 50;
+    }
+  }
+
+  function toggleNotesMinimized() {
+    isNotesMinimized = !isNotesMinimized;
+  }
+
+  function toggleCalendarMinimized() {
+    isCalendarMinimized = !isCalendarMinimized;
+  }
+
+  function toggleKanbanMinimized() {
+    isKanbanMinimized = !isKanbanMinimized;
+  }
+
+  function toggleNoteList() {
+    isNoteListVisible = !isNoteListVisible;
+  }
+
+  // Resizing handlers
+  function startVerticalResize(e: MouseEvent) {
+    e.preventDefault();
+    isVerticalResizing = true;
+    window.addEventListener("mousemove", doVerticalResize);
+    window.addEventListener("mouseup", stopResize);
+  }
+
+  function doVerticalResize(e: MouseEvent) {
+    if (!isVerticalResizing) return;
+    const mainEl = (e.currentTarget as Window).document.querySelector(".main");
+    if (!mainEl) return;
+    const mainRect = mainEl.getBoundingClientRect();
+    const newWidth = ((e.clientX - mainRect.left) / mainRect.width) * 100;
+    notesPanelWidth = Math.max(6, Math.min(94, newWidth));
+    lastNotesWidth = notesPanelWidth;
+  }
+
+  function startHorizontalResize(e: MouseEvent) {
+    e.preventDefault();
+    isHorizontalResizing = true;
+    window.addEventListener("mousemove", doHorizontalResize);
+    window.addEventListener("mouseup", stopResize);
+  }
+
+  function doHorizontalResize(e: MouseEvent) {
+    if (!isHorizontalResizing) return;
+    const rightEl = (
+      e.currentTarget as Window
+    ).document.querySelector(".right");
+    if (!rightEl) return;
+    const rightRect = rightEl.getBoundingClientRect();
+    const newHeight = ((e.clientY - rightRect.top) / rightRect.height) * 100;
+    calendarPanelHeight = Math.max(6, Math.min(94, newHeight));
+    lastCalendarHeight = calendarPanelHeight;
+  }
+
+  function stopResize() {
+    isVerticalResizing = false;
+    isHorizontalResizing = false;
+    window.removeEventListener("mousemove", doVerticalResize);
+    window.removeEventListener("mousemove", doHorizontalResize);
+    window.removeEventListener("mouseup", stopResize);
+  }
+
   let DOMPurify: any;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const DAY_NAMES_LONG = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+  ];
   let editorDiv: HTMLElement; // Reference to the contenteditable div
-  let selectedFontSize = 14; // To display the current font size
+  let selectedFontSize = 14;
+  // To display the current font size
   let spreadsheetComponentInstance: Spreadsheet;
-  let selectedSheetCell: { row: number; col: number } | null = null;
+  let selectedSheetCell: { row: number; col: number } |
+    null = null;
   let sheetSelection: {
     start: { row: number; col: number };
-    end: { row: number; col: number };
+    end: { row: number;
+      col: number };
   } | null = null;
 
   $: canMergeOrUnmerge = (() => {
@@ -37,7 +163,8 @@
 
     if (currentNote?.spreadsheet) {
       const cell = currentNote.spreadsheet.data[minRow][minCol];
-      return (cell.rowspan || 1) > 1 || (cell.colspan || 1) > 1;
+      return (cell.rowspan || 1) 
+        > 1 || (cell.colspan || 1) > 1;
     }
     return false;
   })();
@@ -103,9 +230,8 @@
     return `${dd}-${mm}-${yyyy}`;
   }
 
-  // ----- Text Formatting -----
   function applyFormat(command: string) {
-    if (editorDiv) editorDiv.focus(); // Ensure editor has focus
+    if (editorDiv) editorDiv.focus();
     document.execCommand(command, false);
   }
 
@@ -117,15 +243,15 @@
 
     const range = selection.getRangeAt(0);
     if (range.collapsed) return;
-
     const parentElement =
       range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-        ? range.commonAncestorContainer.parentElement
+        ?
+        range.commonAncestorContainer.parentElement
         : (range.commonAncestorContainer as HTMLElement);
-
     if (parentElement && editorDiv.contains(parentElement)) {
       const currentSize =
-        window.getComputedStyle(parentElement).fontSize || "14px";
+        window.getComputedStyle(parentElement).fontSize ||
+        "14px";
       const newSize = Math.max(8, parseInt(currentSize) + amount);
 
       const contents = range.extractContents();
@@ -153,9 +279,9 @@
     const range = selection.getRangeAt(0);
     const parentElement =
       range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-        ? range.commonAncestorContainer.parentElement
+        ?
+        range.commonAncestorContainer.parentElement
         : (range.commonAncestorContainer as HTMLElement);
-
     if (parentElement && editorDiv.contains(parentElement)) {
       const sizeStr = window.getComputedStyle(parentElement).fontSize || "14px";
       selectedFontSize = parseInt(sizeStr);
@@ -252,12 +378,13 @@
   let folders: Folder[] = [];
   let selectedNoteId = "";
   let currentFolderId: string | null = null;
-  let dragOverFolderId: string | null = null;
+  let dragOverFolderId: string |
+    null = null;
   let dropIndex: number | null = null;
   let editingFolderId: string | null = null;
+  let editingNoteId: string | null = null;
   let isEditingHeaderName = false;
   let dragOverRoot = false;
-
   type DisplayItem = (Note & { type: "note" }) | (Folder & { type: "folder" });
   let displayList: DisplayItem[] = [];
   $: {
@@ -366,6 +493,16 @@
     isEditingHeaderName = false;
   }
 
+  async function renameNote(id: string, newName: string) {
+    const note = notes.find((n) => n.id === id);
+    if (note && newName.trim()) {
+      note.title = newName.trim();
+      await db.put("notes", note);
+      notes = [...notes];
+    }
+    editingNoteId = null;
+  }
+
   async function deleteFolder(folderId: string) {
     const folder = folders.find((f) => f.id === folderId);
     if (!folder) return;
@@ -386,7 +523,6 @@
       db.remove("notes", note.id)
     );
     await Promise.all(deleteNotePromises);
-
     await db.remove("folders", folderId);
 
     const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
@@ -407,7 +543,6 @@
   }
 
   $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
-
   function triggerNoteUpdate() {
     if (!currentNote) return;
     notes = [...notes];
@@ -526,7 +661,8 @@
           return db.put("folders", folder);
         }
       } else {
-        const note = notes.find((n) => n.id === item.id);
+        const note = 
+          notes.find((n) => n.id === item.id);
         if (note) {
           note.order = index;
           return db.put("notes", note);
@@ -544,6 +680,10 @@
   let calendarEvents: CalendarEvent[] = [];
   let today = new Date(0);
   let weekStart = new Date(0);
+  $: todayString = browser
+    ?
+    `${DAY_NAMES_LONG[today.getDay()]}, ${dmy(today)}`
+    : "Calendar";
 
   function prevWeek() {
     weekStart = addDays(weekStart, -7);
@@ -553,7 +693,8 @@
   }
 
   $: weekDays = browser
-    ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+    ?
+    Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
     : [];
   $: eventsByDay = calendarEvents.reduce(
     (acc, event) => {
@@ -574,7 +715,8 @@
       id: crypto.randomUUID(),
       date: newEventDate,
       title: newEventTitle.trim(),
-      time: newEventTime || undefined,
+      time: newEventTime ||
+        undefined,
       workspaceId: activeWorkspaceId
     };
     await db.put("calendarEvents", newEvent);
@@ -593,7 +735,8 @@
   let kanban: Column[] = [];
   let editingColumnId: string | null = null;
   let editingTaskId: string | null = null;
-  let kanbanDropTarget: { colId: string; taskIndex: number } | null = null;
+  let kanbanDropTarget: { colId: string;
+    taskIndex: number } | null = null;
 
   async function persistKanban() {
     if (!activeWorkspaceId || !kanban) return;
@@ -712,7 +855,8 @@
 
     const data = ev.dataTransfer?.getData("application/json");
     if (!data) return;
-    const payload = JSON.parse(data) as { colId: string; taskId: string };
+    const payload = JSON.parse(data) as { colId: string;
+      taskId: string };
 
     const fromCol = kanban.find((c) => c.id === payload.colId);
     const toCol = kanban.find((c) => c.id === targetColId);
@@ -720,7 +864,6 @@
 
     const fromIndex = fromCol.tasks.findIndex((t) => t.id === payload.taskId);
     if (fromIndex < 0) return;
-
     let toIndex = toCol.tasks.length;
     if (kanbanDropTarget && kanbanDropTarget.colId === targetColId) {
       toIndex = kanbanDropTarget.taskIndex;
@@ -775,7 +918,8 @@
     );
     const kanbanData = await db.get<Kanban>("kanban", activeWorkspaceId);
     kanban = kanbanData
-      ? kanbanData.columns.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }))
+      ?
+      kanbanData.columns.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }))
       : [];
   }
 
@@ -789,7 +933,6 @@
     const notesToUpdate = allNotes.filter(
       (note) => typeof note.folderId === "undefined"
     );
-
     const notesToMigrate = allNotes.filter((note) => {
       const needsType = typeof note.type === "undefined";
       const needsSpreadsheetUpgrade =
@@ -799,7 +942,6 @@
         typeof note.spreadsheet.data[0][0] === "string";
       return needsType || needsSpreadsheetUpgrade;
     });
-
     notesToMigrate.forEach((note) => {
       if (typeof note.type === "undefined") {
         note.type = "text";
@@ -810,7 +952,6 @@
         );
       }
     });
-
     if (notesToUpdate.length > 0) {
       const promises = notesToUpdate.map((note) => {
         note.folderId = null;
@@ -843,7 +984,8 @@
         id: crypto.randomUUID(),
         name: "My Workspace"
       };
-      await db.put("workspaces", defaultWorkspace);
+      await db.put("workspaces", 
+        defaultWorkspace);
       workspaces = [defaultWorkspace];
     }
 
@@ -857,6 +999,7 @@
         key: "activeWorkspaceId",
         value: activeWorkspaceId
       });
+    
     }
 
     await loadActiveWorkspaceData();
@@ -1033,8 +1176,8 @@
     flex: 1;
     overflow: hidden;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
+    grid-template-columns: calc(var(--notes-width) - 12px) 24px 1fr;
+    gap: 0;
     padding: 24px;
   }
 
@@ -1047,6 +1190,7 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    transition: all 0.2s ease-in-out;
   }
 
   .panel-header {
@@ -1056,11 +1200,49 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 48px;
+    max-height: 48px;
+  }
+
+  .panel-header .spacer {
+    flex: 1;
+  }
+
+  .notes-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .notes-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .kanban-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    flex-shrink: 0;
+    max-width: 100%;
+  }
+  .kanban-header-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .panel-title {
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
   .panel-title input {
     background: transparent;
@@ -1096,7 +1278,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    transition: background-color: 0.2s;
+    transition: background-color 0.2s;
     position: relative;
   }
   .folder-item {
@@ -1118,7 +1300,8 @@
     white-space: nowrap;
     flex: 1;
   }
-  .folder-item input {
+  .folder-item input,
+  .note-item input {
     background: transparent;
     border: none;
     outline: none;
@@ -1143,16 +1326,6 @@
     min-width: 0;
     min-height: 0;
   }
-  .note-title {
-    background: transparent;
-    border: none;
-    outline: none;
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text);
-    padding: 16px;
-    border-bottom: 1px solid var(--border);
-  }
   .note-content {
     padding: 16px;
     flex: 1;
@@ -1167,7 +1340,7 @@
     padding: 12px;
     background: var(--panel-bg-darker);
     border: 1px solid var(--border);
-    transition: border-color: 0.2s;
+    transition: border-color 0.2s;
     overflow-wrap: break-word;
   }
   .contenteditable:focus {
@@ -1182,10 +1355,32 @@
 
   .right {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 24px;
+    grid-template-rows: calc(var(--calendar-height) - 12px) 24px 1fr;
+    gap: 0;
     height: 100%;
     min-height: 0;
+  }
+  .right.calendar-minimized {
+    grid-template-rows: min-content 24px 1fr;
+  }
+  .right.kanban-minimized {
+    grid-template-rows: 1fr 24px min-content;
+  }
+  .right.calendar-minimized.kanban-minimized {
+    grid-template-rows: 1fr 24px 1fr;
+  }
+  
+  .main.notes-maximized .right {
+    grid-template-rows: 1fr 24px 1fr;
+  }
+  .main.notes-maximized .right.calendar-minimized {
+    grid-template-rows: min-content 24px 1fr;
+  }
+  .main.notes-maximized .right.kanban-minimized {
+    grid-template-rows: 1fr 24px min-content;
+  }
+  .main.notes-maximized .right.calendar-minimized.kanban-minimized {
+    grid-template-rows: 1fr 24px 1fr;
   }
 
   /* Calendar */
@@ -1196,6 +1391,7 @@
     border-left: 1px solid var(--border);
     flex: 1;
     min-height: 0;
+    overflow: hidden;
   }
   .calendar-cell {
     border-right: 1px solid var(--border);
@@ -1205,7 +1401,8 @@
     flex-direction: column;
     gap: 6px;
     min-width: 0;
-    transition: background-color: 0.2s;
+    transition: background-color 0.2s;
+    overflow: hidden;
   }
   .calendar-cell.today {
     background-color: rgba(255, 71, 87, 0.1);
@@ -1234,6 +1431,9 @@
     align-items: center;
     font-size: 12px;
     line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .event .time {
     color: var(--accent-purple);
@@ -1243,13 +1443,27 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    margin-left: auto;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    max-width: 100%;
+  }
+  .calendar-controls::-webkit-scrollbar {
+    display: none;
   }
   .calendar-add {
     display: flex;
     gap: 8px;
     padding: 12px 16px;
     border-top: 1px solid var(--border);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .calendar-add::-webkit-scrollbar {
+    display: none;
   }
   .calendar-add input {
     background: var(--panel-bg-darker);
@@ -1257,6 +1471,8 @@
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
+    flex-shrink: 0;
+    min-width: 120px;
   }
   .calendar-add input::-webkit-calendar-picker-indicator {
     filter: invert(0.8);
@@ -1276,7 +1492,9 @@
     cursor: pointer;
     font-size: 12px;
     font-weight: 500;
-    transition: border-color: 0.2s;
+    transition: border-color 0.2s;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
   .small-btn:hover {
     border-color: var(--accent-red);
@@ -1298,6 +1516,7 @@
     overflow-y: hidden;
     flex: 1;
     min-height: 0;
+    max-height: 100%;
     align-items: flex-start;
     scroll-behavior: smooth;
   }
@@ -1310,8 +1529,10 @@
     display: flex;
     flex-direction: column;
     max-height: 100%;
+    height: 100%;
     flex-shrink: 0;
     transition: all 0.2s ease-in-out;
+    position: relative;
   }
   .kanban-col.collapsed {
     width: 60px;
@@ -1366,6 +1587,7 @@
     overflow-y: auto;
     flex: 1;
     scroll-behavior: smooth;
+    min-height: 0;
   }
   .kanban-task {
     background: var(--panel-bg);
@@ -1404,6 +1626,15 @@
     gap: 10px;
     padding: 12px;
     border-top: 1px solid var(--border);
+    background: var(--panel-bg-darker);
+    border-radius: 0 0 12px 12px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .kanban-actions::-webkit-scrollbar {
+    display: none;
   }
   .kanban-actions input {
     flex: 1;
@@ -1412,12 +1643,14 @@
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
-    min-width: 0;
+    min-width: 120px;
+    flex-shrink: 0;
   }
   .kanban-actions .small-btn {
     background: var(--accent-red);
     border-color: transparent;
     color: white;
+    flex-shrink: 0;
   }
 
   .kanban-board,
@@ -1466,14 +1699,26 @@
   }
 
   /* ----- Toolbar Styles ----- */
+  .toolbar-container {
+    justify-content: center;
+    padding-top: 0;
+    padding-bottom: 0;
+    position: relative;
+  }
   .format-toolbar {
     display: flex;
     align-items: center;
     gap: 6px;
-    /* New styles for separation and positioning */
-    margin-left: auto;
-    padding-left: 16px;
-    border-left: 1px solid var(--border);
+    justify-content: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-left: 40px;
+    padding-right: 40px;
+  }
+  .format-toolbar::-webkit-scrollbar {
+    display: none;
   }
   .toolbar-btn {
     background: none;
@@ -1489,6 +1734,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
   .toolbar-btn:hover {
     background-color: var(--panel-bg-darker);
@@ -1498,6 +1744,15 @@
     color: #555;
     cursor: not-allowed;
     background-color: transparent;
+  }
+  .toggle-notelist-btn {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    }
+  .toggle-notelist-btn:hover {
+    background-color: var(--panel-bg-darker);
   }
   .font-size-controls {
     display: flex;
@@ -1539,6 +1794,8 @@
       padding: 8px 0 0 0;
       border-top: 1px solid var(--border);
       border-left: none;
+      flex-wrap: nowrap;
+      overflow-x: auto;
     }
   }
 
@@ -1579,10 +1836,12 @@
       border-left: 1px solid var(--border);
     }
     .calendar-add {
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      overflow-x: auto;
     }
     .calendar-add input[type="text"] {
-      flex-basis: 100%;
+      flex-basis: auto;
+      min-width: 120px;
     }
     .panel-header {
       padding: 8px 12px;
@@ -1594,6 +1853,76 @@
       padding: 4px 8px;
       font-size: 11px;
     }
+  }
+
+  /* ----- Panel Resizing & Minimizing ----- */
+  .resizer-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  .resizer-wrapper.vertical {
+    cursor: col-resize;
+  }
+  .resizer-wrapper.horizontal {
+    cursor: row-resize;
+  }
+  .panel-resizer-pill {
+    background: var(--panel-bg-darker);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-evenly;
+    transition: background-color 0.2s;
+    border-radius: 8px;
+  }
+  .resizer-wrapper:hover .panel-resizer-pill {
+    background: var(--accent-red);
+  }
+  .panel-resizer-pill .dot {
+    width: 3px;
+    height: 3px;
+    background-color: var(--text-muted);
+    border-radius: 50%;
+  }
+  .resizer-wrapper.vertical .panel-resizer-pill {
+    width: 16px;
+    height: 32px;
+    flex-direction: column;
+  }
+  .resizer-wrapper.horizontal .panel-resizer-pill {
+    width: 32px;
+    height: 16px;
+    flex-direction: row;
+  }
+
+  .panel.minimized {
+    justify-content: center;
+  }
+  .panel.minimized > *:not(.panel-header) {
+    display: none !important;
+  }
+  .notes-panel.minimized .panel-header {
+    border-bottom: none;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .panel.minimized .panel-header .spacer {
+    display: none;
+  }
+  .calendar-panel.minimized,
+  .kanban-panel.minimized {
+    min-height: 0;
+  }
+  .calendar-panel.minimized .panel-header,
+  .kanban-panel.minimized .panel-header {
+    border-bottom: none;
+    justify-content: center;
+  }
+  .kanban-panel.minimized .panel-header .spacer {
+    display: none;
   }
 </style>
 
@@ -1618,13 +1947,14 @@
           on:click={() => switchWorkspace(ws.id)}
         >
           {#if editingWorkspaceId === ws.id}
-            <input
+           <input
               value={ws.name}
               use:focus
               on:blur={(e) =>
                 renameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
               on:keydown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                if 
+                  (e.key === "Enter") (e.target as HTMLInputElement).blur();
                 if (e.key === "Escape") editingWorkspaceId = null;
               }}
             />
@@ -1634,7 +1964,7 @@
               on:dblclick={() => (editingWorkspaceId = ws.id)}
               title="Double-click to rename"
             >
-              {ws.name}
+               {ws.name}
             </div>
           {/if}
           <button
@@ -1642,7 +1972,7 @@
             title="Delete Workspace"
             on:click|stopPropagation={() => deleteWorkspace(ws.id)}
           >
-            ×
+             ×
           </button>
         </div>
       {/each}
@@ -1659,364 +1989,451 @@
     <div class="nav-right-placeholder"></div>
   </div>
 
-  <div class="main">
-    <section class="panel">
+  <div
+    class="main"
+    class:notes-maximized={notesPanelWidth > 90}
+    style="--notes-width: {notesPanelWidth}%; --calendar-height: {calendarPanelHeight}%"
+  >
+    <section
+      class="panel notes-panel"
+      class:minimized={isNotesMinimized}
+      bind:clientWidth={notesPanelClientWidth}
+    >
       <div class="panel-header">
-        {#if currentFolder}
-          <button class="small-btn" on:click={goBack} title="Go back"
-            >&larr;</button
-          >
-          <div
-            class="panel-title"
-            on:dblclick={() => (isEditingHeaderName = true)}
-            title="Double-click to rename"
-          >
-            {#if isEditingHeaderName}
-              <input
-                value={currentFolder.name}
-                use:focus
-                on:blur={(e) =>
-                  renameFolder(
-                    currentFolder.id,
-                    (e.target as HTMLInputElement).value
-                  )}
-                on:keydown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                  if (e.key === 'Escape') isEditingHeaderName = false;
-                }}
-              />
-            {:else}
-              / {currentFolder.name}
-            {/if}
-          </div>
+        {#if !isNotesMinimized}
+          {#if currentFolder}
+            <button class="small-btn" on:click={goBack} title="Go back"
+              >&larr;</button
+            >
+            <div
+              class="panel-title"
+              on:dblclick={() => (isEditingHeaderName = true)}
+              title="Double-click to rename"
+            >
+              {#if isEditingHeaderName}
+                 <input
+                  value={currentFolder.name}
+                  use:focus
+                  on:blur={(e) =>
+                    renameFolder(
+                       currentFolder.id,
+                      (e.target as HTMLInputElement).value
+                    )}
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    if (e.key === 'Escape') isEditingHeaderName = false;
+                  }}
+                />
+              {:else}
+                / {currentFolder.name}
+              {/if}
+            </div>
+          {:else}
+             <div class="panel-title">Notes</div>
+          {/if}
         {:else}
           <div class="panel-title">Notes</div>
         {/if}
 
         <div class="spacer"></div>
 
-        {#if currentFolder}
-          <button
-            class="small-btn danger"
-            on:click={() => deleteFolder(currentFolder.id)}
-            >Delete Folder</button
-          >
-        {/if}
-        <button class="small-btn" on:click={addFolder}>+ Folder</button>
-        <button class="small-btn" on:click={addSpreadsheetNote}>+ Sheet</button>
-        <button class="small-btn" on:click={addNote}>+ Note</button>
-
-        <!-- Note Formatting Toolbar -->
-        {#if currentNote && currentNote.type !== "spreadsheet"}
-          <div class="format-toolbar">
-            <div class="font-size-controls" title="Change font size">
+        {#if !isNotesMinimized}
+          <div class="notes-actions">
+            {#if currentFolder}
               <button
-                class="toolbar-btn"
-                on:click={() => modifyFontSize(-2)}
-                on:mousedown={(e) => e.preventDefault()}>▼</button
+                class="small-btn danger"
+                on:click={() => deleteFolder(currentFolder.id)}
+                >Delete Folder</button
               >
-              <div class="font-size-display">{selectedFontSize}px</div>
-              <button
-                class="toolbar-btn"
-                on:click={() => modifyFontSize(2)}
-                on:mousedown={(e) => e.preventDefault()}>▲</button
-              >
-            </div>
-            <button
-              class="toolbar-btn"
-              on:click={() => applyFormat("bold")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Bold"
-              style="font-weight: bold;">B</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() => applyFormat("italic")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Italic"
-              style="font-style: italic;">I</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() => applyFormat("insertUnorderedList")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Dotted list">●</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() => applyFormat("justifyLeft")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Align left">◧</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() => applyFormat("justifyCenter")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Align center">◫</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() => applyFormat("justifyRight")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Align right">◨</button
-            >
+            {/if}
+            <button class="small-btn" on:click={addFolder}>+ Folder</button>
+            <button class="small-btn" on:click={addSpreadsheetNote}>+ Sheet</button>
+            <button class="small-btn" on:click={addNote}>+ Note</button>
           </div>
         {/if}
 
-        <!-- Spreadsheet Formatting Toolbar -->
-        {#if currentNote && currentNote.type === "spreadsheet"}
-          <div class="format-toolbar">
-            <button
-              class="toolbar-btn"
-              on:click={() =>
-                spreadsheetComponentInstance.applyStyle("fontWeight", "bold")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Bold"
-              style="font-weight: bold;">B</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() =>
-                spreadsheetComponentInstance.applyStyle("fontStyle", "italic")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Italic"
-              style="font-style: italic;">I</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() =>
-                spreadsheetComponentInstance.applyStyle("textAlign", "left")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Align left">◧</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() =>
-                spreadsheetComponentInstance.applyStyle("textAlign", "center")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Align center">◫</button
-            >
-            <button
-              class="toolbar-btn"
-              on:click={() =>
-                spreadsheetComponentInstance.applyStyle("textAlign", "right")}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Align right">◨</button
-            >
-            <button
-              class="toolbar-btn"
-              disabled={!canMergeOrUnmerge}
-              on:click={() => spreadsheetComponentInstance.toggleMerge()}
-              on:mousedown={(e) => e.preventDefault()}
-              title="Merge/Unmerge Cells">⧉</button
-            >
-          </div>
-        {/if}
+        <button
+          class="small-btn panel-minimize-btn"
+          on:click={toggleNotesMinimized}
+          title={isNotesMinimized ?
+            "Expand" : "Collapse"}
+        >
+          {isNotesMinimized ?
+            "⤢" : "⤡"}
+        </button>
       </div>
 
-      <div class="notes">
-        <aside
-          class="note-list"
-          on:dragleave={() => {
-            dropIndex = null;
-          }}
-        >
-          {#if currentFolder}
-            <div
-              class="back-to-root-item"
-              class:drag-over={dragOverRoot}
-              on:dragover={(e) => {
-                e.preventDefault();
-                dragOverRoot = true;
-              }}
-              on:dragleave={() => (dragOverRoot = false)}
-              on:drop|preventDefault={handleDropOnRoot}
-            >
-              ...
+      {#if !isNotesMinimized && currentNote}
+        <div class="panel-header toolbar-container">
+          <button
+            class="toolbar-btn toggle-notelist-btn"
+            on:click={toggleNoteList}
+            title={isNoteListVisible ? 'Hide Note List' : 'Show Note List'}
+          >
+          {isNoteListVisible ? '«' : '»'}
+          </button>
+          {#if currentNote.type !== "spreadsheet" && isNoteListVisible}
+            <div class="format-toolbar">
+              <div class="font-size-controls" title="Change font size">
+                <button
+                  class="toolbar-btn"
+                  on:click={() => modifyFontSize(-2)}
+                  on:mousedown={(e) => e.preventDefault()}>▼</button
+                >
+                <div class="font-size-display">{selectedFontSize}px</div>
+                 <button
+                  class="toolbar-btn"
+                  on:click={() => modifyFontSize(2)}
+                  on:mousedown={(e) => e.preventDefault()}>▲</button
+                >
+               </div>
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("bold")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Bold"
+                style="font-weight: 
+                  bold;">B</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("italic")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Italic"
+                 style="font-style: italic;">I</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("insertUnorderedList")}
+                on:mousedown={(e) => e.preventDefault()}
+                 title="Dotted list">●</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("justifyLeft")}
+                on:mousedown={(e) => e.preventDefault()}
+                 title="Align left">◧</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("justifyCenter")}
+                on:mousedown={(e) => e.preventDefault()}
+                 title="Align center">◫</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("justifyRight")}
+                on:mousedown={(e) => e.preventDefault()}
+                
+                  title="Align right">◨</button
+              >
             </div>
-          {/if}
+          {:else}
+            <div class="format-toolbar">
+              <button
+                class="toolbar-btn"
+                on:click={() =>
+                   spreadsheetComponentInstance.applyStyle("fontWeight", "bold")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Bold"
+                style="font-weight: bold;">B</button
+              >
+              <button
+                 class="toolbar-btn"
+                on:click={() =>
+                  spreadsheetComponentInstance.applyStyle(
+                    "fontStyle",
+                    "italic"
+                   )}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Italic"
+                style="font-style: italic;">I</button
+              >
+              <button
+                class="toolbar-btn"
+                 on:click={() =>
+                  spreadsheetComponentInstance.applyStyle("textAlign", "left")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Align left">◧</button
+              >
+              <button
+                 class="toolbar-btn"
+                on:click={() =>
+                  spreadsheetComponentInstance.applyStyle(
+                    "textAlign",
+                    "center"
+                   )}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Align center">◫</button
+              >
+              <button
+                class="toolbar-btn"
+                 on:click={() =>
+                  spreadsheetComponentInstance.applyStyle("textAlign", "right")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Align right">◨</button
+              >
+              <button
+                 class="toolbar-btn"
+                disabled={!canMergeOrUnmerge}
+                on:click={() => spreadsheetComponentInstance.toggleMerge()}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Merge/Unmerge Cells">⧉</button
+              >
+            </div>
+           {/if}
+        </div>
+      {/if}
 
-          {#each displayList as item, i (item.id)}
-            {#if item.type === "folder"}
+      {#if !isNotesMinimized}
+        <div
+          class="notes"
+          style="grid-template-columns: {isNoteListVisible ? '180px' : '0'} 1fr;"
+        >
+          <aside
+            class="note-list"
+            on:dragleave={() => {
+              dropIndex = null;
+            }}
+          >
+            {#if currentFolder}
               <div
-                class="folder-item"
-                class:drag-over={dragOverFolderId === item.id}
-                draggable="true"
-                on:click={(e) => {
-                  if (editingFolderId !== item.id) openFolder(item.id);
-                }}
-                on:dragstart={(e) => handleDragStart(e, item)}
+                class="back-to-root-item"
+                class:drag-over={dragOverRoot}
                 on:dragover={(e) => {
-                  handleDragOver(e, i);
-                  if (e.dataTransfer?.types.includes('application/json')) {
-                    const data = e.dataTransfer.getData('application/json');
-                    if (data) {
-                      const dragged = JSON.parse(data);
-                      if (dragged.type === 'note') {
-                        dragOverFolderId = item.id;
+                   e.preventDefault();
+                  dragOverRoot = true;
+                }}
+                on:dragleave={() => (dragOverRoot = false)}
+                on:drop|preventDefault={handleDropOnRoot}
+              >
+                ...
+              </div>
+             {/if}
+
+            {#each displayList as item, i (item.id)}
+              {#if item.type === "folder"}
+                <div
+                  class="folder-item"
+                  class:drag-over={dragOverFolderId === item.id}
+                   draggable="true"
+                  on:click={(e) => {
+                    if (editingFolderId !== item.id) openFolder(item.id);
+                  }}
+                  on:dragstart={(e) => handleDragStart(e, item)}
+                  on:dragover={(e) => {
+                    handleDragOver(e, i);
+                    if (e.dataTransfer?.types.includes('application/json')) {
+                      const data = e.dataTransfer.getData('application/json');
+                      if (data) {
+                        const dragged = JSON.parse(data);
+                        if (dragged.type === 'note') {
+                          dragOverFolderId = item.id;
+                        }
                       }
                     }
-                  }
-                }}
-                on:dragleave={() => (dragOverFolderId = null)}
-                on:drop|preventDefault={(e) => {
-                  const data = e.dataTransfer.getData('application/json');
-                  if (data && JSON.parse(data).type === 'note') {
-                    handleDropOnFolder(e, item);
-                  } else {
-                    handleReorderDrop(e, i);
-                  }
-                }}
-              >
-                {#if dropIndex === i}
-                  <div class="drop-indicator"></div>
-                {/if}
-                {#if editingFolderId === item.id}
-                  <input
-                    value={item.name}
-                    use:focus
-                    on:blur={(e) =>
-                      renameFolder(item.id, (e.target as HTMLInputElement).value)}
-                    on:keydown={(e) => {
-                      if (e.key === 'Enter')
-                        (e.target as HTMLInputElement).blur();
-                      if (e.key === 'Escape') editingFolderId = null;
-                    }}
-                  />
-                {:else}
-                  <div
-                    class="title"
-                    on:dblclick|stopPropagation={() => (editingFolderId = item.id)}
-                  >
-                    📁 {item.name}
-                  </div>
-                {/if}
-              </div>
-            {:else}
-              <div
-                class="note-item {selectedNoteId === item.id ? 'active' : ''}"
-                on:click={() => selectNote(item.id)}
-                draggable="true"
-                on:dragstart={(e) => handleDragStart(e, item)}
-                on:dragover={(e) => handleDragOver(e, i)}
-                on:drop|preventDefault={(e) => handleReorderDrop(e, i)}
-              >
-                {#if dropIndex === i}
-                  <div class="drop-indicator"></div>
-                {/if}
-                <div class="title">{item.title || "Untitled"}</div>
-                <button
-                  class="small-btn danger"
-                  on:click|stopPropagation={() => deleteNote(item.id)}
-                  title="Delete note"
+                  }}
+                  on:dragleave={() => (dragOverFolderId = null)}
+                  
+                    on:drop|preventDefault={(e) => {
+                    const data = e.dataTransfer.getData('application/json');
+                    if (data && JSON.parse(data).type === 'note') {
+                      handleDropOnFolder(e, item);
+                    } else {
+                      handleReorderDrop(e, i);
+                    }
+                  }}
                 >
-                  Delete
-                </button>
+                  {#if dropIndex === i}
+                    <div class="drop-indicator"></div>
+                  {/if}
+                   {#if editingFolderId === item.id}
+                    <input
+                      value={item.name}
+                      use:focus
+                       on:blur={(e) =>
+                        renameFolder(
+                          item.id,
+                          (e.target as HTMLInputElement).value
+                         )}
+                      on:keydown={(e) => {
+                        if (e.key === 'Enter')
+                          (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') editingFolderId = null;
+                      }}
+                    />
+                  {:else}
+                    <div
+                      class="title"
+                       on:dblclick|stopPropagation={() =>
+                        (editingFolderId = item.id)}
+                    >
+                      📁 {item.name}
+                    </div>
+                   {/if}
+                </div>
+              {:else}
+                <div
+                  class="note-item {selectedNoteId === item.id ? 'active' : ''}"
+                   on:click={() => selectNote(item.id)}
+                  draggable="true"
+                  on:dragstart={(e) => handleDragStart(e, item)}
+                  on:dragover={(e) => handleDragOver(e, i)}
+                  on:drop|preventDefault={(e) => handleReorderDrop(e, i)}
+                 >
+                  {#if dropIndex === i}
+                    <div class="drop-indicator"></div>
+                  {/if}
+                  {#if editingNoteId === item.id}
+                     <input
+                      value={item.title}
+                      use:focus
+                      on:blur={(e) =>
+                        renameNote(item.id, (e.target as 
+                          HTMLInputElement).value)}
+                      on:keydown={(e) => {
+                        if (e.key === 'Enter')
+                          (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') editingNoteId = null;
+                      }}
+                    />
+                  {:else}
+                    <div
+                      class="title"
+                       on:dblclick|stopPropagation={() =>
+                        (editingNoteId = item.id)}
+                    >
+                      {item.title ||
+                        "Untitled"}
+                    </div>
+                  {/if}
+                  <button
+                    class="small-btn danger"
+                    on:click|stopPropagation={() => deleteNote(item.id)}
+                     title="Delete note"
+                  >
+                    Delete
+                  </button>
+                </div>
+               {/if}
+            {/each}
+          </aside>
+
+          <div class="note-editor">
+            {#if currentNote}
+              {#key currentNote.id}
+                {#if currentNote.type === "spreadsheet"}
+                   <div class="spreadsheet-wrapper">
+                    <Spreadsheet
+                      bind:this={spreadsheetComponentInstance}
+                      bind:spreadsheetData={currentNote.spreadsheet!}
+                      bind:selectedCell={selectedSheetCell}
+                       bind:selection={sheetSelection}
+                      on:update={() => {
+                        triggerNoteUpdate();
+                        if (currentNote) {
+                          debouncedUpdateNote(currentNote);
+                        }
+                      }}
+                    />
+                  </div>
+                {:else}
+                  <div class="note-content">
+                     <div
+                      class="contenteditable"
+                      contenteditable="true"
+                      bind:this={editorDiv}
+                       bind:innerHTML={currentNote.contentHTML}
+                      on:input={() => debouncedUpdateNote(currentNote)}
+                      on:paste={handlePaste}
+                    />
+                  </div>
+                 {/if}
+              {/key}
+            {:else}
+              <div style="padding:16px; color: var(--text-muted);">
+                {#if currentFolder}
+                  Select a note from the list or create a new one.
+                {:else if displayList.length === 0}
+                  Create a note or folder to get started.
+                {:else}
+                  Select a note to view its content.
+                {/if}
               </div>
             {/if}
-          {/each}
-        </aside>
-
-        <div class="note-editor">
-          {#if currentNote}
-            {#key currentNote.id}
-              {#if currentNote.type === "spreadsheet"}
-                <input
-                  class="note-title"
-                  bind:value={currentNote.title}
-                  on:input={() => debouncedUpdateNote(currentNote)}
-                  placeholder="Spreadsheet title..."
-                />
-                <div class="spreadsheet-wrapper">
-                  <Spreadsheet
-                    bind:this={spreadsheetComponentInstance}
-                    bind:spreadsheetData={currentNote.spreadsheet!}
-                    bind:selectedCell={selectedSheetCell}
-                    bind:selection={sheetSelection}
-                    on:update={() => {
-                      triggerNoteUpdate();
-                      if (currentNote) {
-                        debouncedUpdateNote(currentNote);
-                      }
-                    }}
-                  />
-                </div>
-              {:else}
-                <input
-                  class="note-title"
-                  bind:value={currentNote.title}
-                  on:input={() => debouncedUpdateNote(currentNote)}
-                  placeholder="Note title..."
-                />
-                <div class="note-content">
-                  <div
-                    class="contenteditable"
-                    contenteditable="true"
-                    bind:this={editorDiv}
-                    bind:innerHTML={currentNote.contentHTML}
-                    on:input={() => debouncedUpdateNote(currentNote)}
-                    on:paste={handlePaste}
-                  />
-                </div>
-              {/if}
-            {/key}
-          {:else}
-            <div style="padding:16px; color: var(--text-muted);">
-              {#if currentFolder}
-                Select a note from the list or create a new one.
-              {:else if displayList.length === 0}
-                Create a note or folder to get started.
-              {:else}
-                Select a note to view its content.
-              {/if}
-            </div>
-          {/if}
+          </div>
         </div>
-      </div>
+      {/if}
     </section>
 
-    <section class="right">
-      <div class="panel">
+    <div
+      class="resizer-wrapper vertical"
+      on:mousedown={startVerticalResize}
+      title="Resize"
+    >
+      <div class="panel-resizer-pill">
+        <div class="dot"></div>
+         <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+    </div>
+
+    <section
+      class="right"
+      class:calendar-minimized={isCalendarMinimized}
+      class:kanban-minimized={isKanbanMinimized}
+    >
+      <div class="panel calendar-panel" class:minimized={isCalendarMinimized}>
         <div class="panel-header">
-          <div class="panel-title">
-            {#if browser}Week of {dmy(weekStart)}{:else}Calendar{/if}
-          </div>
-          {#if browser}
+          <div class="panel-title">{todayString}</div>
+          <div class="spacer"></div>
+           {#if browser && !isCalendarMinimized}
             <div class="calendar-controls">
-              <button class="small-btn" on:click={prevWeek}>&larr; Prev</button>
+              <button class="small-btn" on:click={prevWeek}>&larr;
+                Prev</button>
               <button
                 class="small-btn"
                 on:click={() => (weekStart = startOfWeek(today, 1))}
               >
                 Today
               </button>
-              <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
+               <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
             </div>
           {/if}
+          <button
+            class="small-btn panel-minimize-btn"
+            on:click={toggleCalendarMinimized}
+            title={isCalendarMinimized ?
+              "Expand" : "Collapse"}
+          >
+            {isCalendarMinimized ?
+              "⤢" : "⤡"}
+          </button>
         </div>
 
-        {#if browser}
+        {#if browser && !isCalendarMinimized}
           <div class="calendar-grid">
             {#each weekDays as d, i (ymd(d))}
               <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
                 <div class="date">{dmy(d)}</div>
-                <div class="day-name">{DAY_NAMES[i]}</div>
-                {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
+                 <div class="day-name">{DAY_NAMES[i]}</div>
+                {#each eventsByDay[ymd(d)] ||
+                  [] as ev (ev.id)}
                   <div class="event">
                     <div>
                       {#if ev.time}<span class="time">{ev.time}</span>{/if}
                       <span>{ev.title}</span>
-                    </div>
+                     </div>
                     <button
                       class="small-btn danger"
                       on:click={() => deleteEvent(ev.id)}
                       title="Delete event"
-                    >
+                       >
                       ×
                     </button>
                   </div>
                 {/each}
-              </div>
+                 </div>
             {/each}
           </div>
 
@@ -2025,167 +2442,195 @@
               type="date"
               bind:value={newEventDate}
               aria-label="Event date"
-            />
+             />
             <input
               type="time"
               bind:value={newEventTime}
               aria-label="Event time"
             />
             <input
-              type="text"
+               type="text"
               bind:value={newEventTitle}
               placeholder="Event title"
               aria-label="Event title"
             />
             <button class="small-btn" on:click={addEvent}>Add</button>
           </div>
-        {:else}
-          <div style="padding:16px; color: var(--text-muted);">Loading…</div>
+        {:else if !isCalendarMinimized}
+           <div style="padding:16px; color: var(--text-muted);">Loading…</div>
         {/if}
       </div>
 
-      <div class="panel">
+      <div
+        class="resizer-wrapper horizontal"
+        on:mousedown={startHorizontalResize}
+        title="Resize"
+      >
+        <div class="panel-resizer-pill">
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+         </div>
+      </div>
+
+      <div class="panel kanban-panel" class:minimized={isKanbanMinimized}>
         <div class="panel-header">
           <div class="panel-title">Kanban</div>
           <div class="spacer" />
-          <button class="small-btn" on:click={addColumn}>+ Column</button>
+          <div class="kanban-header-actions">
+            {#if !isKanbanMinimized}
+              <button class="small-btn" on:click={addColumn}>+ Column</button>
+            {/if}
+            <button
+               class="small-btn panel-minimize-btn"
+              on:click={toggleKanbanMinimized}
+              title={isKanbanMinimized ? "Expand" : "Collapse"}
+            >
+              {isKanbanMinimized ? "⤢" : "⤡"}
+            </button>
+          </div>
         </div>
 
-        <div class="kanban-board">
-          {#each kanban as col (col.id)}
-            <div
-              class="kanban-col"
-              class:collapsed={col.isCollapsed}
-              on:dragover={(e) => {
-                onTaskDragOver(e, col.id, col.tasks.length);
-              }}
-              on:drop={(e) => onColumnDrop(col.id, e, false)}
-            >
-              <div class="kanban-col-header">
-                <button
-                  class="small-btn"
-                  on:click={() => toggleColumnCollapse(col.id)}
-                  title={col.isCollapsed ? "Expand" : "Collapse"}
-                >
-                  {col.isCollapsed ? "⤢" : "⤡"}
-                </button>
-
-                {#if editingColumnId === col.id}
-                  <input
-                    value={col.title}
-                    use:focus
-                    on:blur={(e) =>
-                      renameColumn(col, (e.target as HTMLInputElement).value)}
-                    on:keydown={(e) => {
-                      if (e.key === "Enter")
-                        (e.target as HTMLInputElement).blur();
-                      if (e.key === "Escape") editingColumnId = null;
-                    }}
-                  />
-                {:else}
-                  <div
-                    class="kanban-col-title-text"
-                    on:dblclick={() => (editingColumnId = col.id)}
-                    title="Double-click to rename"
-                  >
-                    {col.title}
-                  </div>
-                {/if}
-
-                {#if !col.isCollapsed}
-                  <button
-                    class="small-btn danger"
-                    on:click={() => deleteColumn(col.id)}
-                    title="Delete column"
-                  >
-                    Delete
-                  </button>
-                {/if}
-              </div>
-
-              {#if !col.isCollapsed}
-                <div class="kanban-tasks">
-                  {#each col.tasks as t, i (t.id)}
-                    {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === i}
-                      <div class="drop-indicator"></div>
-                    {/if}
-                    <div
-                      class="kanban-task"
-                      class:dragging={isDragging &&
-                        draggedTaskGhost?.id === t.id}
-                      draggable="true"
-                      on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
-                      on:dragend={handleDragEnd}
-                      on:dragover={(e) => onTaskDragOver(e, col.id, i)}
-                      on:drop={(e) => onColumnDrop(col.id, e, true)}
-                    >
-                      {#if editingTaskId === t.id}
-                        <input
-                          value={t.text}
-                          use:focus
-                          on:blur={(e) =>
-                            renameTask(
-                              col,
-                              t.id,
-                              (e.target as HTMLInputElement).value
-                            )}
-                          on:keydown={(e) => {
-                            if (e.key === "Enter")
-                              (e.target as HTMLInputElement).blur();
-                            if (e.key === "Escape") editingTaskId = null;
-                          }}
-                        />
-                      {:else}
-                        <div
-                          class="kanban-task-text"
-                          on:dblclick={() => (editingTaskId = t.id)}
-                          title="Double-click to rename"
-                        >
-                          {t.text}
-                        </div>
-                      {/if}
-                      <button
-                        class="small-btn danger"
-                        on:click={() => deleteTask(col, t.id)}
-                        title="Delete task"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  {/each}
-                  {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === col.tasks.length}
-                    <div class="drop-indicator"></div>
-                  {/if}
-                </div>
-
-                <div class="kanban-actions">
-                  <input
-                    type="text"
-                    placeholder="New task..."
-                    on:keydown={(e) => {
-                      const target = e.target as HTMLInputElement;
-                      if (e.key === "Enter") {
-                        addTask(col, target.value);
-                        target.value = "";
-                      }
-                    }}
-                  />
+        {#if !isKanbanMinimized}
+           <div class="kanban-board">
+            {#each kanban as col (col.id)}
+              <div
+                class="kanban-col"
+                class:collapsed={col.isCollapsed}
+                on:dragover={(e) => {
+                   onTaskDragOver(e, col.id, col.tasks.length);
+                }}
+                on:drop={(e) => onColumnDrop(col.id, e, false)}
+              >
+                <div class="kanban-col-header">
                   <button
                     class="small-btn"
-                    on:click={(e) => {
-                      const input = (e.currentTarget as HTMLElement)
-                        .previousElementSibling as HTMLInputElement;
-                      addTask(col, input.value);
-                      input.value = "";
-                    }}
+                     on:click={() => toggleColumnCollapse(col.id)}
+                    title={col.isCollapsed ?
+                      "Expand" : "Collapse"}
                   >
-                    Add
+                    {col.isCollapsed ?
+                      "⤢" : "⤡"}
                   </button>
+
+                  {#if editingColumnId === col.id}
+                    <input
+                      value={col.title}
+                       use:focus
+                      on:blur={(e) =>
+                        renameColumn(col, (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => {
+                         if (e.key === "Enter")
+                          (e.target as HTMLInputElement).blur();
+                        if (e.key === "Escape") editingColumnId = null;
+                      }}
+                    />
+                  {:else}
+                    <div
+                      class="kanban-col-title-text"
+                       on:dblclick={() => (editingColumnId = col.id)}
+                      title="Double-click to rename"
+                    >
+                      {col.title}
+                    </div>
+                   {/if}
+
+                  {#if !col.isCollapsed}
+                    <button
+                      class="small-btn danger"
+                       on:click={() => deleteColumn(col.id)}
+                      title="Delete column"
+                    >
+                      Delete
+                    </button>
+                   {/if}
                 </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
+
+                {#if !col.isCollapsed}
+                  <div class="kanban-tasks">
+                    {#each col.tasks as t, i (t.id)}
+                       {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === i}
+                        <div class="drop-indicator"></div>
+                      {/if}
+                      <div
+                         class="kanban-task"
+                        class:dragging={isDragging &&
+                          draggedTaskGhost?.id === t.id}
+                        draggable="true"
+                         on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
+                        on:dragend={handleDragEnd}
+                        on:dragover={(e) => onTaskDragOver(e, col.id, i)}
+                        on:drop={(e) => onColumnDrop(col.id, e, true)}
+                       >
+                        {#if editingTaskId === t.id}
+                          <input
+                            value={t.text}
+                             use:focus
+                            on:blur={(e) =>
+                              renameTask(
+                               col,
+                                t.id,
+                                (e.target as HTMLInputElement).value
+                               )}
+                            on:keydown={(e) => {
+                              if (e.key === "Enter")
+                                 (e.target as HTMLInputElement).blur();
+                              if (e.key === "Escape") editingTaskId = null;
+                            }}
+                          />
+                        {:else}
+                          <div
+                             class="kanban-task-text"
+                            on:dblclick={() => (editingTaskId = t.id)}
+                            title="Double-click to rename"
+                          >
+                             {t.text}
+                          </div>
+                        {/if}
+                        <button
+                           class="small-btn danger"
+                          on:click={() => deleteTask(col, t.id)}
+                          title="Delete task"
+                           >
+                          ×
+                        </button>
+                      </div>
+                    {/each}
+                     {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === col.tasks.length}
+                      <div class="drop-indicator"></div>
+                    {/if}
+                  </div>
+
+                  <div 
+                    class="kanban-actions">
+                    <input
+                      type="text"
+                      placeholder="New task..."
+                      on:keydown={(e) => {
+                         const target = e.target as HTMLInputElement;
+                        if (e.key === "Enter") {
+                          addTask(col, target.value);
+                          target.value = "";
+                        }
+                      }}
+                    />
+                    <button
+                      class="small-btn"
+                       on:click={(e) => {
+                        const input = (e.currentTarget as HTMLElement)
+                          .previousElementSibling as HTMLInputElement;
+                        addTask(col, input.value);
+                        input.value = "";
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                 {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     </section>
   </div>
