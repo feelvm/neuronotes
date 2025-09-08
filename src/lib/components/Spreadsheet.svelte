@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { createEventDispatcher, onMount, onDestroy } from "svelte";
   import type { Spreadsheet, SpreadsheetCell } from "$lib/db";
 
   export let spreadsheetData: Spreadsheet;
@@ -22,6 +22,41 @@
   const MIN_WIDTH = 40;
   const MIN_HEIGHT = 25;
 
+  // Debounce utility to prevent excessive updates on every keystroke
+  function debounce<T extends (...args: any[]) => any>(
+    func: T,
+    timeout = 400
+  ) {
+    let timer: ReturnType<typeof setTimeout>;
+    return (...args: Parameters<T>) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        func.apply(this, args);
+      }, timeout);
+    };
+  }
+
+  // Create a debounced version of the dispatch function for performance
+  const debouncedDispatchUpdate = debounce(() => {
+    dispatch("update");
+  });
+
+  // State for clipboard (cut/copy/paste)
+  let clipboardBuffer: {
+    data: SpreadsheetCell[][];
+    rowCount: number;
+    colCount: number;
+  } | null = null;
+  let clipboardSourceArea: {
+    minRow: number;
+    maxRow: number;
+    minCol: number;
+    maxCol: number;
+  } | null = null;
+  let clipboardMode: "cut" | "copy" | null = null;
+
+  type CellStyleKey = keyof NonNullable<SpreadsheetCell["style"]>;
+
   $: selectionArea = (() => {
     if (!selection) return null;
     const minRow = Math.min(selection.start.row, selection.end.row);
@@ -36,6 +71,27 @@
       rowCount: maxRow - minRow + 1,
       colCount: maxCol - minCol + 1
     };
+  })();
+
+  // Pre-calculate row and column positions for overlay performance
+  $: rowPositions = (() => {
+    const positions = [0];
+    let currentPos = 0;
+    for (let i = 0; i < spreadsheetData.data.length; i++) {
+      currentPos += (spreadsheetData.rowHeights[i] || MIN_HEIGHT) + 1; // +1 for border
+      positions.push(currentPos);
+    }
+    return positions;
+  })();
+
+  $: colPositions = (() => {
+    const positions = [0];
+    let currentPos = 0;
+    for (let i = 0; i < spreadsheetData.data[0].length; i++) {
+      currentPos += (spreadsheetData.colWidths[i] || 100) + 1; // +1 for border
+      positions.push(currentPos);
+    }
+    return positions;
   })();
 
   function isInSelection(row: number, col: number) {
@@ -100,10 +156,6 @@
     dispatch("update");
   }
 
-  function handleInput() {
-    dispatch("update");
-  }
-
   function handleCellFocus(rowIndex: number, colIndex: number) {
     selectedCell = { row: rowIndex, col: colIndex };
   }
@@ -146,12 +198,12 @@
     return totalHeight;
   }
 
-  export function applyStyle(
-    style: keyof NonNullable<SpreadsheetCell["style"]>,
+  function applyStyleToCell(
+    row: number,
+    col: number,
+    style: CellStyleKey,
     value: string | undefined
   ) {
-    if (!selectedCell) return; // Safe guard
-    const { row, col } = selectedCell;
     const cell = spreadsheetData.data[row][col];
     cell.style = cell.style || {};
 
@@ -161,7 +213,18 @@
     ) {
       delete cell.style[style];
     } else {
-      cell.style[style] = value;
+      (cell.style as any)[style] = value;
+    }
+  }
+
+  export function applyStyle(style: CellStyleKey, value: string | undefined) {
+    if (!selectionArea) return;
+    const { minRow, maxRow, minCol, maxCol } = selectionArea;
+
+    for (let r = minRow; r <= maxRow; r++) {
+      for (let c = minCol; c <= maxCol; c++) {
+        applyStyleToCell(r, c, style, value);
+      }
     }
 
     spreadsheetData = spreadsheetData;
@@ -223,9 +286,264 @@
   $: gridTemplateColumns = Object.values(spreadsheetData.colWidths)
     .map((w) => `${w}px`)
     .join(" ");
+
+  // --- Formula Engine ---
+
+  function getColIndexFromName(name: string): number {
+    let result = 0;
+    for (let i = 0; i < name.length; i++) {
+      result *= 26;
+      result += name.charCodeAt(i) - "A".charCodeAt(0) + 1;
+    }
+    return result - 1; // Convert to 0-indexed
+  }
+
+  function parseCellReference(ref: string): { row: number; col: number } | null {
+    const match = ref.trim().match(/^([A-Z]+)(\d+)$/i);
+    if (!match) return null;
+
+    const [, colName, rowNum] = match;
+    const col = getColIndexFromName(colName.toUpperCase());
+    const row = parseInt(rowNum, 10) - 1; // Convert to 0-indexed
+
+    if (
+      row >= 0 &&
+      row < spreadsheetData.data.length &&
+      col >= 0 &&
+      col < spreadsheetData.data[0].length
+    ) {
+      return { row, col };
+    }
+    return null;
+  }
+
+  function handleSumFunction(argsStr: string): string {
+    const args = argsStr.split(",");
+    let sum = 0;
+
+    for (const arg of args) {
+      const trimmedArg = arg.trim();
+      if (trimmedArg.includes(":")) {
+        // Handle range like C1:C5
+        const [startRef, endRef] = trimmedArg.split(":");
+        const start = parseCellReference(startRef);
+        const end = parseCellReference(endRef);
+
+        if (start && end) {
+          const minRow = Math.min(start.row, end.row);
+          const maxRow = Math.max(start.row, end.row);
+          const minCol = Math.min(start.col, end.col);
+          const maxCol = Math.max(start.col, end.col);
+
+          for (let r = minRow; r <= maxRow; r++) {
+            for (let c = minCol; c <= maxCol; c++) {
+              const cellValue = spreadsheetData.data[r][c].value;
+              const num = parseFloat(cellValue);
+              if (!isNaN(num)) {
+                sum += num;
+              }
+            }
+          }
+        }
+      } else {
+        // Handle single cell like C1
+        const cellCoords = parseCellReference(trimmedArg);
+        if (cellCoords) {
+          const cellValue =
+            spreadsheetData.data[cellCoords.row][cellCoords.col].value;
+          const num = parseFloat(cellValue);
+          if (!isNaN(num)) {
+            sum += num;
+          }
+        }
+      }
+    }
+    return sum.toString();
+  }
+
+  function evaluateSimpleMath(expression: string): string {
+    const sanitized = expression.trim();
+    const match = sanitized.match(
+      /^(\-?\d+\.?\d*)\s*([+\-*/])\s*(\-?\d+\.?\d*)$/
+    );
+    if (!match) return expression;
+    const [, operand1, operator, operand2] = match;
+    const num1 = parseFloat(operand1);
+    const num2 = parseFloat(operand2);
+    switch (operator) {
+      case "+":
+        return (num1 + num2).toString();
+      case "-":
+        return (num1 - num2).toString();
+      case "*":
+        return (num1 * num2).toString();
+      case "/":
+        return num2 === 0 ? "#DIV/0!" : (num1 / num2).toString();
+      default:
+        return expression;
+    }
+  }
+
+  function evaluateFormula(expression: string): string {
+    const upperExpr = expression.trim().toUpperCase();
+
+    // Check for SUM function
+    const sumMatch = upperExpr.match(/^SUM\((.*)\)$/);
+    if (sumMatch) {
+      return handleSumFunction(sumMatch[1]);
+    }
+
+    // Fallback for simple math expressions
+    return evaluateSimpleMath(expression);
+  }
+
+  // --- End Formula Engine ---
+
+  function handleCopy() {
+    if (!selectionArea) return;
+    const { minRow, maxRow, minCol, maxCol } = selectionArea;
+    const bufferData: SpreadsheetCell[][] = [];
+
+    for (let r = minRow; r <= maxRow; r++) {
+      const rowData: SpreadsheetCell[] = [];
+      for (let c = minCol; c <= maxCol; c++) {
+        // Deep copy the cell to avoid reference issues
+        rowData.push(JSON.parse(JSON.stringify(spreadsheetData.data[r][c])));
+      }
+      bufferData.push(rowData);
+    }
+
+    clipboardBuffer = {
+      data: bufferData,
+      rowCount: maxRow - minRow + 1,
+      colCount: maxCol - minCol + 1
+    };
+
+    clipboardMode = "copy";
+    clipboardSourceArea = null; // A copy action cancels a cut's visual indicator
+    selection = null; // Clear visual selection
+    dispatch("update");
+  }
+
+  function handleCut() {
+    if (!selectionArea) return;
+    const { minRow, maxRow, minCol, maxCol } = selectionArea;
+    const bufferData: SpreadsheetCell[][] = [];
+
+    for (let r = minRow; r <= maxRow; r++) {
+      const rowData: SpreadsheetCell[] = [];
+      for (let c = minCol; c <= maxCol; c++) {
+        rowData.push(JSON.parse(JSON.stringify(spreadsheetData.data[r][c])));
+      }
+      bufferData.push(rowData);
+    }
+
+    clipboardBuffer = {
+      data: bufferData,
+      rowCount: maxRow - minRow + 1,
+      colCount: maxCol - minCol + 1
+    };
+
+    clipboardMode = "cut";
+    clipboardSourceArea = { ...selectionArea };
+    selection = null; // Clear visual selection
+    dispatch("update");
+  }
+
+  function handlePaste() {
+    if (!clipboardBuffer || !selectedCell) return;
+
+    const { row: startRow, col: startCol } = selectedCell;
+
+    for (let r = 0; r < clipboardBuffer.rowCount; r++) {
+      for (let c = 0; c < clipboardBuffer.colCount; c++) {
+        const targetRow = startRow + r;
+        const targetCol = startCol + c;
+
+        // Bounds check
+        if (
+          targetRow < spreadsheetData.data.length &&
+          targetCol < spreadsheetData.data[0].length
+        ) {
+          spreadsheetData.data[targetRow][targetCol] = JSON.parse(
+            JSON.stringify(clipboardBuffer.data[r][c])
+          );
+        }
+      }
+    }
+
+    // Clear original cut area only if the mode was 'cut'
+    if (clipboardMode === "cut" && clipboardSourceArea) {
+      const { minRow, maxRow, minCol, maxCol } = clipboardSourceArea;
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          spreadsheetData.data[r][c] = { value: "" };
+        }
+      }
+    }
+
+    // Reset clipboard state
+    clipboardBuffer = null;
+    clipboardSourceArea = null;
+    clipboardMode = null;
+
+    spreadsheetData = spreadsheetData;
+    dispatch("update");
+  }
+
+  function handleCellCommit(cell: SpreadsheetCell) {
+    const value = cell.value.trim();
+    if (value.startsWith("=")) {
+      const expression = value.substring(1);
+      cell.value = evaluateFormula(expression);
+      // Manually dispatch an update because the change happens on blur/enter,
+      // not necessarily during input.
+      dispatch("update");
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
+      e.preventDefault();
+      handleCut();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      handleCopy();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+      e.preventDefault();
+      handlePaste();
+    } else if (e.key === "Escape") {
+      // Cancel a 'cut' operation
+      if (clipboardMode === "cut") {
+        e.preventDefault();
+        clipboardBuffer = null;
+        clipboardSourceArea = null;
+        clipboardMode = null;
+      }
+    }
+  }
+
+  function handleInputKeydown(e: KeyboardEvent, cell: SpreadsheetCell) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      (e.target as HTMLInputElement).blur(); // Triggers the on:blur event
+    }
+  }
+
+  onMount(() => {
+    // Add listener to the parent container
+    container.addEventListener("keydown", handleKeyDown);
+  });
+
+  onDestroy(() => {
+    if (container) {
+      container.removeEventListener("keydown", handleKeyDown);
+    }
+  });
 </script>
 
-<div class="spreadsheet-container" bind:this={container}>
+<!-- svelte-ignore a11y-no-static-element-interactions -->
+<div class="spreadsheet-container" bind:this={container} tabindex="0">
   <div class="grid-wrapper">
     <div class="corner-header"></div>
 
@@ -260,6 +578,19 @@
     </div>
 
     <div class="data-grid" style="grid-template-columns: {gridTemplateColumns};">
+      <!-- Cut Selection Visual Indicator (moved here for correct positioning) -->
+      {#if clipboardMode === "cut" && clipboardSourceArea}
+        {@const top = rowPositions[clipboardSourceArea.minRow]}
+        {@const left = colPositions[clipboardSourceArea.minCol]}
+        {@const width = colPositions[clipboardSourceArea.maxCol + 1] - left - 1}
+        {@const height =
+          rowPositions[clipboardSourceArea.maxRow + 1] - top - 1}
+        <div
+          class="cut-selection-indicator"
+          style="top: {top}px; left: {left}px; width: {width}px; height: {height}px;"
+        ></div>
+      {/if}
+
       {#each spreadsheetData.data as row, rowIndex (rowIndex)}
         {#each row as cell, colIndex (`${rowIndex}-${colIndex}`)}
           {#if !cell.merged}
@@ -276,8 +607,13 @@
               <input
                 type="text"
                 class="cell"
-                bind:value={cell.value}
-                on:input={handleInput}
+                value={cell.value}
+                on:input={(e) => {
+                  cell.value = (e.target as HTMLInputElement).value;
+                  debouncedDispatchUpdate();
+                }}
+                on:blur={() => handleCellCommit(cell)}
+                on:keydown={(e) => handleInputKeydown(e, cell)}
                 on:focus={() => handleCellFocus(rowIndex, colIndex)}
                 style="font-weight: {cell.style
                   ?.fontWeight}; font-style: {cell.style
@@ -344,6 +680,7 @@
     grid-area: data-grid;
     display: grid;
     grid-auto-rows: min-content;
+    position: relative; /* Added for correct positioning of the indicator */
   }
   .header-cell {
     font-size: 12px;
@@ -365,6 +702,12 @@
     z-index: 2;
     outline: 2px solid var(--accent-red);
     outline-offset: -1px;
+  }
+  .cut-selection-indicator {
+    position: absolute;
+    border: 2px dashed var(--accent-purple);
+    pointer-events: none;
+    z-index: 3;
   }
   .cell {
     background: var(--panel-bg);
