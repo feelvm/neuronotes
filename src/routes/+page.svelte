@@ -141,7 +141,6 @@
   ];
   let editorDiv: HTMLElement; // Reference to the contenteditable div
   let selectedFontSize = 14;
-  // To display the current font size
   let spreadsheetComponentInstance: Spreadsheet;
   let selectedSheetCell: { row: number; col: number } |
     null = null;
@@ -308,7 +307,8 @@
 
     const newWorkspace: Workspace = {
       id: crypto.randomUUID(),
-      name: name.trim()
+      name: name.trim(),
+      order: workspaces.length
     };
     await db.put("workspaces", newWorkspace);
     workspaces = [...workspaces, newWorkspace];
@@ -655,7 +655,6 @@
       const noteToMove = notes.find((n) => n.id === draggedItem.id);
       if (noteToMove) {
         noteToMove.folderId = null;
-        // Move to root
         noteToMove.updatedAt = Date.now();
         const rootItemCount =
           folders.length + notes.filter((n) => n.folderId === null).length;
@@ -1011,13 +1010,15 @@
 
     await runDataMigration();
 
-    const loadedWorkspaces = await db.getAll<Workspace>("workspaces");
+    let loadedWorkspaces = await db.getAll<Workspace>("workspaces");
     if (loadedWorkspaces.length > 0) {
+      loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
       workspaces = loadedWorkspaces;
     } else {
       const defaultWorkspace = {
         id: crypto.randomUUID(),
-        name: "My Workspace"
+        name: "My Workspace",
+        order: 0
       };
       await db.put("workspaces", 
         defaultWorkspace);
@@ -1982,7 +1983,7 @@
         <div
           class="workspace-tab"
           class:active={ws.id === activeWorkspaceId}
-                    class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
+          class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
           draggable="true"
           on:dragstart={(e) => handleWorkspaceDragStart(e, ws.id)}
           on:dragover|preventDefault
