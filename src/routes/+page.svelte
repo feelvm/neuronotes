@@ -325,6 +325,20 @@
     editingWorkspaceId = null;
   }
 
+  let draggedWorkspaceId: string | null = null;
+
+  function handleWorkspaceDragStart(e: DragEvent, workspaceId: string) {
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", workspaceId);
+    }
+    draggedWorkspaceId = workspaceId;
+  }
+
+  function handleWorkspaceDragEnd() {
+    draggedWorkspaceId = null;
+  }
+
   async function deleteWorkspace(id: string) {
     if (workspaces.length <= 1) {
       alert("Cannot delete the last workspace.");
@@ -371,6 +385,27 @@
     if (activeWorkspaceId === id) {
       await switchWorkspace(workspaces[0].id);
     }
+  }
+
+  async function handleWorkspaceDrop(e: DragEvent, targetIndex: number) {
+    e.preventDefault();
+    if (!draggedWorkspaceId) return;
+
+    const draggedIndex = workspaces.findIndex((w) => w.id === draggedWorkspaceId);
+    if (draggedIndex === -1 || draggedIndex === targetIndex) return;
+
+    const reorderedWorkspaces = [...workspaces];
+    const [movedWorkspace] = reorderedWorkspaces.splice(draggedIndex, 1);
+    reorderedWorkspaces.splice(targetIndex, 0, movedWorkspace);
+
+    const updatePromises = reorderedWorkspaces.map((ws, index) => {
+      (ws as any).order = index;
+      return db.put("workspaces", ws);
+    });
+
+    await Promise.all(updatePromises);
+    workspaces = reorderedWorkspaces;
+    handleWorkspaceDragEnd();
   }
 
   // ----- Notes & Folders State -----
@@ -1171,7 +1206,10 @@
   .add-workspace-btn:hover {
     border-color: var(--accent-red);
   }
-
+  .workspace-tab.drag-over {
+    outline: 2px solid var(--accent-red);
+    outline-offset: 2px;
+  }
   .main {
     flex: 1;
     overflow: hidden;
@@ -1940,10 +1978,16 @@
     <div class="brand">NEURONOTES</div>
 
     <div class="workspace-tabs">
-      {#each workspaces as ws (ws.id)}
+      {#each workspaces as ws, i (ws.id)}
         <div
           class="workspace-tab"
           class:active={ws.id === activeWorkspaceId}
+                    class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
+          draggable="true"
+          on:dragstart={(e) => handleWorkspaceDragStart(e, ws.id)}
+          on:dragover|preventDefault
+          on:drop={(e) => handleWorkspaceDrop(e, i)}
+          on:dragend={handleWorkspaceDragEnd}
           on:click={() => switchWorkspace(ws.id)}
         >
           {#if editingWorkspaceId === ws.id}
