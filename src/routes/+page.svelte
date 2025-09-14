@@ -1,8 +1,208 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
+  import Spreadsheet from "$lib/components/Spreadsheet.svelte";
+  import * as db from "$lib/db";
+  import type {
+    Workspace,
+    Note,
+    Folder,
+    CalendarEvent,
+    Column,
+    Kanban,
+    Task,
+    SpreadsheetCell
+  } from "$lib/db";
+
+  // ----- Panel Resizing and Minimizing State -----
+  let notesPanelWidth = 50; // percentage
+  let calendarPanelHeight = 50;
+  let isNoteListVisible = true;
+  let isNotesMinimized = false;
+  let isCalendarMinimized = false;
+  let isKanbanMinimized = false;
+
+  let lastNotesWidth = 50;
+  let lastCalendarHeight = 50;
+
+  let isVerticalResizing = false;
+  let isHorizontalResizing = false;
+  let notesPanelClientWidth = 0;
+
+  $: minimizedCount = (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
+  
+  $: if (isNotesMinimized) {
+    notesPanelWidth = 6;
+  } else if (notesPanelWidth < 7) {
+    notesPanelWidth = lastNotesWidth > 7 ?
+      lastNotesWidth : 50;
+  }
+
+  $: if (isCalendarMinimized) {
+    calendarPanelHeight = 6;
+  } else if (isKanbanMinimized) {
+    calendarPanelHeight = 94;
+  } else if (calendarPanelHeight < 7 || calendarPanelHeight > 93) {
+    calendarPanelHeight =
+      lastCalendarHeight > 7 && lastCalendarHeight < 93
+        ?
+        lastCalendarHeight
+        : 50;
+  }
+
+  $: if (minimizedCount === 2) {
+    if (!isNotesMinimized) {
+      notesPanelWidth = 94;
+    } else if (!isCalendarMinimized) {
+      calendarPanelHeight = 94;
+    } else if (!isKanbanMinimized) {
+      calendarPanelHeight = 6;
+    }
+  } else if (minimizedCount < 2) {
+    if (!isNotesMinimized && notesPanelWidth > 90) {
+      notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
+    }
+    if (!isCalendarMinimized && !isKanbanMinimized && calendarPanelHeight > 90) {
+      calendarPanelHeight = lastCalendarHeight > 7 && lastCalendarHeight < 93 ? lastCalendarHeight : 50;
+    }
+  }
+
+  function toggleNotesMinimized() {
+    isNotesMinimized = !isNotesMinimized;
+  }
+
+  function toggleCalendarMinimized() {
+    isCalendarMinimized = !isCalendarMinimized;
+  }
+
+  function toggleKanbanMinimized() {
+    isKanbanMinimized = !isKanbanMinimized;
+  }
+
+  function toggleNoteList() {
+    isNoteListVisible = !isNoteListVisible;
+  }
+
+  // Resizing handlers
+  function startVerticalResize(e: MouseEvent) {
+    e.preventDefault();
+    isVerticalResizing = true;
+    window.addEventListener("mousemove", doVerticalResize);
+    window.addEventListener("mouseup", stopResize);
+  }
+
+  function doVerticalResize(e: MouseEvent) {
+    if (!isVerticalResizing) return;
+    const mainEl = (e.currentTarget as Window).document.querySelector(".main");
+    if (!mainEl) return;
+    const mainRect = mainEl.getBoundingClientRect();
+    const newWidth = ((e.clientX - mainRect.left) / mainRect.width) * 100;
+    notesPanelWidth = Math.max(6, Math.min(94, newWidth));
+    lastNotesWidth = notesPanelWidth;
+  }
+
+  function startHorizontalResize(e: MouseEvent) {
+    e.preventDefault();
+    isHorizontalResizing = true;
+    window.addEventListener("mousemove", doHorizontalResize);
+    window.addEventListener("mouseup", stopResize);
+  }
+
+  function doHorizontalResize(e: MouseEvent) {
+    if (!isHorizontalResizing) return;
+    const rightEl = (
+      e.currentTarget as Window
+    ).document.querySelector(".right");
+    if (!rightEl) return;
+    const rightRect = rightEl.getBoundingClientRect();
+    const newHeight = ((e.clientY - rightRect.top) / rightRect.height) * 100;
+    calendarPanelHeight = Math.max(6, Math.min(94, newHeight));
+    lastCalendarHeight = calendarPanelHeight;
+  }
+
+  function stopResize() {
+    isVerticalResizing = false;
+    isHorizontalResizing = false;
+    window.removeEventListener("mousemove", doVerticalResize);
+    window.removeEventListener("mousemove", doHorizontalResize);
+    window.removeEventListener("mouseup", stopResize);
+  }
+
+  let DOMPurify: any;
+  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const DAY_NAMES_LONG = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+  ];
+  let editorDiv: HTMLElement; // Reference to the contenteditable div
+  let selectedFontSize = 14;
+  let spreadsheetComponentInstance: Spreadsheet;
+  let selectedSheetCell: { row: number; col: number } |
+    null = null;
+  let sheetSelection: {
+    start: { row: number; col: number };
+    end: { row: number;
+      col: number };
+  } | null = null;
+
+  $: canMergeOrUnmerge = (() => {
+    if (!sheetSelection) return false;
+    const { start, end } = sheetSelection;
+    const minRow = Math.min(start.row, end.row);
+    const minCol = Math.min(start.col, end.col);
+    const maxRow = Math.max(start.row, end.row);
+    const maxCol = Math.max(start.col, end.col);
+
+    if (minRow !== maxRow || minCol !== maxCol) return true;
+
+    if (currentNote?.spreadsheet) {
+      const cell = currentNote.spreadsheet.data[minRow][minCol];
+      return (cell.rowspan || 1) 
+        > 1 || (cell.colspan || 1) > 1;
+    }
+    return false;
+  })();
+
+  // ----- Actions -----
+  function focus(node: HTMLElement) {
+    node.focus();
+    return {
+      destroy() {}
+    };
+  }
 
   // ----- Utilities -----
+  function debounce<T extends (...args: any[]) => any>(
+    func: T,
+    timeout = 300
+  ) {
+    let timer: ReturnType<typeof setTimeout>;
+    let pendingArgs: Parameters<T> | null = null;
+
+    const debounced = (...args: Parameters<T>) => {
+      pendingArgs = args;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        func.apply(this, args);
+        pendingArgs = null;
+      }, timeout);
+    };
+
+    debounced.flush = () => {
+      clearTimeout(timer);
+      if (pendingArgs) {
+        func.apply(this, pendingArgs);
+        pendingArgs = null;
+      }
+    };
+    return debounced;
+  }
+
   function startOfWeek(date: Date, weekStartsOn = 1) {
     const d = new Date(date);
     const day = d.getDay();
@@ -11,20 +211,17 @@
     d.setHours(0, 0, 0, 0);
     return d;
   }
-
   function addDays(date: Date, n: number) {
     const d = new Date(date);
     d.setDate(d.getDate() + n);
     return d;
   }
-
   function ymd(date: Date) {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, "0");
     const d = String(date.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
-
   function dmy(date: Date) {
     const dd = String(date.getDate()).padStart(2, "0");
     const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -32,118 +229,495 @@
     return `${dd}-${mm}-${yyyy}`;
   }
 
-  // ----- Local storage helpers -----
-  function loadLS<T>(key: string, fallback: T): T {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : fallback;
-    } catch {
-      return fallback;
+  function applyFormat(command: string) {
+    if (editorDiv) editorDiv.focus();
+    document.execCommand(command, false);
+  }
+
+  function modifyFontSize(amount: number) {
+    if (editorDiv) editorDiv.focus();
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) return;
+    const parentElement =
+      range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ?
+        range.commonAncestorContainer.parentElement
+        : (range.commonAncestorContainer as HTMLElement);
+    if (parentElement && editorDiv.contains(parentElement)) {
+      const currentSize =
+        window.getComputedStyle(parentElement).fontSize ||
+        "14px";
+      const newSize = Math.max(8, parseInt(currentSize) + amount);
+
+      const contents = range.extractContents();
+      const span = document.createElement("span");
+      span.style.fontSize = `${newSize}px`;
+      span.appendChild(contents);
+      range.insertNode(span);
+
+      selection.removeAllRanges();
+      const newRange = document.createRange();
+      newRange.selectNodeContents(span);
+      selection.addRange(newRange);
+
+      selectedFontSize = newSize;
+
+      editorDiv.dispatchEvent(new Event("input", { bubbles: true }));
     }
   }
-  function saveLS<T>(key: string, value: T) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {}
+
+  function updateSelectedFontSize() {
+    if (!browser || !editorDiv) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    const parentElement =
+      range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ?
+        range.commonAncestorContainer.parentElement
+        : (range.commonAncestorContainer as HTMLElement);
+    if (parentElement && editorDiv.contains(parentElement)) {
+      const sizeStr = window.getComputedStyle(parentElement).fontSize || "14px";
+      selectedFontSize = parseInt(sizeStr);
+    }
   }
 
-  // ----- Nav State (to do later) -----
-  let isLoggedIn = false;
-  function toggleAuth() {
-    isLoggedIn = !isLoggedIn;
-    saveLS("auth:isLoggedIn", isLoggedIn);
+  // ----- Workspace State -----
+  let workspaces: Workspace[] = [];
+  let activeWorkspaceId = "";
+  let editingWorkspaceId: string | null = null;
+
+  $: activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
+  async function switchWorkspace(id: string) {
+    if (id === activeWorkspaceId) return;
+    debouncedUpdateNote.flush();
+    activeWorkspaceId = id;
+    await db.put("settings", { key: "activeWorkspaceId", value: id });
+    await loadActiveWorkspaceData();
   }
 
-  // ----- Notes State -----
-  type Note = {
-    id: string;
-    title: string;
-    contentHTML: string;
-    updatedAt: number;
-  };
+  async function addWorkspace() {
+    const name = prompt("Enter new workspace name:", "New Workspace");
+    if (!name || !name.trim()) return;
 
+    const newWorkspace: Workspace = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      order: workspaces.length
+    };
+    await db.put("workspaces", newWorkspace);
+    workspaces = [...workspaces, newWorkspace];
+    await switchWorkspace(newWorkspace.id);
+  }
+
+  async function renameWorkspace(id: string, newName: string) {
+    const ws = workspaces.find((w) => w.id === id);
+    if (ws && newName.trim()) {
+      ws.name = newName.trim();
+      await db.put("workspaces", ws);
+      workspaces = [...workspaces];
+    }
+    editingWorkspaceId = null;
+  }
+
+  let draggedWorkspaceId: string | null = null;
+
+  function handleWorkspaceDragStart(e: DragEvent, workspaceId: string) {
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", workspaceId);
+    }
+    draggedWorkspaceId = workspaceId;
+  }
+
+  function handleWorkspaceDragEnd() {
+    draggedWorkspaceId = null;
+  }
+
+  async function deleteWorkspace(id: string) {
+    if (workspaces.length <= 1) {
+      alert("Cannot delete the last workspace.");
+      return;
+    }
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return;
+    if (
+      !confirm(
+        `Are you sure you want to delete "${ws.name}"? All its data will be lost.`
+      )
+    ) {
+      return;
+    }
+
+    const notesToDelete = await db.getAllByIndex<Note>(
+      "notes",
+      "workspaceId",
+      id
+    );
+    for (const note of notesToDelete) {
+      await db.remove("notes", note.id);
+    }
+    const foldersToDelete = await db.getAllByIndex<Folder>(
+      "folders",
+      "workspaceId",
+      id
+    );
+    for (const folder of foldersToDelete) {
+      await db.remove("folders", folder.id);
+    }
+    const eventsToDelete = await db.getAllByIndex<CalendarEvent>(
+      "calendarEvents",
+      "workspaceId",
+      id
+    );
+    for (const event of eventsToDelete) {
+      await db.remove("calendarEvents", event.id);
+    }
+    await db.remove("kanban", id);
+    await db.remove("workspaces", id);
+
+    workspaces = workspaces.filter((w) => w.id !== id);
+    if (activeWorkspaceId === id) {
+      await switchWorkspace(workspaces[0].id);
+    }
+  }
+
+  async function handleWorkspaceDrop(e: DragEvent, targetIndex: number) {
+    e.preventDefault();
+    if (!draggedWorkspaceId) return;
+
+    const draggedIndex = workspaces.findIndex((w) => w.id === draggedWorkspaceId);
+    if (draggedIndex === -1 || draggedIndex === targetIndex) return;
+
+    const reorderedWorkspaces = [...workspaces];
+    const [movedWorkspace] = reorderedWorkspaces.splice(draggedIndex, 1);
+    reorderedWorkspaces.splice(targetIndex, 0, movedWorkspace);
+
+    const updatePromises = reorderedWorkspaces.map((ws, index) => {
+      (ws as any).order = index;
+      return db.put("workspaces", ws);
+    });
+
+    await Promise.all(updatePromises);
+    workspaces = reorderedWorkspaces;
+    handleWorkspaceDragEnd();
+  }
+
+  // ----- Notes & Folders State -----
   let notes: Note[] = [];
+  let folders: Folder[] = [];
   let selectedNoteId = "";
-
-  function selectNote(id: string) {
-    selectedNoteId = id;
-    saveLS("notes:selected", selectedNoteId);
+  let currentFolderId: string | null = null;
+  let dragOverFolderId: string |
+    null = null;
+  let dropIndex: number | null = null;
+  let editingFolderId: string | null = null;
+  let editingNoteId: string | null = null;
+  let isEditingHeaderName = false;
+  let dragOverRoot = false;
+  type DisplayItem = (Note & { type: "note" }) | (Folder & { type: "folder" });
+  let displayList: DisplayItem[] = [];
+  $: {
+    if (currentFolderId === null) {
+      const rootNotes = notes
+        .filter((n) => n.folderId === null)
+        .map((n) => ({ ...n, type: "note" as const }));
+      const allFolders = folders.map((f) => ({
+        ...f,
+        type: "folder" as const
+      }));
+      displayList = [...allFolders, ...rootNotes].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0)
+      );
+    } else {
+      displayList = notes
+        .filter((n) => n.folderId === currentFolderId)
+        .map((n) => ({ ...n, type: "note" as const }))
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    }
   }
 
-  function addNote() {
+  $: currentFolder = folders.find((f) => f.id === currentFolderId);
+  async function selectNote(id: string) {
+    if (selectedNoteId === id) return;
+    debouncedUpdateNote.flush();
+    selectedSheetCell = null;
+    sheetSelection = null;
+    selectedNoteId = id;
+    await db.put("settings", {
+      key: `selectedNoteId:${activeWorkspaceId}`,
+      value: id
+    });
+  }
+
+  async function addNote() {
+    const notesInCurrentView = displayList.filter(
+      (item) => item.type === "note"
+    );
     const n: Note = {
       id: crypto.randomUUID(),
       title: "Untitled",
       contentHTML: "",
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      workspaceId: activeWorkspaceId,
+      folderId: currentFolderId,
+      order: notesInCurrentView.length
     };
-    notes = [n, ...notes];
-    selectedNoteId = n.id;
-    persistNotes();
+    await db.put("notes", n);
+    notes = [...notes, n];
+    await selectNote(n.id);
   }
 
-  function deleteNote(id: string) {
-    const idx = notes.findIndex((n) => n.id === id);
-    if (idx >= 0) {
-      notes.splice(idx, 1);
+  function createEmptySpreadsheet(rows = 50, cols = 20) {
+    const data: SpreadsheetCell[][] = Array.from({ length: rows }, () =>
+      Array.from({ length: cols }, () => ({ value: "" }))
+    );
+    const colWidths: Record<number, number> = {};
+    for (let i = 0; i < cols; i++) colWidths[i] = 100;
+    const rowHeights: Record<number, number> = {};
+    for (let i = 0; i < rows; i++) rowHeights[i] = 25;
+    return { data, colWidths, rowHeights };
+  }
+
+  async function addSpreadsheetNote() {
+    const notesInCurrentView = displayList.filter(
+      (item) => item.type === "note"
+    );
+    const n: Note = {
+      id: crypto.randomUUID(),
+      title: "Untitled Spreadsheet",
+      contentHTML: "",
+      updatedAt: Date.now(),
+      workspaceId: activeWorkspaceId,
+      folderId: currentFolderId,
+      order: notesInCurrentView.length,
+      type: "spreadsheet",
+      spreadsheet: createEmptySpreadsheet()
+    };
+    await db.put("notes", n);
+    notes = [...notes, n];
+    await selectNote(n.id);
+  }
+
+  async function addFolder() {
+    const name = prompt("Enter new folder name:", "New Folder");
+    if (!name || !name.trim()) return;
+    const f: Folder = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      workspaceId: activeWorkspaceId,
+      order: displayList.length
+    };
+    await db.put("folders", f);
+    folders = [...folders, f];
+  }
+
+  async function renameFolder(id: string, newName: string) {
+    const folder = folders.find((f) => f.id === id);
+    if (folder && newName.trim()) {
+      folder.name = newName.trim();
+      await db.put("folders", folder);
+      folders = [...folders];
+    }
+    editingFolderId = null;
+    isEditingHeaderName = false;
+  }
+
+  async function renameNote(id: string, newName: string) {
+    const note = notes.find((n) => n.id === id);
+    if (note && newName.trim()) {
+      note.title = newName.trim();
+      await db.put("notes", note);
       notes = [...notes];
-      if (selectedNoteId === id) {
-        selectedNoteId = notes[0]?.id ?? "";
-      }
-      persistNotes();
+    }
+    editingNoteId = null;
+  }
+
+  async function deleteFolder(folderId: string) {
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder) return;
+    if (
+      !confirm(
+        `Are you sure you want to delete the folder "${folder.name}"? All notes inside will be PERMANENTLY DELETED.`
+      )
+    ) {
+      return;
+    }
+
+    const notesToDelete = await db.getAllByIndex<Note>(
+      "notes",
+      "workspaceId_folderId",
+      [activeWorkspaceId, folderId]
+    );
+    const deleteNotePromises = notesToDelete.map((note) =>
+      db.remove("notes", note.id)
+    );
+    await Promise.all(deleteNotePromises);
+    await db.remove("folders", folderId);
+
+    const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
+    notes = notes.filter((n) => !deletedNoteIds.has(n.id));
+    folders = folders.filter((f) => f.id !== folderId);
+
+    await goBack();
+  }
+
+  async function deleteNote(id: string) {
+    await db.remove("notes", id);
+    notes = notes.filter((n) => n.id !== id);
+    if (selectedNoteId === id) {
+      await selectNote(
+        displayList.find((item) => item.type === "note")?.id ?? ""
+      );
     }
   }
 
-  function persistNotes() {
-    saveLS("notes", notes);
-    saveLS("notes:selected", selectedNoteId);
-  }
-
-  $: currentNote =
-    notes.find((n) => n.id === selectedNoteId) ?? (notes[0] ?? null);
-
-  function updateNoteTitle(note: Note, title: string) {
-    note.title = title;
-    note.updatedAt = Date.now();
+  $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
+  function triggerNoteUpdate() {
+    if (!currentNote) return;
     notes = [...notes];
-    persistNotes();
   }
 
-  function updateNoteContent(note: Note, html: string) {
-    note.contentHTML = html;
-    note.updatedAt = Date.now();
-    notes = [...notes];
-    persistNotes();
+  async function updateNote(note: Note) {
+    const noteToSave = { ...note, updatedAt: Date.now() };
+    if (browser && DOMPurify) {
+      noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
+    }
+    await db.put("notes", noteToSave);
+    const index = notes.findIndex((n) => n.id === noteToSave.id);
+    if (index !== -1) {
+      notes[index] = noteToSave;
+      notes = [...notes];
+    }
   }
 
-  // ----- Paste Handler for notes -----
+  const debouncedUpdateNote = debounce(updateNote, 400);
+
   function handlePaste(event: ClipboardEvent) {
-    // Prevent the default paste action which would insert rich text
     event.preventDefault();
-
-    // Get the pasted content as plain text
     const text = event.clipboardData?.getData("text/plain") || "";
-
     document.execCommand("insertText", false, text);
   }
 
-  // ----- Weekly Calendar State -----
-  type CalendarEvent = {
-    id: string;
-    date: string; // YYYY-MM-DD
-    title: string;
-    time?: string; // HH:MM
-  };
-
-  let calendarEvents: CalendarEvent[] = [];
-
-  function persistCalendar() {
-    saveLS("calendar:events", calendarEvents);
+  // ----- Folder Navigation -----
+  async function openFolder(folderId: string) {
+    currentFolderId = folderId;
+    selectedNoteId = "";
   }
 
-  // SSR placeholders
+  async function goBack() {
+    currentFolderId = null;
+    selectedNoteId = "";
+  }
+
+  function handleDragStart(ev: DragEvent, item: DisplayItem) {
+    ev.dataTransfer?.setData("application/json", JSON.stringify(item));
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+  }
+
+  async function handleDropOnFolder(ev: DragEvent, targetFolder: Folder) {
+    ev.preventDefault();
+    dragOverFolderId = null;
+    const data = ev.dataTransfer?.getData("application/json");
+    if (!data) return;
+    const draggedItem = JSON.parse(data) as DisplayItem;
+
+    if (
+      draggedItem.type === "note" &&
+      draggedItem.folderId !== targetFolder.id
+    ) {
+      const noteToMove = notes.find((n) => n.id === draggedItem.id);
+      if (noteToMove) {
+        noteToMove.folderId = targetFolder.id;
+        noteToMove.updatedAt = Date.now();
+        const notesInTargetFolder = notes.filter(
+          (n) => n.folderId === targetFolder.id
+        );
+        noteToMove.order = notesInTargetFolder.length;
+
+        await db.put("notes", noteToMove);
+        notes = [...notes];
+      }
+    }
+  }
+
+  async function handleDropOnRoot(ev: DragEvent) {
+    dragOverRoot = false;
+    const data = ev.dataTransfer?.getData("application/json");
+    if (!data) return;
+    const draggedItem = JSON.parse(data) as DisplayItem;
+    if (draggedItem.type === "note" && draggedItem.folderId !== null) {
+      const noteToMove = notes.find((n) => n.id === draggedItem.id);
+      if (noteToMove) {
+        noteToMove.folderId = null;
+        noteToMove.updatedAt = Date.now();
+        const rootItemCount =
+          folders.length + notes.filter((n) => n.folderId === null).length;
+        noteToMove.order = rootItemCount;
+
+        await db.put("notes", noteToMove);
+        notes = [...notes]; // Trigger reactivity
+      }
+    }
+  }
+
+  function handleDragOver(ev: DragEvent, index: number) {
+    ev.preventDefault();
+    dropIndex = index;
+  }
+
+  async function handleReorderDrop(ev: DragEvent, targetIndex: number) {
+    ev.preventDefault();
+    dropIndex = null;
+    const data = ev.dataTransfer?.getData("application/json");
+    if (!data) return;
+    const draggedItem = JSON.parse(data) as DisplayItem;
+
+    const currentViewList = [...displayList];
+    const draggedIndex = currentViewList.findIndex(
+      (item) => item.id === draggedItem.id
+    );
+    if (draggedIndex === -1) return;
+
+    const [movedItem] = currentViewList.splice(draggedIndex, 1);
+    currentViewList.splice(targetIndex, 0, movedItem);
+    const promises = currentViewList.map((item, index) => {
+      item.order = index;
+      if (item.type === "folder") {
+        const folder = folders.find((f) => f.id === item.id);
+        if (folder) {
+          folder.order = index;
+          return db.put("folders", folder);
+        }
+      } else {
+        const note = 
+          notes.find((n) => n.id === item.id);
+        if (note) {
+          note.order = index;
+          return db.put("notes", note);
+        }
+      }
+      return Promise.resolve();
+    });
+    await Promise.all(promises);
+
+    folders = [...folders];
+    notes = [...notes];
+  }
+
+  // ----- Weekly Calendar State -----
+  let calendarEvents: CalendarEvent[] = [];
   let today = new Date(0);
   let weekStart = new Date(0);
+  $: todayString = browser
+    ?
+    `${DAY_NAMES_LONG[today.getDay()]}, ${dmy(today)}`
+    : "Calendar";
 
   function prevWeek() {
     weekStart = addDays(weekStart, -7);
@@ -153,58 +727,62 @@
   }
 
   $: weekDays = browser
-    ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+    ?
+    Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
     : [];
-
-  $: eventsByDay = calendarEvents.reduce((acc, event) => {
-    const dayKey = event.date;
-    if (!acc[dayKey]) {
-      acc[dayKey] = [];
-    }
-    acc[dayKey].push(event);
-    acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-    return acc;
-  }, {} as Record<string, CalendarEvent[]>);
-
+  $: eventsByDay = calendarEvents.reduce(
+    (acc, event) => {
+      const dayKey = event.date;
+      if (!acc[dayKey]) acc[dayKey] = [];
+      acc[dayKey].push(event);
+      acc[dayKey].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+      return acc;
+    },
+    {} as Record<string, CalendarEvent[]>
+  );
   let newEventTitle = "";
   let newEventTime = "";
   let newEventDate = "1970-01-01";
-
-  function addEvent() {
+  async function addEvent() {
     if (!newEventTitle.trim() || !newEventDate) return;
-    calendarEvents = [
-      ...calendarEvents,
-      {
-        id: crypto.randomUUID(),
-        date: newEventDate,
-        title: newEventTitle.trim(),
-        time: newEventTime || undefined
-      }
-    ];
+    const newEvent: CalendarEvent = {
+      id: crypto.randomUUID(),
+      date: newEventDate,
+      title: newEventTitle.trim(),
+      time: newEventTime ||
+        undefined,
+      workspaceId: activeWorkspaceId
+    };
+    await db.put("calendarEvents", newEvent);
+    calendarEvents = [...calendarEvents, newEvent];
     newEventTitle = "";
     newEventTime = "";
     newEventDate = ymd(today);
-    persistCalendar();
   }
 
-  function deleteEvent(id: string) {
+  async function deleteEvent(id: string) {
+    await db.remove("calendarEvents", id);
     calendarEvents = calendarEvents.filter((e) => e.id !== id);
-    persistCalendar();
   }
 
   // ----- Kanban State -----
-  type Task = { id: string; text: string };
-  type Column = {
-    id: string;
-    title: string;
-    tasks: Task[];
-    isCollapsed: boolean;
-  };
-
   let kanban: Column[] = [];
+  let editingColumnId: string | null = null;
+  let editingTaskId: string | null = null;
+  let kanbanDropTarget: { colId: string;
+    taskIndex: number } | null = null;
 
-  function persistKanban() {
-    saveLS("kanban", kanban);
+  async function persistKanban() {
+    if (!activeWorkspaceId || !kanban) return;
+    const kanbanData: Kanban = {
+      workspaceId: activeWorkspaceId,
+      columns: kanban
+    };
+    await db.put("kanban", kanbanData);
+  }
+
+  $: if (browser && kanban.length > 0) {
+    persistKanban();
   }
 
   function addColumn() {
@@ -217,39 +795,38 @@
         isCollapsed: false
       }
     ];
-    persistKanban();
   }
 
   function renameColumn(col: Column, title: string) {
-    col.title = title;
-    kanban = [...kanban];
-    persistKanban();
+    if (title.trim()) {
+      col.title = title.trim();
+      kanban = [...kanban];
+    }
+    editingColumnId = null;
   }
 
   function deleteColumn(colId: string) {
     kanban = kanban.filter((c) => c.id !== colId);
-    persistKanban();
   }
 
   function addTask(col: Column, text: string) {
     if (!text.trim()) return;
     col.tasks.push({ id: crypto.randomUUID(), text: text.trim() });
     kanban = [...kanban];
-    persistKanban();
   }
 
   function renameTask(col: Column, taskId: string, text: string) {
     const t = col.tasks.find((x) => x.id === taskId);
-    if (!t) return;
-    t.text = text;
-    kanban = [...kanban];
-    persistKanban();
+    if (t && text.trim()) {
+      t.text = text.trim();
+      kanban = [...kanban];
+    }
+    editingTaskId = null;
   }
 
   function deleteTask(col: Column, taskId: string) {
     col.tasks = col.tasks.filter((t) => t.id !== taskId);
     kanban = [...kanban];
-    persistKanban();
   }
 
   function toggleColumnCollapse(colId: string) {
@@ -257,61 +834,221 @@
     if (col) {
       col.isCollapsed = !col.isCollapsed;
       kanban = [...kanban];
-      persistKanban();
     }
   }
 
-  // Drag and Drop
-  let dragTask: { colId: string; taskId: string } | null = null;
-
-  function onTaskDragStart(colId: string, taskId: string, ev: DragEvent) {
-    dragTask = { colId, taskId };
-    ev.dataTransfer?.setData("text/plain", JSON.stringify(dragTask));
+  // ----- Kanban Drag and Drop -----
+  let isDragging = false;
+  let draggedTaskGhost: {
+    id: string;
+    text: string;
+    x: number;
+    y: number;
+  } | null = null;
+  function onTaskDragStart(colId: string, task: Task, ev: DragEvent) {
+    isDragging = true;
+    draggedTaskGhost = {
+      id: task.id,
+      text: task.text,
+      x: ev.clientX,
+      y: ev.clientY
+    };
+    ev.dataTransfer?.setData(
+      "application/json",
+      JSON.stringify({ colId, taskId: task.id })
+    );
+    ev.dataTransfer!.effectAllowed = "move";
     ev.dataTransfer?.setDragImage(new Image(), 0, 0);
+    window.addEventListener("dragover", updateGhostPosition);
   }
-  function onTaskDragOver(ev: DragEvent) {
-    ev.preventDefault();
+
+  function updateGhostPosition(ev: DragEvent) {
+    if (!draggedTaskGhost) return;
+    if (ev.clientX === 0 && ev.clientY === 0) {
+      return;
+    }
+    draggedTaskGhost = {
+      ...draggedTaskGhost,
+      x: ev.clientX,
+      y: ev.clientY
+    };
   }
-  function onColumnDrop(targetColId: string, ev: DragEvent) {
+
+  function onTaskDragOver(
+    ev: DragEvent,
+    targetColId: string,
+    targetTaskIndex: number
+  ) {
     ev.preventDefault();
-    const data = ev.dataTransfer?.getData("text/plain");
+    kanbanDropTarget = { colId: targetColId, taskIndex: targetTaskIndex };
+  }
+
+  function onColumnDrop(targetColId: string, ev: DragEvent, isTaskDrop = false) {
+    ev.preventDefault();
+    if (isTaskDrop) ev.stopPropagation();
+
+    const data = ev.dataTransfer?.getData("application/json");
     if (!data) return;
-    const payload = JSON.parse(data) as { colId: string; taskId: string };
-    if (!payload || payload.colId === targetColId) return;
+    const payload = JSON.parse(data) as { colId: string;
+      taskId: string };
 
     const fromCol = kanban.find((c) => c.id === payload.colId);
     const toCol = kanban.find((c) => c.id === targetColId);
     if (!fromCol || !toCol) return;
 
-    const idx = fromCol.tasks.findIndex((t) => t.id === payload.taskId);
-    if (idx < 0) return;
+    const fromIndex = fromCol.tasks.findIndex((t) => t.id === payload.taskId);
+    if (fromIndex < 0) return;
+    let toIndex = toCol.tasks.length;
+    if (kanbanDropTarget && kanbanDropTarget.colId === targetColId) {
+      toIndex = kanbanDropTarget.taskIndex;
+    }
 
-    const [moved] = fromCol.tasks.splice(idx, 1);
-    toCol.tasks.push(moved);
+    if (fromCol.id === toCol.id && fromIndex < toIndex) {
+      toIndex--;
+    }
+
+    const [moved] = fromCol.tasks.splice(fromIndex, 1);
+    toCol.tasks.splice(toIndex, 0, moved);
+
     kanban = [...kanban];
-    persistKanban();
+    kanbanDropTarget = null;
   }
 
-  // ----- Client only initialization -----
-  onMount(() => {
-    isLoggedIn = loadLS<boolean>("auth:isLoggedIn", false);
+  function handleDragEnd() {
+    isDragging = false;
+    draggedTaskGhost = null;
+    window.removeEventListener("dragover", updateGhostPosition);
+    kanbanDropTarget = null;
+  }
 
-    // Load notes, defaulting to an empty array for new users
-    notes = loadLS<Note[]>("notes", []);
-    selectedNoteId = loadLS<string>("notes:selected", notes[0]?.id ?? "");
+  // ----- Data Loading -----
+  async function loadActiveWorkspaceData() {
+    if (!browser || !activeWorkspaceId) return;
+    currentFolderId = null;
 
-    calendarEvents = loadLS<CalendarEvent[]>("calendar:events", []);
+    const loadedFolders = await db.getAllByIndex<Folder>(
+      "folders",
+      "workspaceId",
+      activeWorkspaceId
+    );
+    folders = loadedFolders.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const loadedNotes = await db.getAllByIndex<Note>(
+      "notes",
+      "workspaceId",
+      activeWorkspaceId
+    );
+    notes = loadedNotes;
 
-    const loadedKanban = loadLS<Column[]>("kanban", []);
-    if (loadedKanban.length > 0) {
-      kanban = loadedKanban.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }));
-    } else {
-      kanban = [];
+    const selectedNoteSetting = await db.get(
+      "settings",
+      `selectedNoteId:${activeWorkspaceId}`
+    );
+    selectedNoteId = selectedNoteSetting?.value ?? notes[0]?.id ?? "";
+
+    calendarEvents = await db.getAllByIndex<CalendarEvent>(
+      "calendarEvents",
+      "workspaceId",
+      activeWorkspaceId
+    );
+    const kanbanData = await db.get<Kanban>("kanban", activeWorkspaceId);
+    kanban = kanbanData
+      ?
+      kanbanData.columns.map((c) => ({ ...c, isCollapsed: !!c.isCollapsed }))
+      : [];
+  }
+
+  async function runDataMigration() {
+    const MIGRATION_KEY = "neuronotes_v1_migration_complete";
+    if (localStorage.getItem(MIGRATION_KEY)) {
+      return;
     }
+    console.log("Running one-time data migration for notes...");
+    const allNotes = await db.getAll<Note>("notes");
+    const notesToUpdate = allNotes.filter(
+      (note) => typeof note.folderId === "undefined"
+    );
+    const notesToMigrate = allNotes.filter((note) => {
+      const needsType = typeof note.type === "undefined";
+      const needsSpreadsheetUpgrade =
+        note.type === "spreadsheet" &&
+        note.spreadsheet &&
+        note.spreadsheet.data.length > 0 &&
+        typeof note.spreadsheet.data[0][0] === "string";
+      return needsType || needsSpreadsheetUpgrade;
+    });
+    notesToMigrate.forEach((note) => {
+      if (typeof note.type === "undefined") {
+        note.type = "text";
+      }
+      if (note.type === "spreadsheet" && note.spreadsheet) {
+        note.spreadsheet.data = note.spreadsheet.data.map((row: string[]) =>
+          row.map((cell: string) => ({ value: cell }))
+        );
+      }
+    });
+    if (notesToUpdate.length > 0) {
+      const promises = notesToUpdate.map((note) => {
+        note.folderId = null;
+        return db.put("notes", note);
+      });
+      await Promise.all(promises);
+      console.log(`Migrated ${notesToUpdate.length} notes.`);
+    }
+    if (notesToMigrate.length > 0) {
+      const promises = notesToMigrate.map((note) => db.put("notes", note));
+      await Promise.all(promises);
+      console.log(
+        `Migrated ${notesToMigrate.length} notes for type and spreadsheet format.`
+      );
+    }
+    localStorage.setItem(MIGRATION_KEY, "true");
+  }
+
+  // ----- Lifecycle -----
+  onMount(async () => {
+    DOMPurify = (await import("dompurify")).default;
+
+    await runDataMigration();
+
+    let loadedWorkspaces = await db.getAll<Workspace>("workspaces");
+    if (loadedWorkspaces.length > 0) {
+      loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      workspaces = loadedWorkspaces;
+    } else {
+      const defaultWorkspace = {
+        id: crypto.randomUUID(),
+        name: "My Workspace",
+        order: 0
+      };
+      await db.put("workspaces", 
+        defaultWorkspace);
+      workspaces = [defaultWorkspace];
+    }
+
+    const lastActive = await db.get("settings", "activeWorkspaceId");
+    const lastActiveId = lastActive?.value ?? "";
+    if (lastActiveId && workspaces.some((w) => w.id === lastActiveId)) {
+      activeWorkspaceId = lastActiveId;
+    } else {
+      activeWorkspaceId = workspaces[0].id;
+      await db.put("settings", {
+        key: "activeWorkspaceId",
+        value: activeWorkspaceId
+      });
+    
+    }
+
+    await loadActiveWorkspaceData();
 
     today = new Date();
     weekStart = startOfWeek(today, 1);
     newEventDate = ymd(today);
+
+    document.addEventListener("selectionchange", updateSelectedFontSize);
+
+    return () => {
+      document.removeEventListener("selectionchange", updateSelectedFontSize);
+    };
   });
 </script>
 
@@ -327,6 +1064,10 @@
     --accent-purple: #8c7ae6;
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
       Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+
+  :global(html) {
+    scroll-behavior: smooth;
   }
 
   :global(html, body) {
@@ -368,32 +1109,114 @@
     background: rgba(26, 26, 26, 0.8);
     backdrop-filter: blur(8px);
     flex-shrink: 0;
+    gap: 24px;
   }
   .nav .brand {
     font-weight: 700;
   }
   .nav .spacer {
     flex: 1;
+    min-width: 24px;
   }
-  .nav .btn {
+  .nav-right-placeholder {
+    width: 100px;
+    flex-shrink: 0;
+  }
+
+  /* Workspace Tabs Styles */
+  .workspace-tabs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .workspace-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .workspace-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-radius: 8px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    font-size: 13px;
+  }
+  .workspace-tab:hover {
+    border-color: var(--text-muted);
+  }
+  .workspace-tab.active {
+    border-color: var(--accent-red);
+    background: rgba(255, 71, 87, 0.1);
+  }
+  .workspace-name {
+    padding: 2px 0;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .workspace-tab input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    width: 120px;
+    padding: 2px 0;
+    font-family: var(--font-sans);
+  }
+  .delete-ws-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    opacity: 0.7;
+    transition: all 0.2s;
+  }
+  .delete-ws-btn:hover {
+    color: var(--accent-red);
+    background: rgba(255, 71, 87, 0.2);
+    opacity: 1;
+  }
+  .add-workspace-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
     background: var(--panel-bg);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 8px 12px;
-    border-radius: 8px;
     cursor: pointer;
-    transition: border-color 0.2s;
+    font-size: 16px;
+    transition: all 0.2s;
+    flex-shrink: 0;
   }
-  .nav .btn:hover {
+  .add-workspace-btn:hover {
     border-color: var(--accent-red);
   }
-
+  .workspace-tab.drag-over {
+    outline: 2px solid var(--accent-red);
+    outline-offset: 2px;
+  }
   .main {
     flex: 1;
     overflow: hidden;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
+    grid-template-columns: calc(var(--notes-width) - 12px) 24px 1fr;
+    gap: 0;
     padding: 24px;
   }
 
@@ -406,6 +1229,7 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    transition: all 0.2s ease-in-out;
   }
 
   .panel-header {
@@ -415,10 +1239,59 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
+    flex-wrap: nowrap;
+    min-height: 48px;
+    max-height: 48px;
+  }
+
+  .panel-header .spacer {
+    flex: 1;
+  }
+
+  .notes-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .notes-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .kanban-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    flex-shrink: 0;
+    max-width: 100%;
+  }
+  .kanban-header-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .panel-title {
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .panel-title input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 0;
   }
 
   .notes {
@@ -436,7 +1309,8 @@
   .note-list::-webkit-scrollbar {
     display: none;
   }
-  .note-item {
+  .note-item,
+  .folder-item {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
@@ -444,31 +1318,52 @@
     align-items: center;
     justify-content: space-between;
     transition: background-color 0.2s;
+    position: relative;
+  }
+  .folder-item {
+    background-color: rgba(140, 122, 230, 0.1);
+    font-weight: 500;
+  }
+  .folder-item.drag-over {
+    background-color: rgba(140, 122, 230, 0.3);
+    outline: 2px solid var(--accent-purple);
   }
   .note-item.active {
     background: rgba(255, 71, 87, 0.15);
   }
-  .note-item .title {
+  .note-item .title,
+  .folder-item .title {
     font-size: 14px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1;
+  }
+  .folder-item input,
+  .note-item input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 500;
+    width: 100%;
+  }
+  .drop-indicator {
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: var(--accent-red);
+    pointer-events: none;
   }
   .note-editor {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-  }
-  .note-title {
-    background: transparent;
-    border: none;
-    outline: none;
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text);
-    padding: 16px;
-    border-bottom: 1px solid var(--border);
   }
   .note-content {
     padding: 16px;
@@ -491,12 +1386,40 @@
     border-color: var(--accent-red);
   }
 
+  .spreadsheet-wrapper {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   .right {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 24px;
+    grid-template-rows: calc(var(--calendar-height) - 12px) 24px 1fr;
+    gap: 0;
     height: 100%;
     min-height: 0;
+  }
+  .right.calendar-minimized {
+    grid-template-rows: min-content 24px 1fr;
+  }
+  .right.kanban-minimized {
+    grid-template-rows: 1fr 24px min-content;
+  }
+  .right.calendar-minimized.kanban-minimized {
+    grid-template-rows: 1fr 24px 1fr;
+  }
+  
+  .main.notes-maximized .right {
+    grid-template-rows: 1fr 24px 1fr;
+  }
+  .main.notes-maximized .right.calendar-minimized {
+    grid-template-rows: min-content 24px 1fr;
+  }
+  .main.notes-maximized .right.kanban-minimized {
+    grid-template-rows: 1fr 24px min-content;
+  }
+  .main.notes-maximized .right.calendar-minimized.kanban-minimized {
+    grid-template-rows: 1fr 24px 1fr;
   }
 
   /* Calendar */
@@ -507,6 +1430,7 @@
     border-left: 1px solid var(--border);
     flex: 1;
     min-height: 0;
+    overflow: hidden;
   }
   .calendar-cell {
     border-right: 1px solid var(--border);
@@ -517,6 +1441,7 @@
     gap: 6px;
     min-width: 0;
     transition: background-color 0.2s;
+    overflow: hidden;
   }
   .calendar-cell.today {
     background-color: rgba(255, 71, 87, 0.1);
@@ -524,6 +1449,11 @@
   .calendar-cell .date {
     font-size: 12px;
     color: var(--text-muted);
+  }
+  .calendar-cell .day-name {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: -2px;
   }
   .calendar-cell.today .date {
     color: var(--accent-red);
@@ -540,6 +1470,9 @@
     align-items: center;
     font-size: 12px;
     line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .event .time {
     color: var(--accent-purple);
@@ -549,13 +1482,27 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    margin-left: auto;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    max-width: 100%;
+  }
+  .calendar-controls::-webkit-scrollbar {
+    display: none;
   }
   .calendar-add {
     display: flex;
     gap: 8px;
     padding: 12px 16px;
     border-top: 1px solid var(--border);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .calendar-add::-webkit-scrollbar {
+    display: none;
   }
   .calendar-add input {
     background: var(--panel-bg-darker);
@@ -563,6 +1510,8 @@
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
+    flex-shrink: 0;
+    min-width: 120px;
   }
   .calendar-add input::-webkit-calendar-picker-indicator {
     filter: invert(0.8);
@@ -583,6 +1532,8 @@
     font-size: 12px;
     font-weight: 500;
     transition: border-color 0.2s;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
   .small-btn:hover {
     border-color: var(--accent-red);
@@ -604,7 +1555,9 @@
     overflow-y: hidden;
     flex: 1;
     min-height: 0;
+    max-height: 100%;
     align-items: flex-start;
+    scroll-behavior: smooth;
   }
   .kanban-col {
     width: 240px;
@@ -615,8 +1568,10 @@
     display: flex;
     flex-direction: column;
     max-height: 100%;
+    height: 100%;
     flex-shrink: 0;
     transition: all 0.2s ease-in-out;
+    position: relative;
   }
   .kanban-col.collapsed {
     width: 60px;
@@ -627,12 +1582,22 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    font-size: 15px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
   }
   .kanban-col.collapsed .kanban-col-header {
     justify-content: center;
     border-bottom: none;
+  }
+  .kanban-col-title-text {
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+    cursor: text;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .kanban-col-header input {
     background: transparent;
@@ -642,6 +1607,8 @@
     font-weight: 600;
     flex: 1;
     min-width: 0;
+    font-family: var(--font-sans);
+    font-size: 1rem;
   }
   .kanban-col.collapsed .kanban-col-header input {
     text-align: center;
@@ -651,26 +1618,38 @@
     pointer-events: none;
   }
   .kanban-tasks {
-    padding: 12px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    font-size: 14px;
     overflow-y: auto;
     flex: 1;
+    scroll-behavior: smooth;
+    min-height: 0;
   }
   .kanban-task {
     background: var(--panel-bg);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 10px;
+    padding: 6px;
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 8px;
+    gap: 6px;
     cursor: grab;
+    transition: opacity 0.2s;
+  }
+  .kanban-task.dragging {
+    opacity: 0.4;
   }
   .kanban-task:active {
     cursor: grabbing;
     border-color: var(--accent-red);
+  }
+  .kanban-task-text {
+    min-width: 0;
+    cursor: text;
+    overflow-wrap: break-word;
   }
   .kanban-task input {
     min-width: 0;
@@ -678,12 +1657,23 @@
     border: none;
     outline: none;
     color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 1rem;
   }
   .kanban-actions {
     display: flex;
     gap: 10px;
     padding: 12px;
     border-top: 1px solid var(--border);
+    background: var(--panel-bg-darker);
+    border-radius: 0 0 12px 12px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .kanban-actions::-webkit-scrollbar {
+    display: none;
   }
   .kanban-actions input {
     flex: 1;
@@ -692,12 +1682,14 @@
     border-radius: 8px;
     padding: 6px 8px;
     color: var(--text);
-    min-width: 0;
+    min-width: 120px;
+    flex-shrink: 0;
   }
   .kanban-actions .small-btn {
     background: var(--accent-red);
     border-color: transparent;
     color: white;
+    flex-shrink: 0;
   }
 
   .kanban-board,
@@ -711,138 +1703,782 @@
     height: 0;
   }
 
-  @media (max-width: 1100px) {
+  .kanban-task-ghost {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9999;
+    background: var(--panel-bg);
+    border: 1px solid var(--accent-red);
+    border-radius: 10px;
+    padding: 10px;
+    width: 218px;
+    transform: translate(-50%, -50%) rotate(3deg);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+    opacity: 0.95;
+  }
+
+  /* --- Move to root --- */
+  .back-to-root-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 14px;
+    text-align: center;
+    background-color: var(--panel-bg-darker);
+    border: 2px dashed var(--border);
+    margin: 4px;
+    border-radius: 8px;
+    transition: all 0.2s;
+  }
+  .back-to-root-item.drag-over {
+    border-color: var(--accent-red);
+    color: var(--accent-red);
+    background-color: rgba(255, 71, 87, 0.1);
+  }
+
+  /* ----- Toolbar Styles ----- */
+  .toolbar-container {
+    justify-content: center;
+    padding-top: 0;
+    padding-bottom: 0;
+    position: relative;
+  }
+  .format-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-left: 40px;
+    padding-right: 40px;
+  }
+  .format-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .toolbar-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s;
+    font-family: var(--font-sans);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .toolbar-btn:hover {
+    background-color: var(--panel-bg-darker);
+    color: var(--text);
+  }
+  .toolbar-btn:disabled {
+    color: #555;
+    cursor: not-allowed;
+    background-color: transparent;
+  }
+  .toggle-notelist-btn {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    }
+  .toggle-notelist-btn:hover {
+    background-color: var(--panel-bg-darker);
+  }
+  .font-size-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background-color: var(--panel-bg-darker);
+    border-radius: 6px;
+    padding: 0 4px;
+  }
+  .font-size-controls .toolbar-btn {
+    width: 20px;
+    font-size: 12px;
+  }
+  .font-size-display {
+    font-size: 12px;
+    color: var(--text-muted);
+    min-width: 40px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----- Responsive Styles ----- */
+  @media (max-width: 1200px) {
     .main {
       grid-template-columns: 1fr;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scroll-behavior: smooth;
+    }
+    .panel {
+      min-height: 500px;
     }
     .right {
       grid-template-rows: 1fr 1fr;
     }
-    .notes {
-      grid-template-columns: 1fr;
-    }
-    .note-list {
-      display: none;
+    .format-toolbar {
+      width: 100%;
+      margin: 8px 0 0 0;
+      padding: 8px 0 0 0;
+      border-top: 1px solid var(--border);
+      border-left: none;
+      flex-wrap: nowrap;
+      overflow-x: auto;
     }
   }
+
+  @media (max-width: 768px) {
+    .main {
+      padding: 12px;
+      gap: 12px;
+    }
+    .nav {
+      padding: 0 12px;
+      gap: 12px;
+    }
+    .nav .spacer {
+      display: none;
+    }
+    .nav-right-placeholder {
+      display: none;
+    }
+    .notes {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .note-list {
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      max-height: 150px;
+    }
+    .right {
+      grid-template-rows: auto auto;
+      grid-template-columns: 1fr;
+    }
+    .calendar-grid {
+      grid-template-columns: 1fr;
+      border-top: none;
+      border-left: none;
+    }
+    .calendar-cell {
+      border-left: 1px solid var(--border);
+    }
+    .calendar-add {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+    }
+    .calendar-add input[type="text"] {
+      flex-basis: auto;
+      min-width: 120px;
+    }
+    .panel-header {
+      padding: 8px 12px;
+    }
+    .panel-title {
+      font-size: 14px;
+    }
+    .small-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+  }
+
+  /* ----- Panel Resizing & Minimizing ----- */
+  .resizer-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  .resizer-wrapper.vertical {
+    cursor: col-resize;
+  }
+  .resizer-wrapper.horizontal {
+    cursor: row-resize;
+  }
+  .panel-resizer-pill {
+    background: var(--panel-bg-darker);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-evenly;
+    transition: background-color 0.2s;
+    border-radius: 8px;
+  }
+  .resizer-wrapper:hover .panel-resizer-pill {
+    background: var(--accent-red);
+  }
+  .panel-resizer-pill .dot {
+    width: 3px;
+    height: 3px;
+    background-color: var(--text-muted);
+    border-radius: 50%;
+  }
+  .resizer-wrapper.vertical .panel-resizer-pill {
+    width: 16px;
+    height: 32px;
+    flex-direction: column;
+  }
+  .resizer-wrapper.horizontal .panel-resizer-pill {
+    width: 32px;
+    height: 16px;
+    flex-direction: row;
+  }
+
+  .panel.minimized {
+    justify-content: center;
+  }
+  .panel.minimized > *:not(.panel-header) {
+    display: none !important;
+  }
+  .notes-panel.minimized .panel-header {
+    border-bottom: none;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .panel.minimized .panel-header .spacer {
+    display: none;
+  }
+  .calendar-panel.minimized,
+  .kanban-panel.minimized {
+    min-height: 0;
+  }
+  .calendar-panel.minimized .panel-header,
+  .kanban-panel.minimized .panel-header {
+    border-bottom: none;
+    justify-content: center;
+  }
+  .kanban-panel.minimized .panel-header .spacer {
+    display: none;
+  }
 </style>
+
+{#if isDragging && draggedTaskGhost}
+  <div
+    class="kanban-task-ghost"
+    style="left: {draggedTaskGhost.x}px; top: {draggedTaskGhost.y}px;"
+  >
+    {draggedTaskGhost.text}
+  </div>
+{/if}
 
 <div class="app">
   <div class="nav">
     <div class="brand">NEURONOTES</div>
-    <div class="spacer"></div>
-    {#if isLoggedIn}
-      <button class="btn" on:click={toggleAuth}>Account</button>
-    {:else}
-      <button class="btn" on:click={toggleAuth}>Login</button>
-    {/if}
-  </div>
 
-  <div class="main">
-    <!-- Left: Notes -->
-    <section class="panel">
-      <div class="panel-header">
-        <div class="panel-title">Notes</div>
-        <div class="spacer"></div>
-        <button class="small-btn" on:click={addNote}>New Note</button>
-      </div>
-
-      <div class="notes">
-        <aside class="note-list">
-          {#each notes as n (n.id)}
-            <div
-              class="note-item {selectedNoteId === n.id ? 'active' : ''}"
-              on:click={() => selectNote(n.id)}
-            >
-              <div class="title">{n.title || "Untitled"}</div>
-              <button
-                class="small-btn danger"
-                on:click|stopPropagation={() => deleteNote(n.id)}
-                title="Delete note"
-              >
-                Delete
-              </button>
-            </div>
-          {/each}
-        </aside>
-
-        <div class="note-editor">
-          {#if currentNote}
-            <input
-              class="note-title"
-              bind:value={currentNote.title}
-              on:input={(e) =>
-                updateNoteTitle(
-                  currentNote,
-                  (e.target as HTMLInputElement).value
-                )}
-              placeholder="Note title..."
+    <div class="workspace-tabs">
+      {#each workspaces as ws, i (ws.id)}
+        <div
+          class="workspace-tab"
+          class:active={ws.id === activeWorkspaceId}
+          class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
+          draggable="true"
+          on:dragstart={(e) => handleWorkspaceDragStart(e, ws.id)}
+          on:dragover|preventDefault
+          on:drop={(e) => handleWorkspaceDrop(e, i)}
+          on:dragend={handleWorkspaceDragEnd}
+          on:click={() => switchWorkspace(ws.id)}
+        >
+          {#if editingWorkspaceId === ws.id}
+           <input
+              value={ws.name}
+              use:focus
+              on:blur={(e) =>
+                renameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
+              on:keydown={(e) => {
+                if 
+                  (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                if (e.key === "Escape") editingWorkspaceId = null;
+              }}
             />
-
-            <div class="note-content">
-              <div
-                class="contenteditable"
-                contenteditable="true"
-                bind:innerHTML={currentNote.contentHTML}
-                on:input={(e) =>
-                  updateNoteContent(
-                    currentNote,
-                    (e.currentTarget as HTMLElement).innerHTML
-                  )}
-                on:paste={handlePaste}
-              />
-            </div>
           {:else}
-            <div style="padding:16px; color: var(--text-muted);">
-              No notes. Create one to get started.
+            <div
+              class="workspace-name"
+              on:dblclick={() => (editingWorkspaceId = ws.id)}
+              title="Double-click to rename"
+            >
+               {ws.name}
             </div>
           {/if}
+          <button
+            class="delete-ws-btn"
+            title="Delete Workspace"
+            on:click|stopPropagation={() => deleteWorkspace(ws.id)}
+          >
+             ×
+          </button>
         </div>
+      {/each}
+      <button
+        class="add-workspace-btn"
+        on:click={addWorkspace}
+        title="New Workspace"
+      >
+        +
+      </button>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="nav-right-placeholder"></div>
+  </div>
+
+  <div
+    class="main"
+    class:notes-maximized={notesPanelWidth > 90}
+    style="--notes-width: {notesPanelWidth}%; --calendar-height: {calendarPanelHeight}%"
+  >
+    <section
+      class="panel notes-panel"
+      class:minimized={isNotesMinimized}
+      bind:clientWidth={notesPanelClientWidth}
+    >
+      <div class="panel-header">
+        {#if !isNotesMinimized}
+          {#if currentFolder}
+            <button class="small-btn" on:click={goBack} title="Go back"
+              >&larr;</button
+            >
+            <div
+              class="panel-title"
+              on:dblclick={() => (isEditingHeaderName = true)}
+              title="Double-click to rename"
+            >
+              {#if isEditingHeaderName}
+                 <input
+                  value={currentFolder.name}
+                  use:focus
+                  on:blur={(e) =>
+                    renameFolder(
+                       currentFolder.id,
+                      (e.target as HTMLInputElement).value
+                    )}
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    if (e.key === 'Escape') isEditingHeaderName = false;
+                  }}
+                />
+              {:else}
+                / {currentFolder.name}
+              {/if}
+            </div>
+          {:else}
+             <div class="panel-title">Notes</div>
+          {/if}
+        {:else}
+          <div class="panel-title">Notes</div>
+        {/if}
+
+        <div class="spacer"></div>
+
+        {#if !isNotesMinimized}
+          <div class="notes-actions">
+            {#if currentFolder}
+              <button
+                class="small-btn danger"
+                on:click={() => deleteFolder(currentFolder.id)}
+                >Delete Folder</button
+              >
+            {/if}
+            <button class="small-btn" on:click={addFolder}>+ Folder</button>
+            <button class="small-btn" on:click={addSpreadsheetNote}>+ Sheet</button>
+            <button class="small-btn" on:click={addNote}>+ Note</button>
+          </div>
+        {/if}
+
+        <button
+          class="small-btn panel-minimize-btn"
+          on:click={toggleNotesMinimized}
+          title={isNotesMinimized ?
+            "Expand" : "Collapse"}
+        >
+          {isNotesMinimized ?
+            "⤢" : "⤡"}
+        </button>
       </div>
+
+      {#if !isNotesMinimized && currentNote}
+        <div class="panel-header toolbar-container">
+          <button
+            class="toolbar-btn toggle-notelist-btn"
+            on:click={toggleNoteList}
+            title={isNoteListVisible ? 'Hide Note List' : 'Show Note List'}
+          >
+          {isNoteListVisible ? '«' : '»'}
+          </button>
+          {#if currentNote.type !== "spreadsheet" && isNoteListVisible}
+            <div class="format-toolbar">
+              <div class="font-size-controls" title="Change font size">
+                <button
+                  class="toolbar-btn"
+                  on:click={() => modifyFontSize(-2)}
+                  on:mousedown={(e) => e.preventDefault()}>▼</button
+                >
+                <div class="font-size-display">{selectedFontSize}px</div>
+                 <button
+                  class="toolbar-btn"
+                  on:click={() => modifyFontSize(2)}
+                  on:mousedown={(e) => e.preventDefault()}>▲</button
+                >
+               </div>
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("bold")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Bold"
+                style="font-weight: 
+                  bold;">B</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("italic")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Italic"
+                 style="font-style: italic;">I</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("insertUnorderedList")}
+                on:mousedown={(e) => e.preventDefault()}
+                 title="Dotted list">●</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("justifyLeft")}
+                on:mousedown={(e) => e.preventDefault()}
+                 title="Align left">◧</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("justifyCenter")}
+                on:mousedown={(e) => e.preventDefault()}
+                 title="Align center">◫</button
+              >
+              <button
+                class="toolbar-btn"
+                on:click={() => applyFormat("justifyRight")}
+                on:mousedown={(e) => e.preventDefault()}
+                
+                  title="Align right">◨</button
+              >
+            </div>
+          {:else}
+            <div class="format-toolbar">
+              <button
+                class="toolbar-btn"
+                on:click={() =>
+                   spreadsheetComponentInstance.applyStyle("fontWeight", "bold")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Bold"
+                style="font-weight: bold;">B</button
+              >
+              <button
+                 class="toolbar-btn"
+                on:click={() =>
+                  spreadsheetComponentInstance.applyStyle(
+                    "fontStyle",
+                    "italic"
+                   )}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Italic"
+                style="font-style: italic;">I</button
+              >
+              <button
+                class="toolbar-btn"
+                 on:click={() =>
+                  spreadsheetComponentInstance.applyStyle("textAlign", "left")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Align left">◧</button
+              >
+              <button
+                 class="toolbar-btn"
+                on:click={() =>
+                  spreadsheetComponentInstance.applyStyle(
+                    "textAlign",
+                    "center"
+                   )}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Align center">◫</button
+              >
+              <button
+                class="toolbar-btn"
+                 on:click={() =>
+                  spreadsheetComponentInstance.applyStyle("textAlign", "right")}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Align right">◨</button
+              >
+              <button
+                 class="toolbar-btn"
+                disabled={!canMergeOrUnmerge}
+                on:click={() => spreadsheetComponentInstance.toggleMerge()}
+                on:mousedown={(e) => e.preventDefault()}
+                title="Merge/Unmerge Cells">⧉</button
+              >
+            </div>
+           {/if}
+        </div>
+      {/if}
+
+      {#if !isNotesMinimized}
+        <div
+          class="notes"
+          style="grid-template-columns: {isNoteListVisible ? '180px' : '0'} 1fr;"
+        >
+          <aside
+            class="note-list"
+            on:dragleave={() => {
+              dropIndex = null;
+            }}
+          >
+            {#if currentFolder}
+              <div
+                class="back-to-root-item"
+                class:drag-over={dragOverRoot}
+                on:dragover={(e) => {
+                   e.preventDefault();
+                  dragOverRoot = true;
+                }}
+                on:dragleave={() => (dragOverRoot = false)}
+                on:drop|preventDefault={handleDropOnRoot}
+              >
+                ...
+              </div>
+             {/if}
+
+            {#each displayList as item, i (item.id)}
+              {#if item.type === "folder"}
+                <div
+                  class="folder-item"
+                  class:drag-over={dragOverFolderId === item.id}
+                   draggable="true"
+                  on:click={(e) => {
+                    if (editingFolderId !== item.id) openFolder(item.id);
+                  }}
+                  on:dragstart={(e) => handleDragStart(e, item)}
+                  on:dragover={(e) => {
+                    handleDragOver(e, i);
+                    if (e.dataTransfer?.types.includes('application/json')) {
+                      const data = e.dataTransfer.getData('application/json');
+                      if (data) {
+                        const dragged = JSON.parse(data);
+                        if (dragged.type === 'note') {
+                          dragOverFolderId = item.id;
+                        }
+                      }
+                    }
+                  }}
+                  on:dragleave={() => (dragOverFolderId = null)}
+                  
+                    on:drop|preventDefault={(e) => {
+                    const data = e.dataTransfer.getData('application/json');
+                    if (data && JSON.parse(data).type === 'note') {
+                      handleDropOnFolder(e, item);
+                    } else {
+                      handleReorderDrop(e, i);
+                    }
+                  }}
+                >
+                  {#if dropIndex === i}
+                    <div class="drop-indicator"></div>
+                  {/if}
+                   {#if editingFolderId === item.id}
+                    <input
+                      value={item.name}
+                      use:focus
+                       on:blur={(e) =>
+                        renameFolder(
+                          item.id,
+                          (e.target as HTMLInputElement).value
+                         )}
+                      on:keydown={(e) => {
+                        if (e.key === 'Enter')
+                          (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') editingFolderId = null;
+                      }}
+                    />
+                  {:else}
+                    <div
+                      class="title"
+                       on:dblclick|stopPropagation={() =>
+                        (editingFolderId = item.id)}
+                    >
+                      📁 {item.name}
+                    </div>
+                   {/if}
+                </div>
+              {:else}
+                <div
+                  class="note-item {selectedNoteId === item.id ? 'active' : ''}"
+                   on:click={() => selectNote(item.id)}
+                  draggable="true"
+                  on:dragstart={(e) => handleDragStart(e, item)}
+                  on:dragover={(e) => handleDragOver(e, i)}
+                  on:drop|preventDefault={(e) => handleReorderDrop(e, i)}
+                 >
+                  {#if dropIndex === i}
+                    <div class="drop-indicator"></div>
+                  {/if}
+                  {#if editingNoteId === item.id}
+                     <input
+                      value={item.title}
+                      use:focus
+                      on:blur={(e) =>
+                        renameNote(item.id, (e.target as 
+                          HTMLInputElement).value)}
+                      on:keydown={(e) => {
+                        if (e.key === 'Enter')
+                          (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') editingNoteId = null;
+                      }}
+                    />
+                  {:else}
+                    <div
+                      class="title"
+                       on:dblclick|stopPropagation={() =>
+                        (editingNoteId = item.id)}
+                    >
+                      {item.title ||
+                        "Untitled"}
+                    </div>
+                  {/if}
+                  <button
+                    class="small-btn danger"
+                    on:click|stopPropagation={() => deleteNote(item.id)}
+                     title="Delete note"
+                  >
+                    Delete
+                  </button>
+                </div>
+               {/if}
+            {/each}
+          </aside>
+
+          <div class="note-editor">
+            {#if currentNote}
+              {#key currentNote.id}
+                {#if currentNote.type === "spreadsheet"}
+                   <div class="spreadsheet-wrapper">
+                    <Spreadsheet
+                      bind:this={spreadsheetComponentInstance}
+                      bind:spreadsheetData={currentNote.spreadsheet!}
+                      bind:selectedCell={selectedSheetCell}
+                       bind:selection={sheetSelection}
+                      on:update={() => {
+                        triggerNoteUpdate();
+                        if (currentNote) {
+                          debouncedUpdateNote(currentNote);
+                        }
+                      }}
+                    />
+                  </div>
+                {:else}
+                  <div class="note-content">
+                     <div
+                      class="contenteditable"
+                      contenteditable="true"
+                      bind:this={editorDiv}
+                       bind:innerHTML={currentNote.contentHTML}
+                      on:input={() => debouncedUpdateNote(currentNote)}
+                      on:paste={handlePaste}
+                    />
+                  </div>
+                 {/if}
+              {/key}
+            {:else}
+              <div style="padding:16px; color: var(--text-muted);">
+                {#if currentFolder}
+                  Select a note from the list or create a new one.
+                {:else if displayList.length === 0}
+                  Create a note or folder to get started.
+                {:else}
+                  Select a note to view its content.
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
     </section>
 
-    <!-- Right: Calendar and Kanban -->
-    <section class="right">
-      <div class="panel">
+    <div
+      class="resizer-wrapper vertical"
+      on:mousedown={startVerticalResize}
+      title="Resize"
+    >
+      <div class="panel-resizer-pill">
+        <div class="dot"></div>
+         <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+    </div>
+
+    <section
+      class="right"
+      class:calendar-minimized={isCalendarMinimized}
+      class:kanban-minimized={isKanbanMinimized}
+    >
+      <div class="panel calendar-panel" class:minimized={isCalendarMinimized}>
         <div class="panel-header">
-          <div class="panel-title">
-            {#if browser}Week of {dmy(weekStart)}{:else}Calendar{/if}
-          </div>
-          {#if browser}
+          <div class="panel-title">{todayString}</div>
+          <div class="spacer"></div>
+           {#if browser && !isCalendarMinimized}
             <div class="calendar-controls">
-              <button class="small-btn" on:click={prevWeek}>&larr; Prev</button>
+              <button class="small-btn" on:click={prevWeek}>&larr;
+                Prev</button>
               <button
                 class="small-btn"
                 on:click={() => (weekStart = startOfWeek(today, 1))}
               >
                 Today
               </button>
-              <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
+               <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
             </div>
           {/if}
+          <button
+            class="small-btn panel-minimize-btn"
+            on:click={toggleCalendarMinimized}
+            title={isCalendarMinimized ?
+              "Expand" : "Collapse"}
+          >
+            {isCalendarMinimized ?
+              "⤢" : "⤡"}
+          </button>
         </div>
 
-        {#if browser}
+        {#if browser && !isCalendarMinimized}
           <div class="calendar-grid">
-            {#each weekDays as d (ymd(d))}
+            {#each weekDays as d, i (ymd(d))}
               <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
                 <div class="date">{dmy(d)}</div>
-                {#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
+                 <div class="day-name">{DAY_NAMES[i]}</div>
+                {#each eventsByDay[ymd(d)] ||
+                  [] as ev (ev.id)}
                   <div class="event">
                     <div>
                       {#if ev.time}<span class="time">{ev.time}</span>{/if}
                       <span>{ev.title}</span>
-                    </div>
+                     </div>
                     <button
                       class="small-btn danger"
                       on:click={() => deleteEvent(ev.id)}
                       title="Delete event"
-                    >
+                       >
                       ×
                     </button>
                   </div>
                 {/each}
-              </div>
+                 </div>
             {/each}
           </div>
 
@@ -851,120 +2487,195 @@
               type="date"
               bind:value={newEventDate}
               aria-label="Event date"
-            />
+             />
             <input
               type="time"
               bind:value={newEventTime}
               aria-label="Event time"
             />
             <input
-              type="text"
+               type="text"
               bind:value={newEventTitle}
               placeholder="Event title"
               aria-label="Event title"
             />
             <button class="small-btn" on:click={addEvent}>Add</button>
           </div>
-        {:else}
-          <div style="padding:16px; color: var(--text-muted);">Loading…</div>
+        {:else if !isCalendarMinimized}
+           <div style="padding:16px; color: var(--text-muted);">Loading…</div>
         {/if}
       </div>
 
-      <div class="panel">
+      <div
+        class="resizer-wrapper horizontal"
+        on:mousedown={startHorizontalResize}
+        title="Resize"
+      >
+        <div class="panel-resizer-pill">
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+         </div>
+      </div>
+
+      <div class="panel kanban-panel" class:minimized={isKanbanMinimized}>
         <div class="panel-header">
           <div class="panel-title">Kanban</div>
           <div class="spacer" />
-          <button class="small-btn" on:click={addColumn}>+ Column</button>
+          <div class="kanban-header-actions">
+            {#if !isKanbanMinimized}
+              <button class="small-btn" on:click={addColumn}>+ Column</button>
+            {/if}
+            <button
+               class="small-btn panel-minimize-btn"
+              on:click={toggleKanbanMinimized}
+              title={isKanbanMinimized ? "Expand" : "Collapse"}
+            >
+              {isKanbanMinimized ? "⤢" : "⤡"}
+            </button>
+          </div>
         </div>
 
-        <div class="kanban-board">
-          {#each kanban as col (col.id)}
-            <div
-              class="kanban-col"
-              class:collapsed={col.isCollapsed}
-              on:dragover={onTaskDragOver}
-              on:drop={(e) => onColumnDrop(col.id, e)}
-            >
-              <div class="kanban-col-header">
-                <button
-                  class="small-btn"
-                  on:click={() => toggleColumnCollapse(col.id)}
-                  title={col.isCollapsed ? 'Expand' : 'Collapse'}
-                >
-                  {col.isCollapsed ? '⤢' : '⤡'}
-                </button>
-                <input
-                  value={col.title}
-                  on:input={(e) =>
-                    renameColumn(col, (e.target as HTMLInputElement).value)}
-                />
-                {#if !col.isCollapsed}
-                  <button
-                    class="small-btn danger"
-                    on:click={() => deleteColumn(col.id)}
-                    title="Delete column"
-                  >
-                    Delete
-                  </button>
-                {/if}
-              </div>
-
-              {#if !col.isCollapsed}
-                <div class="kanban-tasks">
-                  {#each col.tasks as t (t.id)}
-                    <div
-                      class="kanban-task"
-                      draggable="true"
-                      on:dragstart={(e) => onTaskDragStart(col.id, t.id, e)}
-                    >
-                      <input
-                        value={t.text}
-                        on:input={(e) =>
-                          renameTask(
-                            col,
-                            t.id,
-                            (e.target as HTMLInputElement).value
-                          )}
-                      />
-                      <button
-                        class="small-btn danger"
-                        on:click={() => deleteTask(col, t.id)}
-                        title="Delete task"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  {/each}
-                </div>
-
-                <div class="kanban-actions">
-                  <input
-                    type="text"
-                    placeholder="New task..."
-                    on:keydown={(e) => {
-                      const target = e.target as HTMLInputElement;
-                      if (e.key === 'Enter') {
-                        addTask(col, target.value);
-                        target.value = '';
-                      }
-                    }}
-                  />
+        {#if !isKanbanMinimized}
+           <div class="kanban-board">
+            {#each kanban as col (col.id)}
+              <div
+                class="kanban-col"
+                class:collapsed={col.isCollapsed}
+                on:dragover={(e) => {
+                   onTaskDragOver(e, col.id, col.tasks.length);
+                }}
+                on:drop={(e) => onColumnDrop(col.id, e, false)}
+              >
+                <div class="kanban-col-header">
                   <button
                     class="small-btn"
-                    on:click={(e) => {
-                      const input = (e.currentTarget as HTMLElement)
-                        .previousElementSibling as HTMLInputElement;
-                      addTask(col, input.value);
-                      input.value = '';
-                    }}
+                     on:click={() => toggleColumnCollapse(col.id)}
+                    title={col.isCollapsed ?
+                      "Expand" : "Collapse"}
                   >
-                    Add
+                    {col.isCollapsed ?
+                      "⤢" : "⤡"}
                   </button>
+
+                  {#if editingColumnId === col.id}
+                    <input
+                      value={col.title}
+                       use:focus
+                      on:blur={(e) =>
+                        renameColumn(col, (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => {
+                         if (e.key === "Enter")
+                          (e.target as HTMLInputElement).blur();
+                        if (e.key === "Escape") editingColumnId = null;
+                      }}
+                    />
+                  {:else}
+                    <div
+                      class="kanban-col-title-text"
+                       on:dblclick={() => (editingColumnId = col.id)}
+                      title="Double-click to rename"
+                    >
+                      {col.title}
+                    </div>
+                   {/if}
+
+                  {#if !col.isCollapsed}
+                    <button
+                      class="small-btn danger"
+                       on:click={() => deleteColumn(col.id)}
+                      title="Delete column"
+                    >
+                      Delete
+                    </button>
+                   {/if}
                 </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
+
+                {#if !col.isCollapsed}
+                  <div class="kanban-tasks">
+                    {#each col.tasks as t, i (t.id)}
+                       {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === i}
+                        <div class="drop-indicator"></div>
+                      {/if}
+                      <div
+                         class="kanban-task"
+                        class:dragging={isDragging &&
+                          draggedTaskGhost?.id === t.id}
+                        draggable="true"
+                         on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
+                        on:dragend={handleDragEnd}
+                        on:dragover={(e) => onTaskDragOver(e, col.id, i)}
+                        on:drop={(e) => onColumnDrop(col.id, e, true)}
+                       >
+                        {#if editingTaskId === t.id}
+                          <input
+                            value={t.text}
+                             use:focus
+                            on:blur={(e) =>
+                              renameTask(
+                               col,
+                                t.id,
+                                (e.target as HTMLInputElement).value
+                               )}
+                            on:keydown={(e) => {
+                              if (e.key === "Enter")
+                                 (e.target as HTMLInputElement).blur();
+                              if (e.key === "Escape") editingTaskId = null;
+                            }}
+                          />
+                        {:else}
+                          <div
+                             class="kanban-task-text"
+                            on:dblclick={() => (editingTaskId = t.id)}
+                            title="Double-click to rename"
+                          >
+                             {t.text}
+                          </div>
+                        {/if}
+                        <button
+                           class="small-btn danger"
+                          on:click={() => deleteTask(col, t.id)}
+                          title="Delete task"
+                           >
+                          ×
+                        </button>
+                      </div>
+                    {/each}
+                     {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === col.tasks.length}
+                      <div class="drop-indicator"></div>
+                    {/if}
+                  </div>
+
+                  <div 
+                    class="kanban-actions">
+                    <input
+                      type="text"
+                      placeholder="New task..."
+                      on:keydown={(e) => {
+                         const target = e.target as HTMLInputElement;
+                        if (e.key === "Enter") {
+                          addTask(col, target.value);
+                          target.value = "";
+                        }
+                      }}
+                    />
+                    <button
+                      class="small-btn"
+                       on:click={(e) => {
+                        const input = (e.currentTarget as HTMLElement)
+                          .previousElementSibling as HTMLInputElement;
+                        addTask(col, input.value);
+                        input.value = "";
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                 {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     </section>
   </div>
