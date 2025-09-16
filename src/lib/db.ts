@@ -24,6 +24,7 @@ export type Note = {
 };
 export type SpreadsheetCell = {
   value: string;
+  computedValue: string;
   style?: {
     fontWeight?: "bold" | "normal";
     fontStyle?: "italic" | "normal";
@@ -32,6 +33,7 @@ export type SpreadsheetCell = {
   rowspan?: number;
   colspan?: number;
   merged?: boolean;
+  isFormula?: boolean;
 };
 export type Spreadsheet = {
   data: SpreadsheetCell[][];

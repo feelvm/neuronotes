@@ -18,14 +18,14 @@
   let startY = 0;
   let startWidth = 0;
   let startHeight = 0;
+  let editingCell: { row: number; col: number } | null = null;
 
   const MIN_WIDTH = 40;
   const MIN_HEIGHT = 25;
 
-  // Debounce utility to prevent excessive updates on every keystroke
   function debounce<T extends (...args: any[]) => any>(
     func: T,
-    timeout = 400
+    timeout = 300
   ) {
     let timer: ReturnType<typeof setTimeout>;
     return (...args: Parameters<T>) => {
@@ -36,12 +36,6 @@
     };
   }
 
-  // Create a debounced version of the dispatch function for performance
-  const debouncedDispatchUpdate = debounce(() => {
-    dispatch("update");
-  });
-
-  // State for clipboard (cut/copy/paste)
   let clipboardBuffer: {
     data: SpreadsheetCell[][];
     rowCount: number;
@@ -73,12 +67,11 @@
     };
   })();
 
-  // Pre-calculate row and column positions for overlay performance
   $: rowPositions = (() => {
     const positions = [0];
     let currentPos = 0;
     for (let i = 0; i < spreadsheetData.data.length; i++) {
-      currentPos += (spreadsheetData.rowHeights[i] || MIN_HEIGHT) + 1; // +1 for border
+      currentPos += (spreadsheetData.rowHeights[i] || MIN_HEIGHT) + 1;
       positions.push(currentPos);
     }
     return positions;
@@ -88,7 +81,7 @@
     const positions = [0];
     let currentPos = 0;
     for (let i = 0; i < spreadsheetData.data[0].length; i++) {
-      currentPos += (spreadsheetData.colWidths[i] || 100) + 1; // +1 for border
+      currentPos += (spreadsheetData.colWidths[i] || 100) + 1;
       positions.push(currentPos);
     }
     return positions;
@@ -158,13 +151,21 @@
 
   function handleCellFocus(rowIndex: number, colIndex: number) {
     selectedCell = { row: rowIndex, col: colIndex };
+    handleCellMouseDown(rowIndex, colIndex);
+    editingCell = { row: rowIndex, col: colIndex };
   }
 
   function handleCellMouseDown(row: number, col: number) {
-    isSelecting = true;
-    selection = { start: { row, col }, end: { row, col } };
-    window.addEventListener("mouseover", handleCellMouseOver);
-    window.addEventListener("mouseup", handleCellMouseUp);
+    if (
+      !editingCell ||
+      editingCell.row !== row ||
+      editingCell.col !== col
+    ) {
+      isSelecting = true;
+      selection = { start: { row, col }, end: { row, col } };
+      window.addEventListener("mouseover", handleCellMouseOver);
+      window.addEventListener("mouseup", handleCellMouseUp);
+    }
   }
 
   function handleCellMouseOver(e: MouseEvent) {
@@ -193,7 +194,6 @@
     for (let i = 0; i < rowspan; i++) {
       totalHeight += spreadsheetData.rowHeights[rowIndex + i] || MIN_HEIGHT;
     }
-    // Add the height of the borders between the merged rows
     totalHeight += rowspan - 1;
     return totalHeight;
   }
@@ -287,24 +287,22 @@
     .map((w) => `${w}px`)
     .join(" ");
 
-  // --- Formula Engine ---
-
   function getColIndexFromName(name: string): number {
     let result = 0;
     for (let i = 0; i < name.length; i++) {
       result *= 26;
       result += name.charCodeAt(i) - "A".charCodeAt(0) + 1;
     }
-    return result - 1; // Convert to 0-indexed
+    return result - 1;
   }
 
-  function parseCellReference(ref: string): { row: number; col: number } | null {
+  function parseCellReference(ref: string): { row: number; col: number } | null { // prettier-ignore
     const match = ref.trim().match(/^([A-Z]+)(\d+)$/i);
     if (!match) return null;
 
     const [, colName, rowNum] = match;
     const col = getColIndexFromName(colName.toUpperCase());
-    const row = parseInt(rowNum, 10) - 1; // Convert to 0-indexed
+    const row = parseInt(rowNum, 10) - 1;
 
     if (
       row >= 0 &&
@@ -317,6 +315,11 @@
     return null;
   }
 
+  function getCellValueForCalculation(cell: SpreadsheetCell): number {
+    const num = parseFloat(cell.computedValue);
+    return isNaN(num) ? 0 : num;
+  }
+
   function handleSumFunction(argsStr: string): string {
     const args = argsStr.split(",");
     let sum = 0;
@@ -324,7 +327,6 @@
     for (const arg of args) {
       const trimmedArg = arg.trim();
       if (trimmedArg.includes(":")) {
-        // Handle range like C1:C5
         const [startRef, endRef] = trimmedArg.split(":");
         const start = parseCellReference(startRef);
         const end = parseCellReference(endRef);
@@ -337,24 +339,16 @@
 
           for (let r = minRow; r <= maxRow; r++) {
             for (let c = minCol; c <= maxCol; c++) {
-              const cellValue = spreadsheetData.data[r][c].value;
-              const num = parseFloat(cellValue);
-              if (!isNaN(num)) {
-                sum += num;
-              }
+              const cell = spreadsheetData.data[r][c];
+              sum += getCellValueForCalculation(cell);
             }
           }
         }
       } else {
-        // Handle single cell like C1
         const cellCoords = parseCellReference(trimmedArg);
         if (cellCoords) {
-          const cellValue =
-            spreadsheetData.data[cellCoords.row][cellCoords.col].value;
-          const num = parseFloat(cellValue);
-          if (!isNaN(num)) {
-            sum += num;
-          }
+          const cell = spreadsheetData.data[cellCoords.row][cellCoords.col];
+          sum += getCellValueForCalculation(cell);
         }
       }
     }
@@ -362,42 +356,80 @@
   }
 
   function evaluateSimpleMath(expression: string): string {
-    const sanitized = expression.trim();
-    const match = sanitized.match(
-      /^(\-?\d+\.?\d*)\s*([+\-*/])\s*(\-?\d+\.?\d*)$/
+    const resolvedExpression = expression.replace(
+      /[A-Z]+\d+/gi,
+      (match) => {
+        const coords = parseCellReference(match);
+        if (coords) {
+          const cell = spreadsheetData.data[coords.row][coords.col];
+          const val = getCellValueForCalculation(cell);
+          return val.toString();
+        }
+        return "0";
+      }
     );
-    if (!match) return expression;
-    const [, operand1, operator, operand2] = match;
-    const num1 = parseFloat(operand1);
-    const num2 = parseFloat(operand2);
-    switch (operator) {
-      case "+":
-        return (num1 + num2).toString();
-      case "-":
-        return (num1 - num2).toString();
-      case "*":
-        return (num1 * num2).toString();
-      case "/":
-        return num2 === 0 ? "#DIV/0!" : (num1 / num2).toString();
-      default:
-        return expression;
+
+    try {
+      if (/^[\d\s()+\-*/.]+$/.test(resolvedExpression)) {
+        const result = new Function(`return ${resolvedExpression}`)();
+        if (typeof result === "number" && isFinite(result)) {
+          return result.toString();
+        }
+      }
+      return "#ERROR!";
+    } catch (e) {
+      return "#ERROR!";
     }
   }
 
-  function evaluateFormula(expression: string): string {
+  function evaluateFormula(
+    formula: string,
+    evaluating: Set<string>
+  ): string {
+    if (evaluating.has(formula)) {
+      return "#REF!";
+    }
+    evaluating.add(formula);
+
+    const expression = formula.substring(1);
     const upperExpr = expression.trim().toUpperCase();
 
-    // Check for SUM function
     const sumMatch = upperExpr.match(/^SUM\((.*)\)$/);
     if (sumMatch) {
       return handleSumFunction(sumMatch[1]);
     }
 
-    // Fallback for simple math expressions
-    return evaluateSimpleMath(expression);
+    return evaluateSimpleMath(expression.trim());
   }
 
-  // --- End Formula Engine ---
+  function recalculateSheet() {
+    if (!spreadsheetData || !spreadsheetData.data) return;
+
+    const formulaCells: { row: number; col: number }[] = [];
+    for (let r = 0; r < spreadsheetData.data.length; r++) {
+      for (let c = 0; c < spreadsheetData.data[0].length; c++) {
+        const cell = spreadsheetData.data[r][c];
+        if (typeof cell.value === "string" && cell.value.startsWith("=")) {
+          formulaCells.push({ row: r, col: c });
+        } else {
+          cell.computedValue = cell.value;
+        }
+      }
+    }
+
+    for (let i = 0; i < 10; i++) {
+      let changed = false;
+      for (const { row, col } of formulaCells) {
+        const cell = spreadsheetData.data[row][col];
+        const newValue = evaluateFormula(cell.value, new Set());
+        if (cell.computedValue !== newValue) {
+          cell.computedValue = newValue;
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+  }
 
   function handleCopy() {
     if (!selectionArea) return;
@@ -407,7 +439,6 @@
     for (let r = minRow; r <= maxRow; r++) {
       const rowData: SpreadsheetCell[] = [];
       for (let c = minCol; c <= maxCol; c++) {
-        // Deep copy the cell to avoid reference issues
         rowData.push(JSON.parse(JSON.stringify(spreadsheetData.data[r][c])));
       }
       bufferData.push(rowData);
@@ -420,8 +451,8 @@
     };
 
     clipboardMode = "copy";
-    clipboardSourceArea = null; // A copy action cancels a cut's visual indicator
-    selection = null; // Clear visual selection
+    clipboardSourceArea = null;
+    selection = null;
     dispatch("update");
   }
 
@@ -446,57 +477,52 @@
 
     clipboardMode = "cut";
     clipboardSourceArea = { ...selectionArea };
-    selection = null; // Clear visual selection
+    selection = null;
     dispatch("update");
   }
 
-    function handlePaste() {
-      if (!clipboardBuffer || !selectedCell) return;
-      const { row: startRow, col: startCol } = selectedCell;
+  function handlePaste() {
+    if (!clipboardBuffer || !selectedCell) return;
+    const { row: startRow, col: startCol } = selectedCell;
 
-      if (clipboardMode === "cut" && clipboardSourceArea) {
-        const { minRow, maxRow, minCol, maxCol } = clipboardSourceArea;
-        for (let r = minRow; r <= maxRow; r++) {
-          for (let c = minCol; c <= maxCol; c++) {
-            spreadsheetData.data[r][c] = { value: "" };
-          }
+    if (clipboardMode === "cut" && clipboardSourceArea) {
+      const { minRow, maxRow, minCol, maxCol } = clipboardSourceArea;
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          spreadsheetData.data[r][c] = { value: "", computedValue: "" };
         }
       }
-
-      for (let r = 0; r < clipboardBuffer.rowCount; r++) {
-        for (let c = 0; c < clipboardBuffer.colCount; c++) {
-          const targetRow = startRow + r;
-          const targetCol = startCol + c;
-
-          if (
-            targetRow < spreadsheetData.data.length &&
-            targetCol < spreadsheetData.data[0].length
-          ) {
-            spreadsheetData.data[targetRow][targetCol] = JSON.parse(
-              JSON.stringify(clipboardBuffer.data[r][c])
-            );
-         }
-       }
-     }
-
-      clipboardBuffer = null;
-      clipboardSourceArea = null;
-      clipboardMode = null;
-
-      spreadsheetData = spreadsheetData;
-      dispatch("update");
     }
 
-  function handleCellCommit(cell: SpreadsheetCell) {
-    const value = cell.value.trim();
-    if (value.startsWith("=")) {
-      const expression = value.substring(1);
-      cell.value = evaluateFormula(expression);
-      // Manually dispatch an update because the change happens on blur/enter,
-      // not necessarily during input.
-      dispatch("update");
+    for (let r = 0; r < clipboardBuffer.rowCount; r++) {
+      for (let c = 0; c < clipboardBuffer.colCount; c++) {
+        const targetRow = startRow + r;
+        const targetCol = startCol + c;
+
+        if (
+          targetRow < spreadsheetData.data.length &&
+          targetCol < spreadsheetData.data[0].length
+        ) {
+          spreadsheetData.data[targetRow][targetCol] = JSON.parse(
+            JSON.stringify(clipboardBuffer.data[r][c])
+          );
+        }
+      }
     }
+
+    clipboardBuffer = null;
+    clipboardSourceArea = null;
+    clipboardMode = null;
+
+    spreadsheetData = spreadsheetData;
+    dispatch("update");
   }
+
+  const debouncedRecalculateAndUpdate = debounce(() => {
+    recalculateSheet();
+    spreadsheetData = spreadsheetData;
+    dispatch("update");
+  }, 300);
 
   function handleKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
@@ -509,7 +535,6 @@
       e.preventDefault();
       handlePaste();
     } else if (e.key === "Escape") {
-      // Cancel a 'cut' operation
       if (clipboardMode === "cut") {
         e.preventDefault();
         clipboardBuffer = null;
@@ -522,12 +547,11 @@
   function handleInputKeydown(e: KeyboardEvent, cell: SpreadsheetCell) {
     if (e.key === "Enter") {
       e.preventDefault();
-      (e.target as HTMLInputElement).blur(); // Triggers the on:blur event
+      (e.target as HTMLInputElement).blur();
     }
   }
 
   onMount(() => {
-    // Add listener to the parent container
     container.addEventListener("keydown", handleKeyDown);
   });
 
@@ -535,6 +559,12 @@
     if (container) {
       container.removeEventListener("keydown", handleKeyDown);
     }
+    window.removeEventListener("mousemove", handleMouseMove);
+    window.removeEventListener("mouseup", handleMouseUp);
+    window.removeEventListener("mouseover", handleCellMouseOver);
+    window.removeEventListener("mouseup", handleCellMouseUp);
+
+    debouncedRecalculateAndUpdate.flush?.();
   });
 </script>
 
@@ -574,7 +604,6 @@
     </div>
 
     <div class="data-grid" style="grid-template-columns: {gridTemplateColumns};">
-      <!-- Cut Selection Visual Indicator (moved here for correct positioning) -->
       {#if clipboardMode === "cut" && clipboardSourceArea}
         {@const top = rowPositions[clipboardSourceArea.minRow]}
         {@const left = colPositions[clipboardSourceArea.minCol]}
@@ -603,14 +632,18 @@
               <input
                 type="text"
                 class="cell"
-                value={cell.value}
+                value={editingCell?.row === rowIndex &&
+                editingCell.col === colIndex
+                  ? cell.value
+                  : cell.computedValue}
                 on:input={(e) => {
                   cell.value = (e.target as HTMLInputElement).value;
-                  debouncedDispatchUpdate();
+                  debouncedRecalculateAndUpdate();
                 }}
-                on:blur={() => handleCellCommit(cell)}
+                on:blur={() => (editingCell = null)}
                 on:keydown={(e) => handleInputKeydown(e, cell)}
-                on:focus={() => handleCellFocus(rowIndex, colIndex)}
+                on:focus|capture={() => handleCellFocus(rowIndex, colIndex)}
+                on:dblclick={() => handleCellFocus(rowIndex, colIndex)}
                 style="font-weight: {cell.style
                   ?.fontWeight}; font-style: {cell.style
                   ?.fontStyle}; text-align: {cell.style?.textAlign};"
@@ -676,7 +709,7 @@
     grid-area: data-grid;
     display: grid;
     grid-auto-rows: min-content;
-    position: relative; /* Added for correct positioning of the indicator */
+    position: relative;
   }
   .header-cell {
     font-size: 12px;
