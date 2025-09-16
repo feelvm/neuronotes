@@ -474,17 +474,17 @@
           ) {
             spreadsheetData.data[targetRow][targetCol] = JSON.parse(
               JSON.stringify(clipboardBuffer.data[r][c])
-            );
+            ); [cite: 596]
          }
        }
      }
 
-      clipboardBuffer = null;
-      clipboardSourceArea = null;
+      clipboardBuffer = null; [cite: 599]
+      clipboardSourceArea = null; [cite: 59
       clipboardMode = null;
 
       spreadsheetData = spreadsheetData;
-      dispatch("update");
+      [cite_start]dispatch("update"); [cite: 600]
     }
 
   function handleCellCommit(cell: SpreadsheetCell) {
