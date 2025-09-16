@@ -241,34 +241,48 @@
     if (!selection || selection.rangeCount === 0) return;
 
     const range = selection.getRangeAt(0);
-    if (range.collapsed) return;
     const parentElement =
       range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-        ?
-        range.commonAncestorContainer.parentElement
+        ? range.commonAncestorContainer.parentElement
         : (range.commonAncestorContainer as HTMLElement);
-    if (parentElement && editorDiv.contains(parentElement)) {
-      const currentSize =
-        window.getComputedStyle(parentElement).fontSize ||
-        "14px";
-      const newSize = Math.max(8, parseInt(currentSize) + amount);
 
+    if (!parentElement || !editorDiv.contains(parentElement)) {
+      return;
+    }
+    
+    const currentSize = window.getComputedStyle(parentElement).fontSize || "14px";
+    const newSize = Math.max(8, parseInt(currentSize) + amount);
+
+    if (range.collapsed) {
+      const span = document.createElement("span");
+      span.style.fontSize = `${newSize}px`;
+
+      span.innerHTML = '&#8203;';
+      
+      range.insertNode(span);
+
+      const newRange = document.createRange();
+      newRange.setStart(span.firstChild, 1);
+      newRange.setEnd(span.firstChild, 1);
+      
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+    } else {
       const contents = range.extractContents();
       const span = document.createElement("span");
       span.style.fontSize = `${newSize}px`;
       span.appendChild(contents);
       range.insertNode(span);
-
+      
       selection.removeAllRanges();
       const newRange = document.createRange();
       newRange.selectNodeContents(span);
       selection.addRange(newRange);
-
-      selectedFontSize = newSize;
-
-      editorDiv.dispatchEvent(new Event("input", { bubbles: true }));
     }
-  }
+    
+    selectedFontSize = newSize;
+    editorDiv.dispatchEvent(new Event("input", { bubbles: true }));
+  }  
 
   function updateSelectedFontSize() {
     if (!browser || !editorDiv) return;
@@ -475,8 +489,9 @@
 
   function createEmptySpreadsheet(rows = 50, cols = 20) {
     const data: SpreadsheetCell[][] = Array.from({ length: rows }, () =>
-      Array.from({ length: cols }, () => ({ value: "" }))
+      Array.from({ length: cols }, () => ({ value: "", computedValue: "" }))
     );
+
     const colWidths: Record<number, number> = {};
     for (let i = 0; i < cols; i++) colWidths[i] = 100;
     const rowHeights: Record<number, number> = {};
