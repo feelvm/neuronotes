@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, onDestroy } from "svelte";
+  import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
   import type { Spreadsheet, SpreadsheetCell } from "$lib/db";
 
   export let spreadsheetData: Spreadsheet;
@@ -151,7 +151,6 @@
 
   function handleCellFocus(rowIndex: number, colIndex: number) {
     selectedCell = { row: rowIndex, col: colIndex };
-    handleCellMouseDown(rowIndex, colIndex);
     editingCell = { row: rowIndex, col: colIndex };
   }
 
@@ -524,16 +523,19 @@
     dispatch("update");
   }, 300);
 
-  function handleKeyDown(e: KeyboardEvent) {
+  async function handleGridKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
       e.preventDefault();
       handleCut();
+      return;
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
       e.preventDefault();
       handleCopy();
+      return;
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
       e.preventDefault();
       handlePaste();
+      return;
     } else if (e.key === "Escape") {
       if (clipboardMode === "cut") {
         e.preventDefault();
@@ -541,24 +543,81 @@
         clipboardSourceArea = null;
         clipboardMode = null;
       }
+      return;
+    }
+
+    if (e.key === "Backspace" || e.key === "Delete") {
+      if (
+        selectionArea &&
+        (selectionArea.rowCount > 1 || selectionArea.colCount > 1)
+      ) {
+        e.preventDefault();
+        const { minRow, maxRow, minCol, maxCol } = selectionArea;
+        for (let r = minRow; r <= maxRow; r++) {
+          for (let c = minCol; c <= maxCol; c++) {
+            spreadsheetData.data[r][c].value = "";
+          }
+        }
+        debouncedRecalculateAndUpdate();
+      }
+      return;
+    }
+
+    const navigationKeys = [
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+      "Enter"
+    ];
+    if (!navigationKeys.includes(e.key) || !selectedCell) {
+      return;
+    }
+
+    e.preventDefault();
+
+    let { row, col } = selectedCell;
+
+    switch (e.key) {
+      case "ArrowUp":
+        row = Math.max(0, row - 1);
+        break;
+      case "ArrowDown":
+      case "Enter":
+        row = Math.min(spreadsheetData.data.length - 1, row + 1);
+        break;
+      case "ArrowLeft":
+        col = Math.max(0, col - 1);
+        break;
+      case "ArrowRight":
+        col = Math.min(spreadsheetData.data[0].length - 1, col + 1);
+        break;
+    }
+
+    selectedCell = { row, col };
+
+    if (e.shiftKey) {
+      selection = { ...selection!, end: { row, col } };
+    } else {
+      selection = { start: { row, col }, end: { row, col } };
+    }
+
+    editingCell = { row, col };
+
+    await tick();
+
+    const newCellWrapper = container.querySelector(
+      `.cell-wrapper[data-row="${row}"][data-col="${col}"]`
+    );
+    if (newCellWrapper) {
+      const input = newCellWrapper.querySelector("input");
+      if (input) {
+        input.focus();
+      }
     }
   }
-
-  function handleInputKeydown(e: KeyboardEvent, cell: SpreadsheetCell) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      (e.target as HTMLInputElement).blur();
-    }
-  }
-
-  onMount(() => {
-    container.addEventListener("keydown", handleKeyDown);
-  });
 
   onDestroy(() => {
-    if (container) {
-      container.removeEventListener("keydown", handleKeyDown);
-    }
     window.removeEventListener("mousemove", handleMouseMove);
     window.removeEventListener("mouseup", handleMouseUp);
     window.removeEventListener("mouseover", handleCellMouseOver);
@@ -569,7 +628,12 @@
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="spreadsheet-container" bind:this={container} tabindex="0">
+<div
+  class="spreadsheet-container"
+  bind:this={container}
+  tabindex="0"
+  on:keydown={handleGridKeyDown}
+>
   <div class="grid-wrapper">
     <div class="corner-header"></div>
 
@@ -641,7 +705,6 @@
                   debouncedRecalculateAndUpdate();
                 }}
                 on:blur={() => (editingCell = null)}
-                on:keydown={(e) => handleInputKeydown(e, cell)}
                 on:focus|capture={() => handleCellFocus(rowIndex, colIndex)}
                 on:dblclick={() => handleCellFocus(rowIndex, colIndex)}
                 style="font-weight: {cell.style
