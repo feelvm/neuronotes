@@ -1,4 +1,4 @@
-<script lang="ts">
+1<script lang="ts">
 	// --- Component & Type Imports ---
 	import { onMount } from "svelte";
 	import { browser } from "$app/environment";

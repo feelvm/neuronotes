@@ -8,7 +8,6 @@ As NEURONOTES is still in early development, there are many cool things to expec
 
 - Server authentication ( your progress will be available with login )
 - Image import ( free manipulation by default )
-- Window resizing
 - Accountability dashboard
 - Archiving
 
