@@ -713,8 +713,11 @@
 		return d;
 	}
 	function ymd(date: Date) {
-		return date.toISOString().slice(0, 10);
-	}
+       const year = date.getFullYear();
+       const month = String(date.getMonth() + 1).padStart(2, "0");
+       const day = String(date.getDate()).padStart(2, "0");
+       return `${year}-${month}-${day}`;
+    }
 	function dmy(date: Date) {
 		const dd = String(date.getDate()).padStart(2, "0");
 		const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -1479,7 +1482,7 @@
 						{#each weekDays as d (ymd(d))}
 							<div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
 								<div class="date">{dmy(d)}</div>
-								<div class="day-name">{DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}</div>
+								<div class="day-name">{DAY_NAMES[d.getDay()]}</div>
 								{#each eventsByDay[ymd(d)] || [] as ev (ev.id)}
 									<div class="event" title={ev.title}>
 										<div class="event-details">
