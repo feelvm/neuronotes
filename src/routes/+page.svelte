@@ -137,7 +137,7 @@
 	}
 
 	// ----- Shared Utilities -----
-	const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+	const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 	const DAY_NAMES_LONG = [
 		"Sunday",
 		"Monday",
