@@ -1,220 +1,352 @@
-import { browser } from "$app/environment";
+// src/lib/db.ts
+// Database abstraction layer that works in both Tauri and browser environments
 
-const DB_NAME = "NeuronotesDB";
-const DB_VERSION = 2;
+import { browser } from '$app/environment';
+import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 
-// Data structures
-export type Workspace = { id: string; name: string };
-export type Folder = {
-  id: string;
-  name: string;
-  workspaceId: string;
-  order: number;
-};
-export type Note = {
-  id: string;
-  title: string;
-  contentHTML: string;
-  updatedAt: number;
-  workspaceId: string;
-  folderId: string | null;
-  order: number;
-  type?: "text" | "spreadsheet";
-  spreadsheet?: Spreadsheet;
-};
-export type SpreadsheetCell = {
-  value: string;
-  style?: {
-    fontWeight?: "bold" | "normal";
-    fontStyle?: "italic" | "normal";
-    textAlign?: "left" | "center" | "right";
-  };
-  rowspan?: number;
-  colspan?: number;
-  merged?: boolean;
-};
-export type Spreadsheet = {
-  data: SpreadsheetCell[][];
-  rowHeights: Record<number, number>;
-  colWidths: Record<number, number>;
-};
-export type CalendarEvent = {
-  id: string;
-  date: string;
-  title: string;
-  time?: string;
-  workspaceId: string;
-};
-export type Task = { id: string; text: string };
-export type Column = {
-  id: string;
-  title: string;
-  tasks: Task[];
-  isCollapsed: boolean;
-};
-export type Kanban = {
-  workspaceId: string;
-  columns: Column[];
-};
-export type Setting = {
-  key: string;
-  value: any;
-};
+// Check if running in Tauri environment
+const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
 
-let dbPromise: Promise<IDBDatabase> | null = null;
+// Database client interface
+interface DbClient {
+  init?: () => Promise<void>;
+  getAllWorkspaces?: () => Promise<Workspace[]>;
+  putWorkspace?: (workspace: Workspace) => Promise<void>;
+  deleteWorkspace?: (id: string) => Promise<void>;
+  getFoldersByWorkspaceId?: (workspaceId: string) => Promise<Folder[]>;
+  putFolder?: (folder: Folder) => Promise<void>;
+  deleteFolder?: (id: string) => Promise<void>;
+  getNotesByWorkspaceId?: (workspaceId: string) => Promise<Note[]>;
+  putNote?: (note: Note) => Promise<void>;
+  deleteNote?: (id: string) => Promise<void>;
+  getCalendarEventsByWorkspaceId?: (workspaceId: string) => Promise<CalendarEvent[]>;
+  putCalendarEvent?: (event: CalendarEvent) => Promise<void>;
+  deleteCalendarEvent?: (id: string) => Promise<void>;
+  getKanbanByWorkspaceId?: (workspaceId: string) => Promise<Kanban | null>;
+  putKanban?: (kanban: Kanban) => Promise<void>;
+  getSettingByKey?: (key: string) => Promise<Setting | null>;
+  putSetting?: (setting: Setting) => Promise<void>;
+  get?: <T>(storeName: string, key: string) => Promise<T | undefined>;
+  getAll?: <T>(storeName: string) => Promise<T[]>;
+  put?: <T>(storeName: string, value: T) => Promise<void>;
+  remove?: (storeName: string, key: string) => Promise<void>;
+  getAllByIndex?: <T>(storeName: string, indexName: string, query: string) => Promise<T[]>;
+}
 
-function openDB(): Promise<IDBDatabase> {
-  if (!browser) {
-    return Promise.reject(
-      new Error("IndexedDB can only be used in the browser.")
-    );
+// Database client instance
+let dbClient: DbClient | null = null;
+
+// --- Database Initialization ---
+
+export async function init(): Promise<void> {
+  if (!dbClient) {
+    if (isTauri) {
+      const module = await import('./tauri_db');
+      dbClient = module;
+    } else {
+      const module = await import('./sqlite');
+      dbClient = module;
+    }
   }
-  if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-      request.onerror = () => {
-        console.error("IndexedDB error:", request.error);
-        reject(request.error);
-      };
-
-      request.onsuccess = () => {
-        resolve(request.result);
-      };
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        const oldVersion = event.oldVersion;
-        // Use the transaction provided by the event
-        const transaction = (event.target as IDBOpenDBRequest).transaction;
-
-        // Workspaces store
-        if (!db.objectStoreNames.contains("workspaces")) {
-          db.createObjectStore("workspaces", { keyPath: "id" });
-        }
-
-        // Notes store with an index on workspaceId
-        if (!db.objectStoreNames.contains("notes")) {
-          const notesStore = db.createObjectStore("notes", { keyPath: "id" });
-          notesStore.createIndex("workspaceId", "workspaceId", {
-            unique: false
-          });
-
-          notesStore.createIndex(
-            "workspaceId_folderId",
-            ["workspaceId", "folderId"],
-            { unique: false }
-          );
-        } else if (oldVersion < 2) {
-          if (transaction) {
-            const notesStore = transaction.objectStore("notes");
-            if (!notesStore.indexNames.contains("workspaceId_folderId")) {
-              notesStore.createIndex(
-                "workspaceId_folderId",
-                ["workspaceId", "folderId"],
-                { unique: false }
-              );
-            }
-          }
-        }
-
-        // Calendar events store with an index on workspaceId
-        if (!db.objectStoreNames.contains("calendarEvents")) {
-          const eventsStore = db.createObjectStore("calendarEvents", {
-            keyPath: "id"
-          });
-          eventsStore.createIndex("workspaceId", "workspaceId", {
-            unique: false
-          });
-        }
-
-        // Kanban store
-        if (!db.objectStoreNames.contains("kanban")) {
-          db.createObjectStore("kanban", { keyPath: "workspaceId" });
-        }
-
-        // Settings store for simple key-value pairs
-        if (!db.objectStoreNames.contains("settings")) {
-          db.createObjectStore("settings", { keyPath: "key" });
-        }
-
-        // Folders store
-        if (!db.objectStoreNames.contains("folders")) {
-          const foldersStore = db.createObjectStore("folders", {
-            keyPath: "id"
-          });
-          foldersStore.createIndex("workspaceId", "workspaceId", {
-            unique: false
-          });
-        }
-      };
-    });
+  if (dbClient?.init) {
+    await dbClient.init();
   }
-  return dbPromise;
 }
 
-// CRUD helpers
-async function get<T>(
-  storeName: string,
-  key: IDBValidKey
-): Promise<T | undefined> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readonly");
-    const store = transaction.objectStore(storeName);
-    const request = store.get(key);
-    request.onsuccess = () => resolve(request.result as T);
-    request.onerror = () => reject(request.error);
-  });
+// --- Workspace Operations ---
+
+export async function getAllWorkspaces(): Promise<Workspace[]> {
+  await ensureClient();
+  if (isTauri && dbClient?.getAllWorkspaces) {
+    return await dbClient.getAllWorkspaces();
+  } else if (dbClient?.getAll) {
+    return await dbClient.getAll('workspaces');
+  }
+  return [];
 }
 
-async function getAll<T>(storeName: string): Promise<T[]> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readonly");
-    const store = transaction.objectStore(storeName);
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result as T[]);
-    request.onerror = () => reject(request.error);
-  });
+export async function putWorkspace(workspace: Workspace): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.putWorkspace) {
+    await dbClient.putWorkspace(workspace);
+  } else if (dbClient?.put) {
+    await dbClient.put('workspaces', workspace);
+  }
 }
 
-async function put<T>(storeName: string, value: T): Promise<void> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readwrite");
-    const store = transaction.objectStore(storeName);
-    const request = store.put(value);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+export async function deleteWorkspace(id: string): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.deleteWorkspace) {
+    await dbClient.deleteWorkspace(id);
+  } else if (dbClient?.remove) {
+    await dbClient.remove('workspaces', id);
+  }
 }
 
-async function remove(storeName: string, key: IDBValidKey): Promise<void> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readwrite");
-    const store = transaction.objectStore(storeName);
-    const request = store.delete(key);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+// --- Folder Operations ---
+
+export async function getFoldersByWorkspaceId(workspaceId: string): Promise<Folder[]> {
+  await ensureClient();
+  if (isTauri && dbClient?.getFoldersByWorkspaceId) {
+    return await dbClient.getFoldersByWorkspaceId(workspaceId);
+  } else if (dbClient?.getAllByIndex) {
+    return await dbClient.getAllByIndex('folders', 'workspaceId', workspaceId);
+  }
+  return [];
 }
 
-async function getAllByIndex<T>(
+export async function putFolder(folder: Folder): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.putFolder) {
+    await dbClient.putFolder(folder);
+  } else if (dbClient?.put) {
+    await dbClient.put('folders', folder);
+  }
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.deleteFolder) {
+    await dbClient.deleteFolder(id);
+  } else if (dbClient?.remove) {
+    await dbClient.remove('folders', id);
+  }
+}
+
+// --- Note Operations ---
+
+export async function getNotesByWorkspaceId(workspaceId: string): Promise<Note[]> {
+  await ensureClient();
+  if (isTauri && dbClient?.getNotesByWorkspaceId) {
+    return await dbClient.getNotesByWorkspaceId(workspaceId);
+  } else if (dbClient?.getAllByIndex) {
+    return await dbClient.getAllByIndex('notes', 'workspaceId', workspaceId);
+  }
+  return [];
+}
+
+export async function putNote(note: Note): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.putNote) {
+    await dbClient.putNote(note);
+  } else if (dbClient?.put) {
+    await dbClient.put('notes', note);
+  }
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.deleteNote) {
+    await dbClient.deleteNote(id);
+  } else if (dbClient?.remove) {
+    await dbClient.remove('notes', id);
+  }
+}
+
+// --- Calendar Event Operations ---
+
+export async function getCalendarEventsByWorkspaceId(
+  workspaceId: string
+): Promise<CalendarEvent[]> {
+  await ensureClient();
+  if (isTauri && dbClient?.getCalendarEventsByWorkspaceId) {
+    return await dbClient.getCalendarEventsByWorkspaceId(workspaceId);
+  } else if (dbClient?.getAllByIndex) {
+    return await dbClient.getAllByIndex('calendarEvents', 'workspaceId', workspaceId);
+  }
+  return [];
+}
+
+export async function putCalendarEvent(event: CalendarEvent): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.putCalendarEvent) {
+    await dbClient.putCalendarEvent(event);
+  } else if (dbClient?.put) {
+    await dbClient.put('calendarEvents', event);
+  }
+}
+
+export async function deleteCalendarEvent(id: string): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.deleteCalendarEvent) {
+    await dbClient.deleteCalendarEvent(id);
+  } else if (dbClient?.remove) {
+    await dbClient.remove('calendarEvents', id);
+  }
+}
+
+// --- Kanban Operations ---
+
+export async function getKanbanByWorkspaceId(workspaceId: string): Promise<Kanban | null> {
+  await ensureClient();
+  if (isTauri && dbClient?.getKanbanByWorkspaceId) {
+    return await dbClient.getKanbanByWorkspaceId(workspaceId);
+  } else if (dbClient?.get) {
+    return (await dbClient.get('kanban', workspaceId)) ?? null;
+  }
+  return null;
+}
+
+export async function putKanban(kanban: Kanban): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.putKanban) {
+    await dbClient.putKanban(kanban);
+  } else if (dbClient?.put) {
+    await dbClient.put('kanban', kanban);
+  }
+}
+
+// --- Settings Operations ---
+
+export async function getSettingByKey(key: string): Promise<Setting | null> {
+  await ensureClient();
+  if (isTauri && dbClient?.getSettingByKey) {
+    return await dbClient.getSettingByKey(key);
+  } else if (dbClient?.get) {
+    return (await dbClient.get('settings', key)) ?? null;
+  }
+  return null;
+}
+
+export async function putSetting(setting: Setting): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.putSetting) {
+    await dbClient.putSetting(setting);
+  } else if (dbClient?.put) {
+    await dbClient.put('settings', setting);
+  }
+}
+
+// --- Legacy API for backward compatibility ---
+
+export async function get<T>(storeName: string, key: string): Promise<T | undefined> {
+  await ensureClient();
+  switch (storeName) {
+    case 'settings':
+      const setting = await getSettingByKey(key);
+      return setting as T | undefined;
+    case 'kanban':
+      const kanban = await getKanbanByWorkspaceId(key);
+      return kanban as T | undefined;
+    default:
+      if (dbClient?.get) {
+        return await dbClient.get(storeName, key);
+      }
+      return undefined;
+  }
+}
+
+export async function getAll<T>(storeName: string): Promise<T[]> {
+  await ensureClient();
+  switch (storeName) {
+    case 'workspaces':
+      const workspaces = await getAllWorkspaces();
+      return workspaces as T[];
+    default:
+      if (dbClient?.getAll) {
+        return await dbClient.getAll(storeName);
+      }
+      return [];
+  }
+}
+
+export async function put<T>(storeName: string, value: T): Promise<void> {
+  await ensureClient();
+  switch (storeName) {
+    case 'workspaces':
+      await putWorkspace(value as Workspace);
+      break;
+    case 'folders':
+      await putFolder(value as Folder);
+      break;
+    case 'notes':
+      await putNote(value as Note);
+      break;
+    case 'calendarEvents':
+      await putCalendarEvent(value as CalendarEvent);
+      break;
+    case 'kanban':
+      await putKanban(value as Kanban);
+      break;
+    case 'settings':
+      await putSetting(value as Setting);
+      break;
+    default:
+      if (dbClient?.put) {
+        await dbClient.put(storeName, value);
+      }
+  }
+}
+
+export async function remove(storeName: string, key: string): Promise<void> {
+  await ensureClient();
+  switch (storeName) {
+    case 'workspaces':
+      await deleteWorkspace(key);
+      break;
+    case 'folders':
+      await deleteFolder(key);
+      break;
+    case 'notes':
+      await deleteNote(key);
+      break;
+    case 'calendarEvents':
+      await deleteCalendarEvent(key);
+      break;
+    default:
+      if (dbClient?.remove) {
+        await dbClient.remove(storeName, key);
+      }
+  }
+}
+
+export async function getAllByIndex<T>(
   storeName: string,
   indexName: string,
-  query: IDBValidKey | IDBKeyRange
+  query: string
 ): Promise<T[]> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readonly");
-    const store = transaction.objectStore(storeName);
-    const index = store.index(indexName);
-    const request = index.getAll(query);
-    request.onsuccess = () => resolve(request.result as T[]);
-    request.onerror = () => reject(request.error);
-  });
+  await ensureClient();
+  switch (storeName) {
+    case 'folders':
+      if (indexName === 'workspaceId') {
+        const folders = await getFoldersByWorkspaceId(query);
+        return folders as T[];
+      }
+      break;
+    case 'notes':
+      if (indexName === 'workspaceId') {
+        const notes = await getNotesByWorkspaceId(query);
+        return notes as T[];
+      }
+      break;
+    case 'calendarEvents':
+      if (indexName === 'workspaceId') {
+        const events = await getCalendarEventsByWorkspaceId(query);
+        return events as T[];
+      }
+      break;
+  }
+
+  if (dbClient?.getAllByIndex) {
+    return await dbClient.getAllByIndex(storeName, indexName, query);
+  }
+  return [];
 }
 
-export { get, getAll, put, remove, getAllByIndex };
+// --- Helper Functions ---
+
+async function ensureClient(): Promise<void> {
+  if (!dbClient) {
+    if (isTauri) {
+      const module = await import('./tauri_db');
+      dbClient = module;
+    } else {
+      const module = await import('./sqlite');
+      dbClient = module;
+    }
+  }
+}
+
+// Export the check for Tauri environment
+export { isTauri };
