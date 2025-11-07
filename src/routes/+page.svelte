@@ -3,6 +3,15 @@
     import { browser } from '$app/environment';
     import Spreadsheet from '$lib/components/Spreadsheet.svelte';
     import * as db from '$lib/db';
+    import { debounce } from '$lib/utils/debounce';
+    import { generateUUID } from '$lib/utils/uuid';
+    import { ymd, dmy, startOfWeek, localDateFromYMD } from '$lib/utils/dateHelpers';
+    import { 
+        applyFormat, 
+        modifyFontSize as modifyFontSizeUtil, 
+        getSelectedFontSize,
+        handlePlainTextPaste
+    } from '$lib/utils/textFormatting';
     import type {
         Workspace,
         Note,
@@ -11,7 +20,8 @@
         Column,
         Kanban,
         SpreadsheetCell,
-        Task
+        Task,
+        Setting
     } from '$lib/db_types';
 
     let DOMPurify: any;
@@ -110,6 +120,14 @@
     function stopResize() {
         isVerticalResizing = false;
         isHorizontalResizing = false;
+        // Remove all potential listeners to prevent memory leaks
+        window.removeEventListener('mousemove', doVerticalResize);
+        window.removeEventListener('mousemove', doHorizontalResize);
+        window.removeEventListener('mouseup', stopResize);
+    }
+    
+    function cleanupResizeListeners() {
+        // Ensure cleanup on component unmount
         window.removeEventListener('mousemove', doVerticalResize);
         window.removeEventListener('mousemove', doHorizontalResize);
         window.removeEventListener('mouseup', stopResize);
@@ -131,29 +149,20 @@
         return { destroy() {} };
     }
 
-    function debounce<T extends (...args: any[]) => any>(func: T, timeout = 300) {
-        let timer: ReturnType<typeof setTimeout>;
-        let pendingArgs: Parameters<T> | null = null;
+    function settingsDropdown(node: HTMLElement) {
+        function handleClickOutside(event: MouseEvent) {
+            if (node && !node.contains(event.target as Node) && 
+                !(event.target as HTMLElement)?.closest('.settings-btn')) {
+                showSettingsDropdown = false;
+            }
+        }
 
-        const debounced = (...args: Parameters<T>) => {
-            pendingArgs = args;
-            clearTimeout(timer);
-            timer = setTimeout(() => {
-                if (pendingArgs) {
-                    func(...pendingArgs);
-                }
-                pendingArgs = null;
-            }, timeout);
-        };
-
-        debounced.flush = () => {
-            clearTimeout(timer);
-            if (pendingArgs) {
-                func(...pendingArgs);
-                pendingArgs = null;
+        document.addEventListener('click', handleClickOutside);
+        return {
+            destroy() {
+                document.removeEventListener('click', handleClickOutside);
             }
         };
-        return debounced;
     }
 
     let editorDiv: HTMLElement;
@@ -166,7 +175,7 @@
     } | null = null;
 
     $: canMergeOrUnmerge = (() => {
-        if (!sheetSelection || !currentNote?.spreadsheet) return false;
+        if (!sheetSelection || !parsedCurrentNote?.spreadsheet) return false;
         const { start, end } = sheetSelection;
         const minRow = Math.min(start.row, end.row);
         const minCol = Math.min(start.col, end.col);
@@ -175,59 +184,64 @@
 
         if (minRow !== maxRow || minCol !== maxCol) return true;
 
-        const cell = currentNote.spreadsheet.data[minRow][minCol];
+        const cell = parsedCurrentNote.spreadsheet.data[minRow][minCol];
         return (cell.rowspan || 1) > 1 || (cell.colspan || 1) > 1;
     })();
-    function applyFormat(command: string) {
+
+    function applyFormatCommand(command: string) {
         if (editorDiv) editorDiv.focus();
-        document.execCommand(command, false);
+        applyFormat(command);
     }
 
     function modifyFontSize(amount: number) {
         if (!editorDiv) return;
         editorDiv.focus();
-
-        const selection = window.getSelection();
-        if (!selection?.rangeCount) return;
-
-        const range = selection.getRangeAt(0);
-        if (range.collapsed) return;
-
-        const parentElement =
-            range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-                ? range.commonAncestorContainer.parentElement
-                : (range.commonAncestorContainer as HTMLElement);
-        if (parentElement && editorDiv.contains(parentElement)) {
-            const currentSize = window.getComputedStyle(parentElement).fontSize || '14px';
-            const newSize = Math.max(8, parseInt(currentSize) + amount);
-
-            document.execCommand('fontSize', false, '1');
-            const fontElements = editorDiv.getElementsByTagName('font');
-            for (const element of Array.from(fontElements)) {
-                if (element.size === '1') {
-                    element.removeAttribute('size');
-                    element.style.fontSize = `${newSize}px`;
-                }
-            }
-
-            selectedFontSize = newSize;
-            editorDiv.dispatchEvent(new Event('input', { bubbles: true }));
-        }
+        
+        selectedFontSize = modifyFontSizeUtil(editorDiv, amount);
+        editorDiv.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     function updateSelectedFontSize() {
         if (!browser || !editorDiv) return;
+        selectedFontSize = getSelectedFontSize(editorDiv);
+    }
+
+    function insertCheckbox() {
+        if (!editorDiv) return;
+        editorDiv.focus();
+
         const selection = window.getSelection();
-        if (!selection?.rangeCount) return;
+        if (!selection || selection.rangeCount === 0) return;
+
         const range = selection.getRangeAt(0);
-        const parentElement =
-            range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-                ? range.commonAncestorContainer.parentElement
-                : (range.commonAncestorContainer as HTMLElement);
-        if (parentElement && editorDiv.contains(parentElement)) {
-            const sizeStr = window.getComputedStyle(parentElement).fontSize || '14px';
-            selectedFontSize = parseInt(sizeStr);
-        }
+        
+        // Create checkbox element
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'note-checkbox';
+        checkbox.style.marginRight = '6px';
+        checkbox.style.verticalAlign = 'middle';
+        checkbox.style.cursor = 'pointer';
+        
+        // Add event listener to save state when checked/unchecked
+        checkbox.addEventListener('change', () => {
+            if (currentNote) {
+                debouncedUpdateNote(currentNote);
+            }
+        });
+
+        // Insert checkbox at cursor position
+        range.deleteContents();
+        range.insertNode(checkbox);
+        
+        // Move cursor after the checkbox so user can type
+        range.setStartAfter(checkbox);
+        range.setEndAfter(checkbox);
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        // Trigger update to save
+        editorDiv.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     let workspaces: Workspace[] = [];
@@ -255,14 +269,19 @@
     async function addWorkspace() {
         const name = prompt('Enter new workspace name:', 'New Workspace');
         if (!name?.trim()) return;
-        const newWorkspace: Workspace = {
-            id: crypto.randomUUID(),
-            name: name.trim(),
-            order: workspaces.length
-        };
-        await db.putWorkspace(newWorkspace);
-        workspaces = [...workspaces, newWorkspace];
-        await switchWorkspace(newWorkspace.id);
+        try {
+            const newWorkspace: Workspace = {
+                id: generateUUID(),
+                name: name.trim(),
+                order: workspaces.length
+            };
+            await db.putWorkspace(newWorkspace);
+            workspaces = [...workspaces, newWorkspace];
+            await switchWorkspace(newWorkspace.id);
+        } catch (error) {
+            console.error('Failed to add workspace:', error);
+            alert('Failed to create workspace. Please try again.');
+        }
     }
 
     async function renameWorkspace(id: string, newName: string) {
@@ -315,19 +334,32 @@
         if (!draggedWorkspaceId) return;
 
         const draggedIndex = workspaces.findIndex((w) => w.id === draggedWorkspaceId);
-        if (draggedIndex === -1 || draggedIndex === targetIndex) return;
+        if (draggedIndex === -1 || draggedIndex === targetIndex) {
+            draggedWorkspaceId = null;
+            return;
+        }
 
         const reordered = [...workspaces];
         const [moved] = reordered.splice(draggedIndex, 1);
         reordered.splice(targetIndex, 0, moved);
 
-        const promises = reordered.map((ws, index) => {
-            ws.order = index;
-            return db.putWorkspace(ws);
-        });
+        try {
+            const promises = reordered.map((ws, index) => {
+                ws.order = index;
+                return db.putWorkspace(ws);
+            });
 
-        await Promise.all(promises);
-        workspaces = reordered;
+            await Promise.all(promises);
+            workspaces = reordered;
+        } catch (error) {
+            console.error('Failed to reorder workspaces:', error);
+        } finally {
+            draggedWorkspaceId = null;
+        }
+    }
+    
+    function handleWorkspaceDragEnd() {
+        // Clean up drag state if drag was cancelled
         draggedWorkspaceId = null;
     }
 
@@ -341,6 +373,8 @@
     let editingFolderId: string | null = null;
     let editingNoteId: string | null = null;
     let isEditingHeaderName = false;
+    let draggedItemType: 'folder' | 'note' | null = null;
+    let isDragging = false;
     type DisplayItem = (Note & { displayType: 'note' }) | (Folder & { displayType: 'folder' });
     let displayList: DisplayItem[] = [];
 
@@ -365,6 +399,27 @@
 
     $: currentFolder = folders.find((f) => f.id === currentFolderId);
     $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
+    
+    // Lazy load spreadsheet JSON - only parse when note is actually opened
+    $: parsedCurrentNote = currentNote ? (() => {
+        if (currentNote.type === 'spreadsheet') {
+            // Check if we have raw JSON that needs parsing
+            const noteWithRaw = currentNote as any;
+            if (noteWithRaw._spreadsheetJson && !currentNote.spreadsheet) {
+                try {
+                    const parsed = JSON.parse(noteWithRaw._spreadsheetJson);
+                    // Cache the parsed version and clear the raw JSON
+                    currentNote.spreadsheet = parsed;
+                    delete noteWithRaw._spreadsheetJson;
+                    return currentNote;
+                } catch (e) {
+                    console.error('Failed to parse spreadsheet JSON:', e);
+                    return currentNote;
+                }
+            }
+        }
+        return currentNote;
+    })() : null;
 
     async function selectNote(id: string) {
         if (selectedNoteId === id) return;
@@ -372,6 +427,23 @@
         selectedSheetCell = null;
         sheetSelection = null;
         selectedNoteId = id;
+        
+        // Lazy load note contentHTML if not already loaded
+        const note = notes.find((n) => n.id === id);
+        if (note) {
+            const noteWithMeta = note as any;
+            if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
+                try {
+                    note.contentHTML = await db.getNoteContent(id);
+                    noteWithMeta._contentLoaded = true;
+                    // Trigger reactivity update
+                    notes = [...notes];
+                } catch (e) {
+                    console.error('Failed to load note content:', e);
+                }
+            }
+        }
+        
         await db.putSetting({
             key: `selectedNoteId:${activeWorkspaceId}`,
             value: id
@@ -379,21 +451,26 @@
     }
 
     async function addNote(type: 'text' | 'spreadsheet' = 'text') {
-        const notesInCurrentView = displayList.filter((item) => item.displayType === 'note');
-        const n: Note = {
-            id: crypto.randomUUID(),
-            title: type === 'spreadsheet' ? 'Untitled Sheet' : 'Untitled Note',
-            contentHTML: '',
-            updatedAt: Date.now(),
-            workspaceId: activeWorkspaceId,
-            folderId: currentFolderId,
-            order: notesInCurrentView.length,
-            type: type,
-            spreadsheet: type === 'spreadsheet' ? createEmptySpreadsheet() : undefined
-        };
-        await db.putNote(n);
-        notes = [...notes, n];
-        await selectNote(n.id);
+        try {
+            const notesInCurrentView = displayList.filter((item) => item.displayType === 'note');
+            const n: Note = {
+                id: generateUUID(),
+                title: type === 'spreadsheet' ? 'Untitled Sheet' : 'Untitled Note',
+                contentHTML: '',
+                updatedAt: Date.now(),
+                workspaceId: activeWorkspaceId,
+                folderId: currentFolderId,
+                order: notesInCurrentView.length,
+                type: type,
+                spreadsheet: type === 'spreadsheet' ? createEmptySpreadsheet() : undefined
+            };
+            await db.putNote(n);
+            notes = [...notes, n];
+            await selectNote(n.id);
+        } catch (error) {
+            console.error('Failed to add note:', error);
+            alert('Failed to create note. Please try again.');
+        }
     }
 
     function createEmptySpreadsheet(rows = 50, cols = 20) {
@@ -411,14 +488,19 @@
         const name = prompt('Enter new folder name:', 'New Folder');
         if (!name?.trim()) return;
 
-        const f: Folder = {
-            id: crypto.randomUUID(),
-            name: name.trim(),
-            workspaceId: activeWorkspaceId,
-            order: displayList.length
-        };
-        await db.putFolder(f);
-        folders = [...folders, f];
+        try {
+            const f: Folder = {
+                id: generateUUID(),
+                name: name.trim(),
+                workspaceId: activeWorkspaceId,
+                order: displayList.length
+            };
+            await db.putFolder(f);
+            folders = [...folders, f];
+        } catch (error) {
+            console.error('Failed to add folder:', error);
+            alert('Failed to create folder. Please try again.');
+        }
     }
 
     async function renameFolder(id: string, newName: string) {
@@ -461,6 +543,16 @@
     }
 
     async function deleteNote(id: string) {
+        const note = notes.find((n) => n.id === id);
+        if (!note) return;
+        
+        const noteType = note.type === 'spreadsheet' ? 'spreadsheet' : 'note';
+        const noteTitle = note.title || 'Untitled';
+        
+        if (!confirm(`Are you sure you want to delete "${noteTitle}"? This ${noteType} will be permanently deleted and cannot be recovered.`)) {
+            return;
+        }
+        
         await db.deleteNote(id);
         notes = notes.filter((n) => n.id !== id);
         if (selectedNoteId === id) {
@@ -491,12 +583,6 @@
 
     const debouncedUpdateNote = debounce(updateNote, 400);
 
-    function handlePaste(event: ClipboardEvent) {
-        event.preventDefault();
-        const text = event.clipboardData?.getData('text/plain') || '';
-        document.execCommand('insertText', false, text);
-    }
-
     async function openFolder(folderId: string) {
         debouncedUpdateNote.flush();
         currentFolderId = folderId;
@@ -512,6 +598,9 @@
     function handleDragStart(ev: DragEvent, item: DisplayItem) {
         if (!ev.dataTransfer) return;
 
+        console.log('Drag started:', item.displayType, item);
+        isDragging = true;
+        draggedItemType = item.displayType;
         ev.dataTransfer.effectAllowed = 'move';
         ev.dataTransfer.dropEffect = 'move';
         const itemData = JSON.stringify(item);
@@ -553,7 +642,11 @@
         ev.preventDefault();
         dragOverFolderId = null;
         const data = ev.dataTransfer?.getData('application/json');
-        if (!data) return;
+        if (!data) {
+            isDragging = false;
+            draggedItemType = null;
+            return;
+        }
         const draggedItem = JSON.parse(data) as DisplayItem;
         if (
             draggedItem.displayType === 'note' &&
@@ -568,13 +661,19 @@
                 notes = [...notes];
             }
         }
+        isDragging = false;
+        draggedItemType = null;
     }
 
     async function handleDropOnRoot(ev: DragEvent) {
         ev.preventDefault();
         dragOverRoot = false;
         const data = ev.dataTransfer?.getData('application/json');
-        if (!data) return;
+        if (!data) {
+            isDragging = false;
+            draggedItemType = null;
+            return;
+        }
         const draggedItem = JSON.parse(data) as DisplayItem;
         if (draggedItem.displayType === 'note' && (draggedItem as Note).folderId !== null) {
             const noteToMove = notes.find((n) => n.id === draggedItem.id);
@@ -586,12 +685,15 @@
                 notes = [...notes];
             }
         }
+        isDragging = false;
+        draggedItemType = null;
     }
 
     async function handleReorderDrop(ev: DragEvent, targetIndex: number) {
         ev.preventDefault();
         ev.stopPropagation();
         dropIndex = null;
+        console.log('Reorder drop triggered at index:', targetIndex);
 
         let data = ev.dataTransfer?.getData('application/json');
         if (!data) {
@@ -604,25 +706,127 @@
             }
         }
 
-        if (!data) return;
+        if (!data) {
+            // If we still don't have data but have draggedItemType, try to find the item
+            // This shouldn't happen but is a fallback
+            console.warn('No drag data found for reorder');
+            isDragging = false;
+            draggedItemType = null;
+            return;
+        }
 
-        const draggedItem = JSON.parse(data) as DisplayItem;
+        let draggedItem: DisplayItem;
+        try {
+            draggedItem = JSON.parse(data) as DisplayItem;
+        } catch (err) {
+            console.error('Failed to parse drag data:', err);
+            isDragging = false;
+            draggedItemType = null;
+            return;
+        }
 
         const currentViewList = [...displayList];
         const draggedIndex = currentViewList.findIndex((item) => item.id === draggedItem.id);
 
-        if (draggedIndex === -1 || draggedIndex === targetIndex) return;
+        if (draggedIndex === -1 || draggedIndex === targetIndex) {
+            isDragging = false;
+            draggedItemType = null;
+            return;
+        }
         const [movedItem] = currentViewList.splice(draggedIndex, 1);
         currentViewList.splice(targetIndex, 0, movedItem);
 
         const updates = currentViewList.map((item, index) => {
-            item.order = index;
-            return item;
+            // Create new objects instead of mutating, ensuring all required fields are preserved
+            if (item.displayType === 'folder') {
+                const folder = item as Folder & { displayType: 'folder' };
+                // Find the original folder to ensure we have all required fields
+                const originalFolder = folders.find(f => f.id === folder.id);
+                if (!originalFolder) {
+                    console.error('Original folder not found:', folder.id);
+                    console.error('Available folders:', folders.map(f => ({ id: f.id, name: f.name, workspaceId: f.workspaceId })));
+                    throw new Error(`Folder ${folder.id} not found`);
+                }
+                // Handle both snake_case (from DB) and camelCase (mapped) formats
+                const workspaceId = (originalFolder as any).workspaceId || (originalFolder as any).workspace_id;
+                if (!workspaceId) {
+                    console.error('Original folder missing workspaceId:', originalFolder);
+                    console.error('Available folders:', folders.map(f => ({ id: f.id, name: f.name, workspaceId: (f as any).workspaceId || (f as any).workspace_id })));
+                    throw new Error(`Folder ${originalFolder.id} is missing workspaceId in original data`);
+                }
+                const updatedFolder: Folder = {
+                    id: originalFolder.id,
+                    name: originalFolder.name,
+                    workspaceId: workspaceId,
+                    order: index
+                };
+                console.log('Created folder update:', updatedFolder);
+                return { 
+                    ...updatedFolder,
+                    displayType: 'folder' as const
+                } as Folder & { displayType: 'folder' };
+            } else {
+                const note = item as Note & { displayType: 'note' };
+                // Find the original note to ensure we have all required fields
+                const originalNote = notes.find(n => n.id === note.id);
+                if (!originalNote) {
+                    console.error('Original note not found:', note.id);
+                    throw new Error(`Note ${note.id} not found`);
+                }
+                if (!originalNote.workspaceId) {
+                    console.error('Original note missing workspaceId:', originalNote);
+                    throw new Error(`Note ${originalNote.id} is missing workspaceId in original data`);
+                }
+                const updatedNote: Note = {
+                    ...originalNote,
+                    order: index
+                };
+                console.log('Created note update:', { id: updatedNote.id, title: updatedNote.title, workspaceId: updatedNote.workspaceId, order: updatedNote.order });
+                return { 
+                    ...updatedNote,
+                    displayType: 'note' as const
+                } as Note & { displayType: 'note' };
+            }
         });
-        const promises = updates.map((item) => {
-            return item.displayType === 'folder'
-                ? db.putFolder(item as Folder)
-                : db.putNote(item as Note);
+        console.log('About to save updates. Count:', updates.length);
+        console.log('Updates breakdown:', {
+            folders: updates.filter(i => i.displayType === 'folder').length,
+            notes: updates.filter(i => i.displayType === 'note').length
+        });
+        
+        const promises = updates.map(async (item) => {
+            if (item.displayType === 'folder') {
+                const folder = item as Folder;
+                // Ensure all required fields are present
+                if (!folder.workspaceId) {
+                    console.error('Folder missing workspaceId:', folder);
+                    console.error('Full folder object:', JSON.stringify(folder, null, 2));
+                    throw new Error(`Folder ${folder.id} is missing workspaceId`);
+                }
+                console.log('Saving folder:', { id: folder.id, name: folder.name, workspaceId: folder.workspaceId, order: folder.order });
+                try {
+                    await db.putFolder(folder);
+                    console.log('Successfully saved folder:', folder.id);
+                } catch (error) {
+                    console.error('Error saving folder:', folder, error);
+                    throw error;
+                }
+            } else {
+                const note = item as Note;
+                // Ensure all required fields are present
+                if (!note.workspaceId) {
+                    console.error('Note missing workspaceId:', note);
+                    throw new Error(`Note ${note.id} is missing workspaceId`);
+                }
+                console.log('Saving note:', { id: note.id, title: note.title, workspaceId: note.workspaceId, order: note.order });
+                try {
+                    await db.putNote(note);
+                    console.log('Successfully saved note:', note.id);
+                } catch (error) {
+                    console.error('Error saving note:', note, error);
+                    throw error;
+                }
+            }
         });
         await Promise.all(promises);
         const updatedNotes = updates.filter(
@@ -631,23 +835,33 @@
         const updatedFolders = updates.filter(
             (i): i is Folder & { displayType: 'folder' } => i.displayType === 'folder'
         );
+        
+        // Update state immediately - create new arrays to trigger reactivity
         if (currentFolderId === null) {
-            folders = updatedFolders;
+            folders = updatedFolders.map(f => ({ ...f }));
             notes = notes.map((n) => {
                 const updatedNote = updatedNotes.find((un) => un.id === n.id);
-                return updatedNote && n.folderId === null ? { ...n, order: updatedNote.order } : n;
+                return updatedNote && n.folderId === null 
+                    ? { ...n, order: updatedNote.order } 
+                    : { ...n };
             });
         } else {
             notes = notes.map((n) => {
                 const updatedNote = updatedNotes.find((un) => un.id === n.id);
                 return updatedNote && n.folderId === currentFolderId
                     ? { ...n, order: updatedNote.order }
-                    : n;
+                    : { ...n };
             });
         }
 
+        // Force reactivity by creating new array references
         notes = [...notes];
         folders = [...folders];
+        console.log('State updated - folders:', folders.length, 'notes:', notes.length);
+        console.log('Updated folders:', folders.map(f => ({ id: f.id, name: f.name, order: f.order })));
+        console.log('Updated notes (root):', notes.filter(n => n.folderId === null).map(n => ({ id: n.id, title: n.title, order: n.order })));
+        isDragging = false;
+        draggedItemType = null;
     }
 
     let calendarEvents: CalendarEvent[] = [];
@@ -671,11 +885,23 @@
         viewEndDate.setDate(viewEndDate.getDate() + 6);
 
         for (const event of calendarEvents) {
-            const eventDate = new Date(event.date + 'T00:00:00');
-            if (eventDate >= viewStartDate && eventDate <= viewEndDate) {
-                const dayKey = event.date;
-                if (!occurrences[dayKey]) occurrences[dayKey] = [];
-                occurrences[dayKey].push(event);
+            const eventStartDate = localDateFromYMD(event.date);
+            
+            if (!event.repeat || event.repeat === 'none') {
+                // Non-repeating event
+                if (eventStartDate >= viewStartDate && eventStartDate <= viewEndDate) {
+                    const dayKey = event.date;
+                    if (!occurrences[dayKey]) occurrences[dayKey] = [];
+                    occurrences[dayKey].push(event);
+                }
+            } else {
+                // Repeating event - generate occurrences for the week
+                const instances = generateRecurringInstances(event, viewStartDate, viewEndDate);
+                for (const instanceDate of instances) {
+                    const dayKey = ymd(instanceDate);
+                    if (!occurrences[dayKey]) occurrences[dayKey] = [];
+                    occurrences[dayKey].push(event);
+                }
             }
         }
 
@@ -686,30 +912,312 @@
         return occurrences;
     })();
 
+    function generateRecurringInstances(event: CalendarEvent, startDate: Date, endDate: Date): Date[] {
+        const instances: Date[] = [];
+        const eventStart = localDateFromYMD(event.date);
+        const exceptions = new Set(event.exceptions || []);
+        
+        let currentDate = new Date(Math.max(eventStart.getTime(), startDate.getTime()));
+        currentDate.setHours(0, 0, 0, 0);
+
+        while (currentDate <= endDate) {
+            const dateKey = ymd(currentDate);
+            
+            // Check if this instance was deleted
+            if (!exceptions.has(dateKey)) {
+                let shouldInclude = false;
+
+                switch (event.repeat) {
+                    case 'daily':
+                        shouldInclude = currentDate >= eventStart;
+                        break;
+                    
+                    case 'weekly':
+                        const daysSinceStart = Math.floor((currentDate.getTime() - eventStart.getTime()) / (1000 * 60 * 60 * 24));
+                        shouldInclude = daysSinceStart >= 0 && daysSinceStart % 7 === 0;
+                        break;
+                    
+                    case 'monthly':
+                        shouldInclude = currentDate.getDate() === eventStart.getDate() && currentDate >= eventStart;
+                        break;
+                    
+                    case 'yearly':
+                        shouldInclude = currentDate.getMonth() === eventStart.getMonth() && 
+                                      currentDate.getDate() === eventStart.getDate() && 
+                                      currentDate >= eventStart;
+                        break;
+                    
+                    case 'custom':
+                        if (event.repeatOn && event.repeatOn.length > 0) {
+                            const dayOfWeek = currentDate.getDay();
+                            // Convert Sunday (0) to 7 for our Monday-first system
+                            const adjustedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+                            shouldInclude = event.repeatOn.includes(adjustedDay) && currentDate >= eventStart;
+                        }
+                        break;
+                }
+
+                if (shouldInclude) {
+                    instances.push(new Date(currentDate));
+                }
+            }
+
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+
+        return instances;
+    }
+
     let newEventTitle = '';
     let newEventTime = '';
     let newEventDate = '';
+    let newEventRepeat: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom' = 'none';
+    let newEventCustomDays: boolean[] = [false, false, false, false, false, false, false]; // Mon-Sun
+    let newEventColor = '#8C7AE6'; // Default purple color
+    let showRepeatOptions = false;
 
-    function startOfWeek(date: Date, weekStartsOn = 1) {
-        const d = new Date(date);
-        const day = d.getDay();
-        const diff = (day < weekStartsOn ? 7 : 0) + day - weekStartsOn;
-        d.setDate(d.getDate() - diff);
-        d.setHours(0, 0, 0, 0);
-        return d;
+    // Helper function to convert hex color to rgba
+    function hexToRgba(hex: string, alpha: number): string {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
-    function ymd(date: Date) {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+    let showSettingsDropdown = false;
+    let importFileInput: HTMLInputElement;
+    
+    async function exportIndexedDBData() {
+        try {
+            // Ensure database is initialized
+            await db.init();
+            
+            // Get workspaces first - this is the base for all other queries
+            const workspaces = await db.getAllWorkspaces();
+            console.log('Export: Found workspaces:', workspaces.length);
+            
+            if (workspaces.length === 0) {
+                alert('No workspaces found to export.');
+                return;
+            }
+            
+            // Now get all data for each workspace
+            const [folders, notes, calendarEvents, kanban, settings] = await Promise.all([
+                (async () => {
+                    const allFolders: Folder[] = [];
+                    for (const ws of workspaces) {
+                        const wsFolders = await db.getFoldersByWorkspaceId(ws.id);
+                        allFolders.push(...wsFolders);
+                    }
+                    console.log('Export: Found folders:', allFolders.length);
+                    return allFolders;
+                })(),
+                (async () => {
+                    const allNotes: Note[] = [];
+                    for (const ws of workspaces) {
+                        const wsNotes = await db.getNotesByWorkspaceId(ws.id);
+                        allNotes.push(...wsNotes);
+                    }
+                    console.log('Export: Found notes:', allNotes.length);
+                    return allNotes;
+                })(),
+                (async () => {
+                    const allEvents: CalendarEvent[] = [];
+                    for (const ws of workspaces) {
+                        const wsEvents = await db.getCalendarEventsByWorkspaceId(ws.id);
+                        allEvents.push(...wsEvents);
+                    }
+                    console.log('Export: Found calendar events:', allEvents.length);
+                    return allEvents;
+                })(),
+                (async () => {
+                    const allKanban: Kanban[] = [];
+                    for (const ws of workspaces) {
+                        const kanbanData = await db.getKanbanByWorkspaceId(ws.id);
+                        if (kanbanData) {
+                            allKanban.push(kanbanData);
+                        }
+                    }
+                    console.log('Export: Found kanban boards:', allKanban.length);
+                    return allKanban;
+                })(),
+                (async () => {
+                    // Get all settings
+                    if (isTauri) {
+                        // For Tauri, try to get all settings using the database directly
+                        // Since we don't have a getAllSettings function, we'll return empty array for now
+                        // Settings can be workspace-specific and are usually not critical for migration
+                        return [] as Setting[];
+                    } else {
+                        // For IndexedDB, we can get all settings
+                        const sqliteModule = await import('$lib/sqlite');
+                        const allSettings = await sqliteModule.getAll<Setting>('settings');
+                        console.log('Export: Found settings:', allSettings.length);
+                        return allSettings;
+                    }
+                })()
+            ]);
+
+            const exportData = {
+                version: '1.0',
+                exportDate: new Date().toISOString(),
+                data: {
+                    workspaces,
+                    folders,
+                    notes,
+                    calendarEvents,
+                    kanban,
+                    settings
+                }
+            };
+
+            // Log summary for debugging
+            console.log('Export summary:', {
+                workspaces: workspaces.length,
+                folders: folders.length,
+                notes: notes.length,
+                calendarEvents: calendarEvents.length,
+                kanban: kanban.length,
+                settings: settings.length
+            });
+
+            const jsonData = JSON.stringify(exportData, null, 2);
+
+            // Download file - browser downloads automatically go to Downloads folder
+            // In Tauri, the download also goes to the Downloads folder by default
+            const blob = new Blob([jsonData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `neuronotes-export-${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            alert('Data exported successfully! The file has been saved to your Downloads folder (~/Downloads).');
+        } catch (error) {
+            console.error('Export failed:', error);
+            alert(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
-    function dmy(date: Date) {
-        const dd = String(date.getDate()).padStart(2, '0');
-        const mm = String(date.getMonth() + 1).padStart(2, '0');
-        const yyyy = date.getFullYear();
-        return `${dd}-${mm}-${yyyy}`;
+
+    async function handleImportFile(event: Event) {
+        const target = event.target as HTMLInputElement;
+        const file = target.files?.[0];
+        
+        if (!file) return;
+
+        try {
+            const fileContent = await file.text();
+            const importData = JSON.parse(fileContent);
+
+            // Validate import data structure
+            if (!importData.version || !importData.data) {
+                alert('Invalid export file format. Please select a valid export file.');
+                target.value = '';
+                return;
+            }
+
+            // Confirm import (this will replace all current data)
+            const confirmed = confirm(
+                '⚠️ WARNING: Importing data will REPLACE all your current data!\n\n' +
+                'This includes:\n' +
+                '- All workspaces\n' +
+                '- All notes and folders\n' +
+                '- All calendar events\n' +
+                '- All kanban boards\n' +
+                '- All settings\n\n' +
+                'Are you sure you want to continue?'
+            );
+
+            if (!confirmed) {
+                target.value = '';
+                return;
+            }
+
+            await importIndexedDBData(importData.data);
+            
+            // Clear the file input
+            target.value = '';
+            
+            alert('Data imported successfully! The application will reload.');
+            
+            // Reload the page to reflect the imported data
+            window.location.reload();
+        } catch (error) {
+            console.error('Import failed:', error);
+            alert(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+            target.value = '';
+        }
     }
+
+    async function importIndexedDBData(data: {
+        workspaces?: Workspace[];
+        folders?: Folder[];
+        notes?: Note[];
+        calendarEvents?: CalendarEvent[];
+        kanban?: Kanban[];
+        settings?: Setting[];
+    }) {
+        try {
+            // Ensure database is initialized
+            await db.init();
+
+            // Import workspaces first (they're needed for other data)
+            if (data.workspaces && data.workspaces.length > 0) {
+                console.log('Importing workspaces:', data.workspaces.length);
+                for (const workspace of data.workspaces) {
+                    await db.putWorkspace(workspace);
+                }
+            }
+
+            // Import folders
+            if (data.folders && data.folders.length > 0) {
+                console.log('Importing folders:', data.folders.length);
+                for (const folder of data.folders) {
+                    await db.putFolder(folder);
+                }
+            }
+
+            // Import notes
+            if (data.notes && data.notes.length > 0) {
+                console.log('Importing notes:', data.notes.length);
+                for (const note of data.notes) {
+                    await db.putNote(note);
+                }
+            }
+
+            // Import calendar events
+            if (data.calendarEvents && data.calendarEvents.length > 0) {
+                console.log('Importing calendar events:', data.calendarEvents.length);
+                for (const event of data.calendarEvents) {
+                    await db.putCalendarEvent(event);
+                }
+            }
+
+            // Import kanban boards
+            if (data.kanban && data.kanban.length > 0) {
+                console.log('Importing kanban boards:', data.kanban.length);
+                for (const kanban of data.kanban) {
+                    await db.putKanban(kanban);
+                }
+            }
+
+            // Import settings
+            if (data.settings && data.settings.length > 0) {
+                console.log('Importing settings:', data.settings.length);
+                for (const setting of data.settings) {
+                    await db.putSetting(setting);
+                }
+            }
+
+            console.log('Import completed successfully');
+        } catch (error) {
+            console.error('Import error:', error);
+            throw error;
+        }
+    }
+
     function prevWeek() {
         const newDate = new Date(weekStart);
         newDate.setDate(newDate.getDate() - 7);
@@ -724,24 +1232,133 @@
     async function addEvent() {
         if (!newEventTitle.trim() || !newEventDate) return;
 
-        const newEvent: CalendarEvent = {
-            id: crypto.randomUUID(),
-            date: newEventDate,
-            title: newEventTitle.trim(),
-            time: newEventTime || undefined,
-            workspaceId: activeWorkspaceId
-        };
-        await db.putCalendarEvent(newEvent);
-        calendarEvents = [...calendarEvents, newEvent];
-        newEventTitle = '';
-        newEventTime = '';
+        try {
+            const newEvent: CalendarEvent = {
+                id: generateUUID(),
+                date: newEventDate,
+                title: newEventTitle.trim(),
+                time: newEventTime || undefined,
+                workspaceId: activeWorkspaceId,
+                repeat: newEventRepeat,
+                repeatOn: newEventRepeat === 'custom' 
+                    ? newEventCustomDays.map((checked, i) => checked ? i + 1 : -1).filter(d => d > 0)
+                    : undefined,
+                exceptions: [],
+                color: newEventColor
+            };
+            await db.putCalendarEvent(newEvent);
+            calendarEvents = [...calendarEvents, newEvent];
+            newEventTitle = '';
+            newEventTime = '';
+            newEventRepeat = 'none';
+            newEventCustomDays = [false, false, false, false, false, false, false];
+            newEventColor = '#8C7AE6'; // Reset to default
+            showRepeatOptions = false;
+        } catch (error) {
+            console.error('Failed to add event:', error);
+            alert('Failed to create event. Please try again.');
+        }
     }
 
-    async function deleteEvent(event: CalendarEvent) {
-        if (confirm(`Are you sure you want to delete "${event.title}"?`)) {
-            await db.deleteCalendarEvent(event.id);
-            calendarEvents = calendarEvents.filter((e) => e.id !== event.id);
+    async function deleteEvent(event: CalendarEvent, specificDate?: string) {
+        if (!event.repeat || event.repeat === 'none') {
+            // Non-repeating event
+            if (confirm(`Are you sure you want to delete "${event.title}"?`)) {
+                await db.deleteCalendarEvent(event.id);
+                calendarEvents = calendarEvents.filter((e) => e.id !== event.id);
+            }
+        } else {
+            // Repeating event - give options
+            const choice = await showDeleteRecurringDialog(event.title);
+            
+            if (choice === 'this') {
+                // Delete only this instance
+                if (specificDate) {
+                    const updatedEvent = { 
+                        ...event, 
+                        exceptions: [...(event.exceptions || []), specificDate] 
+                    };
+                    await db.putCalendarEvent(updatedEvent);
+                    const index = calendarEvents.findIndex((e) => e.id === event.id);
+                    if (index !== -1) {
+                        calendarEvents[index] = updatedEvent;
+                        calendarEvents = [...calendarEvents];
+                    }
+                }
+            } else if (choice === 'all') {
+                // Delete all instances
+                await db.deleteCalendarEvent(event.id);
+                calendarEvents = calendarEvents.filter((e) => e.id !== event.id);
+            }
+            // If 'cancel', do nothing
         }
+    }
+
+    function showDeleteRecurringDialog(title: string): Promise<'this' | 'all' | 'cancel'> {
+        return new Promise((resolve) => {
+            const message = `"${title}" is a repeating event.\n\nDelete only this occurrence or all future occurrences?`;
+            
+            // Create custom dialog
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+            `;
+            
+            const content = document.createElement('div');
+            content.style.cssText = `
+                background: var(--panel-bg);
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                padding: 24px;
+                max-width: 400px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            `;
+            
+            content.innerHTML = `
+                <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${message}</div>
+                <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                    <button id="delete-this" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-bg); color: var(--text); cursor: pointer;">Delete This Event</button>
+                    <button id="delete-all" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--accent-red); background: rgba(255, 71, 87, 0.1); color: #ff6b81; cursor: pointer;">Delete All Events</button>
+                    <button id="cancel" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-bg); color: var(--text); cursor: pointer;">Cancel</button>
+                </div>
+            `;
+            
+            dialog.appendChild(content);
+            document.body.appendChild(dialog);
+            
+            const cleanup = () => document.body.removeChild(dialog);
+            
+            content.querySelector('#delete-this')?.addEventListener('click', () => {
+                cleanup();
+                resolve('this');
+            });
+            
+            content.querySelector('#delete-all')?.addEventListener('click', () => {
+                cleanup();
+                resolve('all');
+            });
+            
+            content.querySelector('#cancel')?.addEventListener('click', () => {
+                cleanup();
+                resolve('cancel');
+            });
+            
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) {
+                    cleanup();
+                    resolve('cancel');
+                }
+            });
+        });
     }
 
     let kanban: Column[] = [];
@@ -765,7 +1382,7 @@
         kanban = [
             ...kanban,
             {
-                id: crypto.randomUUID(),
+                id: generateUUID(),
                 title: 'New Column',
                 tasks: [],
                 isCollapsed: false
@@ -783,12 +1400,24 @@
     }
 
     function deleteColumn(colId: string) {
+        const col = kanban.find((c) => c.id === colId);
+        if (!col) return;
+        
+        const taskCount = col.tasks.length;
+        const taskWarning = taskCount > 0 
+            ? ` This will also permanently delete ${taskCount} task${taskCount === 1 ? '' : 's'} in this column.`
+            : '';
+        
+        if (!confirm(`Are you sure you want to delete the column "${col.title}"?${taskWarning} This action cannot be undone.`)) {
+            return;
+        }
+        
         kanban = kanban.filter((c) => c.id !== colId);
     }
 
     function addTask(col: Column, text: string) {
         if (!text.trim()) return;
-        col.tasks.push({ id: crypto.randomUUID(), text: text.trim() });
+        col.tasks.push({ id: generateUUID(), text: text.trim() });
         kanban = [...kanban];
     }
 
@@ -996,10 +1625,27 @@
         ]);
         folders = loadedFolders.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         notes = loadedNotes;
-        selectedNoteId =
+        const initialSelectedId =
             loadedNotes.find((n) => n.id === selectedNoteSetting?.value)?.id ??
             loadedNotes.find((n) => n.folderId === null)?.id ??
             '';
+        selectedNoteId = initialSelectedId;
+
+        // Load content for initially selected note
+        if (initialSelectedId) {
+            const note = loadedNotes.find((n) => n.id === initialSelectedId);
+            if (note && note.contentHTML === '') {
+                try {
+                    note.contentHTML = await db.getNoteContent(initialSelectedId);
+                    const noteWithMeta = note as any;
+                    noteWithMeta._contentLoaded = true;
+                    // Trigger reactivity update
+                    notes = [...notes];
+                } catch (e) {
+                    console.error('Failed to load initial note content:', e);
+                }
+            }
+        }
 
         calendarEvents = events;
         kanban = kData ? kData.columns : [];
@@ -1019,7 +1665,7 @@
                 workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
             } else {
                 const defaultWorkspace: Workspace = {
-                    id: crypto.randomUUID(),
+                    id: generateUUID(),
                     name: 'My Workspace',
                     order: 0
                 };
@@ -1054,6 +1700,10 @@
         return () => {
             document.removeEventListener('selectionchange', updateSelectedFontSize);
             if (timer) clearInterval(timer);
+            // Clean up any remaining event listeners
+            cleanupResizeListeners();
+            // Flush any pending updates
+            debouncedUpdateNote.flush();
         };
     });
 </script>
@@ -1072,7 +1722,7 @@
                     on:dragstart={(e) => handleWorkspaceDragStart(e, ws.id)}
                     on:dragover|preventDefault
                     on:drop={(e) => handleWorkspaceDrop(e, i)}
-                    on:dragend={() => (draggedWorkspaceId = null)}
+                    on:dragend={handleWorkspaceDragEnd}
                     on:click={() => switchWorkspace(ws.id)}
                 >
                     {#if editingWorkspaceId === ws.id}
@@ -1110,7 +1760,37 @@
         </div>
 
         <div class="spacer"></div>
-        <div class="nav-right-placeholder"></div>
+        
+        <div class="settings-container">
+            <button 
+                class="settings-btn"
+                class:active={showSettingsDropdown}
+                on:click={() => showSettingsDropdown = !showSettingsDropdown}
+                title="Settings"
+            >
+                ⚙️
+            </button>
+            {#if showSettingsDropdown}
+                <div class="settings-dropdown" use:settingsDropdown>
+                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; exportIndexedDBData(); }}>
+                        Export Data
+                    </button>
+                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; importFileInput?.click(); }}>
+                        Import Data
+                    </button>
+                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; /* TODO: Edit Panels */ }}>
+                        Edit Panels
+                    </button>
+                </div>
+            {/if}
+            <input
+                type="file"
+                accept=".json"
+                bind:this={importFileInput}
+                style="display: none;"
+                on:change={handleImportFile}
+            />
+        </div>
     </div>
 
     <div
@@ -1215,39 +1895,45 @@
                             </div>
                             <button
                                 class="toolbar-btn"
-                                on:click={() => applyFormat('bold')}
+                                on:click={() => applyFormatCommand('bold')}
                                 on:mousedown={(e) => e.preventDefault()}
                                 title="Bold"
                                 style="font-weight: bold;">B</button
                             >
                             <button
                                 class="toolbar-btn"
-                                on:click={() => applyFormat('italic')}
+                                on:click={() => applyFormatCommand('italic')}
                                 on:mousedown={(e) => e.preventDefault()}
                                 title="Italic"
                                 style="font-style: italic;">I</button
                             >
                             <button
                                 class="toolbar-btn"
-                                on:click={() => applyFormat('insertUnorderedList')}
+                                on:click={() => applyFormatCommand('insertUnorderedList')}
                                 on:mousedown={(e) => e.preventDefault()}
                                 title="Dotted list">●</button
                             >
                             <button
                                 class="toolbar-btn"
-                                on:click={() => applyFormat('justifyLeft')}
+                                on:click={insertCheckbox}
+                                on:mousedown={(e) => e.preventDefault()}
+                                title="Insert checkbox">☑</button
+                            >
+                            <button
+                                class="toolbar-btn"
+                                on:click={() => applyFormatCommand('justifyLeft')}
                                 on:mousedown={(e) => e.preventDefault()}
                                 title="Align left">◧</button
                             >
                             <button
                                 class="toolbar-btn"
-                                on:click={() => applyFormat('justifyCenter')}
+                                on:click={() => applyFormatCommand('justifyCenter')}
                                 on:mousedown={(e) => e.preventDefault()}
                                 title="Align center">◫</button
                             >
                             <button
                                 class="toolbar-btn"
-                                on:click={() => applyFormat('justifyRight')}
+                                on:click={() => applyFormatCommand('justifyRight')}
                                 on:mousedown={(e) => e.preventDefault()}
                                 title="Align right">◨</button
                             >
@@ -1336,23 +2022,55 @@
                                     class:drag-over={dragOverFolderId === item.id}
                                     draggable="true"
                                     on:click={() => {
-                                        if (editingFolderId !== item.id) openFolder(item.id);
-                                    }}
-                                    on:dragstart={(e) => handleDragStart(e, item)}
-                                    on:dragover={(e) => {
-                                        e.preventDefault();
-                                        dropIndex = i;
-                                        const data = e.dataTransfer?.getData('application/json');
-                                        if (data && JSON.parse(data).displayType === 'note') {
-                                            dragOverFolderId = item.id;
+                                        if (!isDragging && editingFolderId !== item.id) {
+                                            openFolder(item.id);
                                         }
                                     }}
-                                    on:dragleave={() => (dragOverFolderId = null)}
-                                    on:drop|preventDefault={(e) => {
-                                        const data = e.dataTransfer?.getData('application/json');
-                                        if (data && JSON.parse(data).displayType === 'note') {
-                                            handleDropOnFolder(e, item);
+                                    on:dragstart={(e) => {
+                                        e.stopPropagation();
+                                        handleDragStart(e, item);
+                                    }}
+                                    on:dragover|preventDefault|stopPropagation={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (e.dataTransfer) {
+                                            e.dataTransfer.dropEffect = 'move';
+                                        }
+                                        dropIndex = i;
+                                        if (draggedItemType === 'note') {
+                                            dragOverFolderId = item.id;
                                         } else {
+                                            dragOverFolderId = null;
+                                        }
+                                    }}
+                                    on:dragleave={() => {
+                                        dragOverFolderId = null;
+                                        dropIndex = null;
+                                    }}
+                                    on:dragend={() => {
+                                        isDragging = false;
+                                        draggedItemType = null;
+                                        dragOverFolderId = null;
+                                        dropIndex = null;
+                                    }}
+                                    on:drop|preventDefault|stopPropagation={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const data = e.dataTransfer?.getData('application/json');
+                                        if (data) {
+                                            try {
+                                                const parsed = JSON.parse(data);
+                                                if (parsed.displayType === 'note') {
+                                                    handleDropOnFolder(e, item);
+                                                } else {
+                                                    handleReorderDrop(e, i);
+                                                }
+                                            } catch (err) {
+                                                // Fallback to reorder if parsing fails
+                                                handleReorderDrop(e, i);
+                                            }
+                                        } else {
+                                            // No data, try to reorder anyway
                                             handleReorderDrop(e, i);
                                         }
                                     }}
@@ -1389,10 +2107,25 @@
                                     class="note-item {selectedNoteId === item.id ? 'active' : ''}"
                                     on:click={() => selectNote(item.id)}
                                     draggable="true"
-                                    on:dragstart={(e) => handleDragStart(e, item)}
+                                    on:dragstart={(e) => {
+                                        e.stopPropagation();
+                                        handleDragStart(e, item);
+                                    }}
                                     on:dragover|preventDefault|stopPropagation={(e) => {
                                         e.preventDefault();
+                                        e.stopPropagation();
+                                        if (e.dataTransfer) {
+                                            e.dataTransfer.dropEffect = 'move';
+                                        }
                                         dropIndex = i;
+                                    }}
+                                    on:dragleave={() => {
+                                        dropIndex = null;
+                                    }}
+                                    on:dragend={() => {
+                                        isDragging = false;
+                                        draggedItemType = null;
+                                        dropIndex = null;
                                     }}
                                     on:drop|preventDefault|stopPropagation={(e) =>
                                         handleReorderDrop(e, i)}
@@ -1438,11 +2171,11 @@
                     <div class="note-editor">
                         {#if currentNote}
                             {#key currentNote.id}
-                                {#if currentNote.type === 'spreadsheet' && currentNote.spreadsheet}
+                                {#if parsedCurrentNote && parsedCurrentNote.type === 'spreadsheet' && parsedCurrentNote.spreadsheet}
                                     <div class="spreadsheet-wrapper">
                                         <Spreadsheet
                                             bind:this={spreadsheetComponentInstance}
-                                            bind:spreadsheetData={currentNote.spreadsheet}
+                                            bind:spreadsheetData={parsedCurrentNote.spreadsheet}
                                             bind:selectedCell={selectedSheetCell}
                                             bind:selection={sheetSelection}
                                             on:update={() => {
@@ -1461,7 +2194,7 @@
                                             bind:this={editorDiv}
                                             bind:innerHTML={currentNote.contentHTML}
                                             on:input={() => debouncedUpdateNote(currentNote)}
-                                            on:paste={handlePaste}
+                                            on:paste={handlePlainTextPaste}
                                         />
                                     </div>
                                 {/if}
@@ -1529,17 +2262,26 @@
                             <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
                                 <div class="date">{dmy(d)}</div>
                                 <div class="day-name">{DAY_NAMES[d.getDay()]}</div>
-                                {#each eventsByDay[ymd(d)] || [] as ev (ev.id + ev.date)}
-                                    <div class="event" title={ev.title}>
+                                {#each eventsByDay[ymd(d)] || [] as ev (ev.id + ymd(d))}
+                                    <div 
+                                        class="event" 
+                                        title={ev.title}
+                                        style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
+                                    >
                                         <div class="event-details">
                                             {#if ev.time}
-                                                <div class="time">{ev.time}</div>
+                                                <div 
+                                                    class="time"
+                                                    style="color: {ev.color || 'var(--accent-purple)'};"
+                                                >
+                                                    {ev.time}
+                                                </div>
                                             {/if}
                                             <div class="title">{ev.title}</div>
                                         </div>
                                         <button
                                             class="delete-event-btn"
-                                            on:click={() => deleteEvent(ev)}
+                                            on:click={() => deleteEvent(ev, ymd(d))}
                                             title="Delete event"
                                         >
                                             ×
@@ -1559,11 +2301,67 @@
                             placeholder="Event title"
                             aria-label="Event title"
                             on:keydown={(e) => {
-                                if (e.key === 'Enter') addEvent();
+                                if (e.key === 'Enter' && !showRepeatOptions) addEvent();
                             }}
                         />
+                        <input
+                            type="color"
+                            bind:value={newEventColor}
+                            aria-label="Event color"
+                            class="color-picker"
+                            title="Choose event color"
+                        />
+                        <button 
+                            class="small-btn" 
+                            class:active={showRepeatOptions}
+                            on:click={() => showRepeatOptions = !showRepeatOptions}
+                            title="Repeat options"
+                        >
+                            🔁
+                        </button>
                         <button class="small-btn" on:click={addEvent}>Add</button>
                     </div>
+
+                    {#if showRepeatOptions}
+                        <div class="repeat-options">
+                            <div class="repeat-option-row">
+                                <label>
+                                    <input type="radio" bind:group={newEventRepeat} value="none" />
+                                    No repeat
+                                </label>
+                                <label>
+                                    <input type="radio" bind:group={newEventRepeat} value="daily" />
+                                    Daily
+                                </label>
+                                <label>
+                                    <input type="radio" bind:group={newEventRepeat} value="weekly" />
+                                    Weekly
+                                </label>
+                                <label>
+                                    <input type="radio" bind:group={newEventRepeat} value="monthly" />
+                                    Monthly
+                                </label>
+                                <label>
+                                    <input type="radio" bind:group={newEventRepeat} value="yearly" />
+                                    Yearly
+                                </label>
+                                <label>
+                                    <input type="radio" bind:group={newEventRepeat} value="custom" />
+                                    Custom days
+                                </label>
+                            </div>
+                            {#if newEventRepeat === 'custom'}
+                                <div class="custom-days">
+                                    {#each ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as day, i}
+                                        <label class="day-checkbox">
+                                            <input type="checkbox" bind:checked={newEventCustomDays[i]} />
+                                            {day}
+                                        </label>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    {/if}
                 {:else if !isCalendarMinimized}
                     <div style="padding:16px; color: var(--text-muted);">Loading…</div>
                 {/if}
@@ -1811,6 +2609,61 @@
         flex-shrink: 0;
     }
 
+    .settings-container {
+        position: relative;
+        flex-shrink: 0;
+    }
+    .settings-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 18px;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+    }
+    .settings-btn:hover {
+        border-color: var(--accent-red);
+        background: var(--panel-bg-darker);
+    }
+    .settings-btn.active {
+        border-color: var(--accent-red);
+        background: rgba(255, 71, 87, 0.1);
+    }
+    .settings-dropdown {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 4px;
+        min-width: 180px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 1000;
+    }
+    .settings-item {
+        width: 100%;
+        padding: 8px 12px;
+        background: transparent;
+        border: none;
+        color: var(--text);
+        text-align: left;
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 13px;
+        transition: background-color 0.2s;
+    }
+    .settings-item:hover {
+        background: var(--panel-bg-darker);
+    }
+
     /* Workspace Tabs Styles */
     .workspace-tabs {
         display: flex;
@@ -1946,6 +2799,8 @@
         overflow-x: auto;
         scrollbar-width: none;
         -ms-overflow-style: none;
+        flex-shrink: 0;
+        max-width: 100%;
     }
     .notes-actions::-webkit-scrollbar {
         display: none;
@@ -2014,6 +2869,12 @@
     .folder-item {
         background-color: rgba(140, 122, 230, 0.1);
         font-weight: 500;
+        width: 100%;
+        border: none;
+        text-align: left;
+        font-family: inherit;
+        justify-content: flex-start;
+        color: var(--text);
     }
     .folder-item.drag-over {
         background-color: rgba(140, 122, 230, 0.3);
@@ -2023,7 +2884,8 @@
         background: rgba(255, 71, 87, 0.15);
     }
     .note-item .title,
-    .folder-item .title {
+    .folder-item .title,
+    .folder-item .name {
         font-size: 14px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -2078,6 +2940,17 @@
     }
     .contenteditable:focus {
         border-color: var(--accent-red);
+    }
+    
+    /* Checkbox styling in notes */
+    :global(.note-checkbox) {
+        margin-right: 6px;
+        vertical-align: middle;
+        cursor: pointer;
+        accent-color: rgba(255, 71, 87, 0.6);
+        width: 14px;
+        height: 14px;
+        opacity: 0.8;
     }
 
     .spreadsheet-wrapper {
@@ -2202,6 +3075,22 @@
         font-variant-numeric: tabular-nums;
         font-weight: 500;
     }
+    .color-picker {
+        width: 40px;
+        height: 32px;
+        padding: 2px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        cursor: pointer;
+        background: var(--panel-bg-darker);
+    }
+    .color-picker::-webkit-color-swatch-wrapper {
+        padding: 0;
+    }
+    .color-picker::-webkit-color-swatch {
+        border: none;
+        border-radius: 6px;
+    }
     .delete-event-btn {
         display: flex;
         background: rgba(0, 0, 0, 0.2);
@@ -2269,6 +3158,60 @@
     .calendar-add input::-webkit-calendar-picker-indicator:hover {
         opacity: 1;
     }
+
+    .repeat-options {
+        padding: 12px 16px;
+        border-top: 1px solid var(--border);
+        background: var(--panel-bg-darker);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .repeat-option-row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+    .repeat-option-row label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        color: var(--text);
+    }
+    .repeat-option-row input[type="radio"] {
+        cursor: pointer;
+        accent-color: var(--accent-red);
+    }
+    .custom-days {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding-top: 4px;
+    }
+    .day-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .day-checkbox:hover {
+        border-color: var(--accent-red);
+    }
+    .day-checkbox input[type="checkbox"] {
+        cursor: pointer;
+        accent-color: var(--accent-red);
+        width: 14px;
+        height: 14px;
+    }
+
     .small-btn {
         background: var(--panel-bg);
         border: 1px solid var(--border);
@@ -2284,6 +3227,10 @@
     }
     .small-btn:hover {
         border-color: var(--accent-red);
+    }
+    .small-btn.active {
+        border-color: var(--accent-red);
+        background: rgba(255, 71, 87, 0.1);
     }
     .danger:hover {
         border-color: var(--accent-red);
@@ -2334,6 +3281,7 @@
     .kanban-col.collapsed .kanban-col-header {
         justify-content: center;
         border-bottom: none;
+        padding: 8px 0;
     }
     .kanban-col-title-text {
         font-weight: 600;
@@ -2343,6 +3291,9 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+    .kanban-col.collapsed .kanban-col-title-text {
+        display: none;
     }
     .kanban-col-header input {
         background: transparent;
@@ -2356,11 +3307,7 @@
         font-size: 0.9rem;
     }
     .kanban-col.collapsed .kanban-col-header input {
-        text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        pointer-events: none;
+        display: none;
     }
     .kanban-tasks {
         padding: 10px;
@@ -2602,6 +3549,14 @@
         }
         .nav-right-placeholder {
             display: none;
+        }
+        .settings-container {
+            position: static;
+        }
+        .settings-dropdown {
+            right: auto;
+            left: 50%;
+            transform: translateX(-50%);
         }
         .notes {
             grid-template-columns: 1fr;

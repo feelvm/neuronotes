@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "neuronotes",
-  "version": "0.1.2",
+  "version": "0.1.9",
   "identifier": "com.neuronotes.app",
   "build": {
     "frontendDist": "../build",
@@ -13,13 +13,17 @@
     "windows": [
       {
         "title": "neuronotes",
-        "width": 1920,
-        "height": 1080,
+        "width": 1280,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 600,
         "resizable": true,
         "fullscreen": false
       }
     ],
-    "security": { "csp": null }
+    "security": { 
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;"
+    }
   },
   "bundle": {
     "active": true,

@@ -1,11 +1,50 @@
 // src/lib/db.ts
 // Database abstraction layer that works in both Tauri and browser environments
 
-import { browser } from '$app/environment';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 
 // Check if running in Tauri environment
-const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+// Use a function to check dynamically since __TAURI__ might not be available at module load time
+async function checkIsTauri(): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  
+  // Check for __TAURI__ object (Tauri 1.x style)
+  if ('__TAURI__' in window || (window as any).__TAURI_INTERNALS__ !== undefined) {
+    return true;
+  }
+  
+  // Try to detect Tauri 2.x by checking if the SQL plugin can be imported
+  // This is reliable because the plugin only works in Tauri environment
+  try {
+    const Database = await import('@tauri-apps/plugin-sql');
+    if (Database && typeof Database.default !== 'undefined') {
+      // If we can import the SQL plugin, we're in Tauri
+      // Try to load a test database to confirm
+      try {
+        const testDb = await Database.default.load('sqlite:test_check.db');
+        // Close the test database immediately to avoid leaks
+        await testDb.close();
+        return true;
+      } catch (e) {
+        // Loading failed - check if it's a Tauri API error (not available) or something else
+        const errorMsg = String(e);
+        if (errorMsg.includes('Tauri') || errorMsg.includes('plugin') || errorMsg.includes('not available')) {
+          return false; // Definitely not Tauri
+        }
+        // If it's a different error, we might be in Tauri but DB creation failed
+        // Return true optimistically since we could import the plugin
+        return true;
+      }
+    }
+  } catch (e) {
+    // Import failed, definitely not Tauri
+    return false;
+  }
+  
+  return false;
+}
+
+let isTauri: boolean = typeof window !== 'undefined' && ('__TAURI__' in window || (window as any).__TAURI_INTERNALS__ !== undefined);
 
 // Database client interface
 interface DbClient {
@@ -17,6 +56,7 @@ interface DbClient {
   putFolder?: (folder: Folder) => Promise<void>;
   deleteFolder?: (id: string) => Promise<void>;
   getNotesByWorkspaceId?: (workspaceId: string) => Promise<Note[]>;
+  getNoteContent?: (noteId: string) => Promise<string>;
   putNote?: (note: Note) => Promise<void>;
   deleteNote?: (id: string) => Promise<void>;
   getCalendarEventsByWorkspaceId?: (workspaceId: string) => Promise<CalendarEvent[]>;
@@ -39,11 +79,16 @@ let dbClient: DbClient | null = null;
 // --- Database Initialization ---
 
 export async function init(): Promise<void> {
+  // Re-check Tauri environment on init to ensure we have the latest state
+  isTauri = await checkIsTauri();
+  
   if (!dbClient) {
     if (isTauri) {
+      console.log('[db] Using Tauri SQLite database');
       const module = await import('./tauri_db');
       dbClient = module;
     } else {
+      console.log('[db] Using IndexedDB (browser mode)');
       const module = await import('./sqlite');
       dbClient = module;
     }
@@ -51,6 +96,16 @@ export async function init(): Promise<void> {
 
   if (dbClient?.init) {
     await dbClient.init();
+  }
+
+  // If in Tauri environment, check if we need to migrate from IndexedDB
+  if (isTauri) {
+    try {
+      const { migrateFromIndexedDBToSQLite } = await import('./db_migration');
+      await migrateFromIndexedDBToSQLite();
+    } catch (error) {
+      console.warn('[db] Migration check failed (this is OK if IndexedDB is not available):', error);
+    }
   }
 }
 
@@ -124,6 +179,17 @@ export async function getNotesByWorkspaceId(workspaceId: string): Promise<Note[]
     return await dbClient.getAllByIndex('notes', 'workspaceId', workspaceId);
   }
   return [];
+}
+
+export async function getNoteContent(noteId: string): Promise<string> {
+  await ensureClient();
+  if (isTauri && dbClient?.getNoteContent) {
+    return await dbClient.getNoteContent(noteId);
+  } else if (dbClient?.get) {
+    const note = await dbClient.get<Note>('notes', noteId);
+    return note?.contentHTML || '';
+  }
+  return '';
 }
 
 export async function putNote(note: Note): Promise<void> {
@@ -337,6 +403,9 @@ export async function getAllByIndex<T>(
 // --- Helper Functions ---
 
 async function ensureClient(): Promise<void> {
+  // Re-check Tauri environment to ensure we have the latest state
+  isTauri = await checkIsTauri();
+  
   if (!dbClient) {
     if (isTauri) {
       const module = await import('./tauri_db');
@@ -350,3 +419,40 @@ async function ensureClient(): Promise<void> {
 
 // Export the check for Tauri environment
 export { isTauri };
+
+// Export verification function - useful for debugging
+export async function verifyDatabaseStatus() {
+  const { verifyDatabaseStatus: verify } = await import('./db_migration');
+  const status = await verify();
+  console.log('[db] Database Status:', status);
+  console.log('[db] Current isTauri value:', isTauri);
+  console.log('[db] window.__TAURI__ exists:', '__TAURI__' in window);
+  console.log('[db] window location:', window.location.href);
+  return status;
+}
+
+// Debug function to check Tauri detection
+export async function debugTauriDetection() {
+  console.log('=== Tauri Detection Debug ===');
+  console.log('window exists:', typeof window !== 'undefined');
+  if (typeof window !== 'undefined') {
+    console.log('window.__TAURI__:', '__TAURI__' in window);
+    console.log('window.__TAURI_INTERNALS__:', (window as any).__TAURI_INTERNALS__ !== undefined);
+    console.log('window.location:', window.location.href);
+    try {
+      const Database = await import('@tauri-apps/plugin-sql');
+      console.log('SQL plugin import successful:', !!Database);
+    } catch (e) {
+      console.log('SQL plugin import failed:', e);
+    }
+  }
+  const detected = await checkIsTauri();
+  console.log('Final detection result:', detected);
+  return detected;
+}
+
+// Make verification function available globally for easy console access
+if (typeof window !== 'undefined') {
+  (window as any).verifyDatabase = verifyDatabaseStatus;
+  (window as any).debugTauri = debugTauriDetection;
+}

@@ -14,8 +14,14 @@ let db: Database | null = null;
  */
 export async function init(): Promise<void> {
   if (!db) {
-    // Load the SQLite database - path is relative to app data directory
-    db = await Database.load('sqlite:neuronotes.db');
+    try {
+      // Load the SQLite database - path is relative to app data directory
+      db = await Database.load('sqlite:neuronotes.db');
+      console.log('[tauri_db] SQLite database initialized successfully');
+    } catch (error) {
+      console.error('[tauri_db] Failed to initialize SQLite database:', error);
+      throw error;
+    }
   }
 }
 
@@ -59,7 +65,13 @@ export async function getFoldersByWorkspaceId(workspaceId: string): Promise<Fold
     'SELECT * FROM folders WHERE workspace_id = $1 ORDER BY "order"',
     [workspaceId]
   );
-  return result as Folder[];
+  // Map database fields (snake_case) to TypeScript naming (camelCase)
+  return (result as any[]).map((folder) => ({
+    id: folder.id,
+    name: folder.name,
+    workspaceId: folder.workspace_id,
+    order: folder.order
+  })) as Folder[];
 }
 
 export async function putFolder(folder: Folder): Promise<void> {
@@ -79,29 +91,65 @@ export async function deleteFolder(id: string): Promise<void> {
 
 export async function getNotesByWorkspaceId(workspaceId: string): Promise<Note[]> {
   const database = await ensureDb();
+  // Only load metadata initially, not contentHTML - lazy load it when note is opened
+  // This saves significant memory when many notes with large content exist
   const result = await database.select(
-    'SELECT * FROM notes WHERE workspace_id = $1 ORDER BY "order"',
+    'SELECT id, title, updated_at, workspace_id, folder_id, "order", type, spreadsheet FROM notes WHERE workspace_id = $1 ORDER BY "order"',
     [workspaceId]
   );
 
-  // Parse spreadsheet JSON if it exists
-  return (result as any[]).map((note) => ({
-    ...note,
-    // Map database fields to TypeScript naming
-    contentHTML: note.content_html,
-    updatedAt: note.updated_at,
-    workspaceId: note.workspace_id,
-    folderId: note.folder_id,
-    type: note.type,
-    spreadsheet: note.spreadsheet ? JSON.parse(note.spreadsheet) : undefined
-  })) as Note[];
+  // Don't parse spreadsheet JSON immediately - lazy load it when note is opened
+  // This saves significant memory when many spreadsheets exist
+  // We store the raw JSON string in a hidden property and parse it on demand
+  return (result as any[]).map((note) => {
+    const mappedNote: any = {
+      ...note,
+      // Map database fields to TypeScript naming
+      contentHTML: '', // Will be loaded lazily when note is opened
+      updatedAt: note.updated_at,
+      workspaceId: note.workspace_id,
+      folderId: note.folder_id,
+      type: note.type,
+      // Only set spreadsheet if note type is spreadsheet, otherwise undefined
+      spreadsheet: note.type === 'spreadsheet' && note.spreadsheet ? undefined : undefined,
+      // Store raw spreadsheet JSON string for lazy parsing
+      _spreadsheetJson: note.type === 'spreadsheet' && note.spreadsheet ? note.spreadsheet : undefined,
+      // Mark that contentHTML needs to be loaded
+      _contentLoaded: false
+    };
+    return mappedNote;
+  }) as Note[];
+}
+
+// Load full note content (including contentHTML) when needed
+export async function getNoteContent(noteId: string): Promise<string> {
+  const database = await ensureDb();
+  const result = await database.select(
+    'SELECT content_html FROM notes WHERE id = $1',
+    [noteId]
+  );
+  return (result as any[])[0]?.content_html || '';
 }
 
 export async function putNote(note: Note): Promise<void> {
   const database = await ensureDb();
 
   // Convert spreadsheet to JSON string if it exists
-  const spreadsheetJson = note.spreadsheet ? JSON.stringify(note.spreadsheet) : null;
+  // Handle both string (from lazy loading) and object (parsed) formats
+  let spreadsheetJson: string | null = null;
+  const noteWithRaw = note as any;
+  
+  // Check if we have a parsed spreadsheet
+  if (note.spreadsheet) {
+    if (typeof note.spreadsheet === 'string') {
+      spreadsheetJson = note.spreadsheet; // Already a string
+    } else {
+      spreadsheetJson = JSON.stringify(note.spreadsheet); // Parse object to string
+    }
+  } else if (noteWithRaw._spreadsheetJson) {
+    // Fallback to raw JSON if spreadsheet hasn't been parsed yet
+    spreadsheetJson = noteWithRaw._spreadsheetJson;
+  }
 
   await database.execute(
     'INSERT OR REPLACE INTO notes (id, title, content_html, updated_at, workspace_id, folder_id, "order", type, spreadsheet) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
@@ -134,18 +182,42 @@ export async function getCalendarEventsByWorkspaceId(
     workspaceId
   ]);
 
-  // Map database fields to TypeScript naming
+  // Map database fields to TypeScript naming and parse JSON fields
   return (result as any[]).map((event) => ({
-    ...event,
-    workspaceId: event.workspace_id
+    id: event.id,
+    date: event.date,
+    title: event.title,
+    time: event.time,
+    workspaceId: event.workspace_id,
+    repeat: event.repeat || 'none',
+    repeatOn: event.repeat_on ? JSON.parse(event.repeat_on) : undefined,
+    repeatEnd: event.repeat_end,
+    exceptions: event.exceptions ? JSON.parse(event.exceptions) : [],
+    color: event.color || undefined
   })) as CalendarEvent[];
 }
 
 export async function putCalendarEvent(event: CalendarEvent): Promise<void> {
   const database = await ensureDb();
+  
+  // Convert arrays to JSON strings for storage
+  const repeatOnJson = event.repeatOn ? JSON.stringify(event.repeatOn) : null;
+  const exceptionsJson = event.exceptions ? JSON.stringify(event.exceptions) : null;
+  
   await database.execute(
-    'INSERT OR REPLACE INTO calendarEvents (id, date, title, time, workspace_id) VALUES ($1, $2, $3, $4, $5)',
-    [event.id, event.date, event.title, event.time, event.workspaceId]
+    'INSERT OR REPLACE INTO calendarEvents (id, date, title, time, workspace_id, repeat, repeat_on, repeat_end, exceptions, color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+    [
+      event.id, 
+      event.date, 
+      event.title, 
+      event.time, 
+      event.workspaceId,
+      event.repeat || 'none',
+      repeatOnJson,
+      event.repeatEnd,
+      exceptionsJson,
+      event.color || null
+    ]
   );
 }
 

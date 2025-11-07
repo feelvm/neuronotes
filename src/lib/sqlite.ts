@@ -1,98 +1,9 @@
 import { browser } from '$app/environment';
+import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 
 // --- Constants ---
 const DB_NAME = 'NeuronotesDB';
 const DB_VERSION = 2;
-
-// --- Database Schema & Types ---
-
-/** Represents a single workspace. */
-export type Workspace = {
-  id: string;
-  name: string;
-  order?: number; // Used for drag-and-drop reordering
-};
-
-/** Represents a folder within a workspace, used to organize notes. */
-export type Folder = {
-  id: string;
-  name: string;
-  workspaceId: string;
-  order: number;
-};
-
-/** Defines the style properties applicable to a spreadsheet cell. */
-export type SpreadsheetCellStyle = {
-  fontWeight?: 'bold' | 'normal';
-  fontStyle?: 'italic' | 'normal';
-  textAlign?: 'left' | 'center' | 'right';
-};
-
-/** Represents a single cell in a spreadsheet. */
-export type SpreadsheetCell = {
-  value: string;
-  style?: SpreadsheetCellStyle;
-  rowspan?: number;
-  colspan?: number;
-  merged?: boolean; // True if this cell is part of a merge, but not the top-left anchor
-};
-
-/** The main data structure for a spreadsheet note. */
-export type Spreadsheet = {
-  data: SpreadsheetCell[][];
-  rowHeights: Record<number, number>;
-  colWidths: Record<number, number>;
-};
-
-/** Represents a note, which can be a standard text note or a spreadsheet. */
-export type Note = {
-  id: string;
-  title: string;
-  contentHTML: string;
-  updatedAt: number;
-  workspaceId: string;
-  folderId: string | null;
-  order: number;
-  type?: 'text' | 'spreadsheet';
-  spreadsheet?: Spreadsheet;
-};
-
-/** Represents an event in the calendar. */
-export type CalendarEvent = {
-  id: string;
-  date: string; // YYYY-MM-DD format (start date for recurring)
-  title: string;
-  time?: string; // HH:MM format
-  workspaceId: string;
-  repeat?: 'none' | 'weekly' | 'monthly' | 'yearly';
-  // For weekly repeats: an array of day numbers (0=Sun, 1=Mon, etc.)
-  repeatOn?: number[];
-  // Stores 'YYYY-MM-DD' dates of single recurring instances that were deleted.
-  exceptions?: string[];
-};
-
-/** Represents a single task card in a Kanban column. */
-export type Task = { id: string; text: string };
-
-/** Represents a column in the Kanban board. */
-export type Column = {
-  id: string;
-  title: string;
-  tasks: Task[];
-  isCollapsed: boolean;
-};
-
-/** Represents the entire Kanban board for a given workspace. */
-export type Kanban = {
-  workspaceId: string;
-  columns: Column[];
-};
-
-/** A generic key-value store for application settings. */
-export type Setting = {
-  key: string;
-  value: any;
-};
 
 // --- Database Connection ---
 

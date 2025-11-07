@@ -1,6 +1,7 @@
 <script lang="ts">
     import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
     import type { Spreadsheet as SpreadsheetData, SpreadsheetCell } from "$lib/db_types";
+    import { debounce } from "$lib/utils/debounce";
 
 	// --- Component API (Props & Events) ---
 
@@ -94,23 +95,6 @@
 		.join(" ");
 
 	// --- Utility Functions ---
-
-	/** Debounce utility to prevent a function from being called too frequently. */
-	function debounce<T extends (...args: any[]) => any>(func: T, timeout = 300) {
-		let timer: ReturnType<typeof setTimeout>;
-		const debounced = (...args: Parameters<T>) => {
-			clearTimeout(timer);
-			timer = setTimeout(() => {
-				func(...args);
-			}, timeout);
-		};
-		// Method to immediately invoke the function with the last arguments.
-		debounced.flush = () => {
-			clearTimeout(timer);
-			func();
-		};
-		return debounced;
-	}
 
 	/** Checks if a given cell coordinate is within the current selection area. */
 	function isInSelection(row: number, col: number) {
@@ -386,6 +370,11 @@
 			return handleSumFunction(sumMatch[1]);
 		}
 
+		const avgMatch = upperExpr.match(/^AVG\((.*)\)$/);
+		if (avgMatch) {
+			return handleAvgFunction(avgMatch[1]);
+		}
+
 		return evaluateSimpleMath(expression.trim());
 	}
 
@@ -430,7 +419,59 @@
 	}
 
 	/**
+	 * Handles the AVG() function logic for ranges and individual cells.
+	 * @returns The calculated average as a string.
+	 */
+	function handleAvgFunction(argsStr: string): string {
+		const args = argsStr.split(",");
+		let sum = 0;
+		let count = 0;
+
+		for (const arg of args) {
+			const trimmedArg = arg.trim();
+			if (trimmedArg.includes(":")) {
+				// Handle range (e.g., "A1:B2")
+				const [startRef, endRef] = trimmedArg.split(":");
+				const start = parseCellReference(startRef);
+				const end = parseCellReference(endRef);
+				if (start && end) {
+					const { minRow, maxRow, minCol, maxCol } = {
+						minRow: Math.min(start.row, end.row),
+						maxRow: Math.max(start.row, end.row),
+						minCol: Math.min(start.col, end.col),
+						maxCol: Math.max(start.col, end.col),
+					};
+					for (let r = minRow; r <= maxRow; r++) {
+						for (let c = minCol; c <= maxCol; c++) {
+							const cell = spreadsheetData.data[r][c];
+							sum += getCellValueForCalculation(cell);
+							count++;
+						}
+					}
+				}
+			} else {
+				// Handle single cell reference
+				const cellCoords = parseCellReference(trimmedArg);
+				if (cellCoords) {
+					const cell = spreadsheetData.data[cellCoords.row][cellCoords.col];
+					sum += getCellValueForCalculation(cell);
+					count++;
+				}
+			}
+		}
+
+		if (count === 0) {
+			return "#ERROR!";
+		}
+
+		const average = sum / count;
+		// Format to a reasonable number of decimal places
+		return average.toString();
+	}
+
+	/**
 	 * Evaluates a generic mathematical expression, resolving cell references first.
+	 * Uses a safer evaluation method than eval() or new Function()
 	 * @returns The result as a string, or "#ERROR!".
 	 */
 	function evaluateSimpleMath(expression: string): string {
@@ -439,23 +480,141 @@
 			const coords = parseCellReference(match);
 			if (coords) {
 				const cell = spreadsheetData.data[coords.row][coords.col];
-				return getCellValueForCalculation(cell).toString();
+				const value = getCellValueForCalculation(cell).toString();
+				console.log(`Replaced cell reference ${match} with value: ${value}`);
+				return value;
 			}
 			return "0"; // Treat invalid references as 0
 		});
+		console.log(`Original expression: ${expression}, Resolved: ${resolvedExpression}`);
 
-		// Safely evaluate the resolved mathematical expression.
+		// Safely evaluate the resolved mathematical expression
 		try {
-			// Sanity check to ensure no malicious code is evaluated.
-			if (/^[\d\s()+\-*/.]+$/.test(resolvedExpression)) {
-				const result = new Function(`return ${resolvedExpression}`)();
-				if (typeof result === "number" && isFinite(result)) {
-					return result.toString();
-				}
+			// Strict validation: only allow numbers, spaces, and basic math operators
+			// Pattern: digits, whitespace, parentheses, +, -, *, /, .
+			// Note: - must be escaped or at end of character class to avoid range interpretation
+			const validPattern = /^[\d\s()+\-*/.]+$/;
+			if (!validPattern.test(resolvedExpression)) {
+				console.log('Regex validation failed for:', resolvedExpression);
+				return "#ERROR!";
 			}
+			
+			// Manual evaluation to avoid Function constructor issues in production builds
+			// This is safer and more reliable across different build environments
+			const result = evaluateExpression(resolvedExpression);
+			
+			if (typeof result === "number" && isFinite(result)) {
+				return result.toString();
+			}
+			console.log('Result is not a finite number:', result, 'Type:', typeof result);
 			return "#ERROR!";
 		} catch (e) {
+			console.log('Error evaluating expression:', resolvedExpression, 'Error:', e);
 			return "#ERROR!";
+		}
+	}
+
+	/**
+	 * Manually evaluates a mathematical expression without using Function constructor
+	 * Supports: +, -, *, /, parentheses
+	 */
+	function evaluateExpression(expr: string): number {
+		// Remove all whitespace
+		expr = expr.replace(/\s/g, '');
+		
+		// Handle parentheses recursively
+		while (expr.includes('(')) {
+			const start = expr.lastIndexOf('(');
+			const end = expr.indexOf(')', start);
+			if (end === -1) throw new Error('Mismatched parentheses');
+			
+			const inner = expr.substring(start + 1, end);
+			const innerResult = evaluateExpression(inner);
+			expr = expr.substring(0, start) + innerResult.toString() + expr.substring(end + 1);
+		}
+		
+		// Handle multiplication and division (left to right)
+		while (expr.includes('*') || expr.includes('/')) {
+			const mulIndex = expr.indexOf('*');
+			const divIndex = expr.indexOf('/');
+			const opIndex = (mulIndex !== -1 && divIndex !== -1) 
+				? Math.min(mulIndex, divIndex)
+				: (mulIndex !== -1 ? mulIndex : divIndex);
+			
+			if (opIndex === -1) break;
+			
+			const left = parseOperand(expr, opIndex - 1, -1);
+			const right = parseOperand(expr, opIndex + 1, 1);
+			
+			const result = expr[opIndex] === '*' 
+				? left.value * right.value 
+				: left.value / right.value;
+			
+			expr = expr.substring(0, left.start) + result.toString() + expr.substring(right.end);
+		}
+		
+		// Handle addition and subtraction (left to right)
+		while (expr.includes('+') || (expr.includes('-') && expr.indexOf('-') > 0)) {
+			const plusIndex = expr.indexOf('+');
+			const minusIndex = expr.indexOf('-', 1); // Skip leading minus
+			const opIndex = (plusIndex !== -1 && minusIndex !== -1)
+				? Math.min(plusIndex, minusIndex)
+				: (plusIndex !== -1 ? plusIndex : minusIndex);
+			
+			if (opIndex === -1) break;
+			
+			const left = parseOperand(expr, opIndex - 1, -1);
+			const right = parseOperand(expr, opIndex + 1, 1);
+			
+			const result = expr[opIndex] === '+'
+				? left.value + right.value
+				: left.value - right.value;
+			
+			expr = expr.substring(0, left.start) + result.toString() + expr.substring(right.end);
+		}
+		
+		// Final result
+		const final = parseFloat(expr);
+		if (isNaN(final)) throw new Error('Invalid expression');
+		return final;
+	}
+	
+	/**
+	 * Parses an operand (number) from an expression, moving in the specified direction
+	 */
+	function parseOperand(expr: string, start: number, direction: number): { value: number; start: number; end: number } {
+		let i = start;
+		let hasDecimal = false;
+		
+		// Move backwards/forwards to find the full number
+		if (direction < 0) {
+			// Moving left
+			while (i >= 0 && (/\d/.test(expr[i]) || expr[i] === '.' || (i === start && expr[i] === '-'))) {
+				if (expr[i] === '.') {
+					if (hasDecimal) break;
+					hasDecimal = true;
+				}
+				i--;
+			}
+			i++;
+			const numStr = expr.substring(i, start + 1);
+			const value = parseFloat(numStr);
+			return { value, start: i, end: start + 1 };
+		} else {
+			// Moving right
+			if (expr[i] === '-') {
+				i++;
+			}
+			while (i < expr.length && (/\d/.test(expr[i]) || expr[i] === '.')) {
+				if (expr[i] === '.') {
+					if (hasDecimal) break;
+					hasDecimal = true;
+				}
+				i++;
+			}
+			const numStr = expr.substring(start, i);
+			const value = parseFloat(numStr);
+			return { value, start, end: i };
 		}
 	}
 

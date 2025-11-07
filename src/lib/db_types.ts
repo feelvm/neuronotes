@@ -49,10 +49,15 @@ export type Note = {
 
 export type CalendarEvent = {
   id: string;
-  date: string;
+  date: string; // Start date for recurring events
   title: string;
   time?: string;
   workspaceId: string;
+  repeat?: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
+  repeatOn?: number[]; // For custom weekly repeat: day numbers (1=Mon, 2=Tue, ..., 7=Sun)
+  repeatEnd?: string; // Optional end date for recurring events
+  exceptions?: string[]; // Dates (YYYY-MM-DD) of deleted recurring instances
+  color?: string; // Hex color code for the event (e.g., "#8C7AE6")
 };
 
 export type Task = {
