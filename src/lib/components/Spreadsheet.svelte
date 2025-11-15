@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
-	import type { Spreadsheet as SpreadsheetData, SpreadsheetCell } from "$lib/db";
-
-	// --- Component API (Props & Events) ---
+    import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
+    import type { Spreadsheet as SpreadsheetData, SpreadsheetCell } from "$lib/db_types";
+    import { debounce } from "$lib/utils/debounce";
 
 	/** The main spreadsheet data object. */
 	export let spreadsheetData: SpreadsheetData;
@@ -16,16 +15,13 @@
 
 	const dispatch = createEventDispatcher();
 
-	// --- Constants ---
 	const MIN_WIDTH = 40;
 	const MIN_HEIGHT = 25;
 
-	// --- Core State ---
-	let container: HTMLElement; // Bound to the main container div
-	let isSelecting = false; // True when the user is drag-selecting cells
-	let editingCell: { row: number; col: number } | null = null; // The cell currently in input/edit mode
+	let container: HTMLElement;
+	let isSelecting = false;
+	let editingCell: { row: number; col: number } | null = null;
 
-	// --- Resizing State ---
 	let colBeingResized: number | null = null;
 	let rowBeingResized: number | null = null;
 	let startX = 0;
@@ -33,7 +29,6 @@
 	let startWidth = 0;
 	let startHeight = 0;
 
-	// --- Clipboard State ---
 	let clipboardBuffer: {
 		data: SpreadsheetCell[][];
 		rowCount: number;
@@ -47,7 +42,16 @@
 	} | null = null;
 	let clipboardMode: "cut" | "copy" | null = null;
 
-	// --- Reactive Computations ---
+	type SpreadsheetHistoryEntry = {
+		data: SpreadsheetData;
+		timestamp: number;
+	};
+
+	let history: SpreadsheetHistoryEntry[] = [];
+	let historyIndex = -1;
+	const MAX_HISTORY = 50;
+	let lastSavedCellValue: string | null = null;
+	let hasSavedHistoryForCurrentEdit = false;
 
 	/** Memoized calculation of the current multi-cell selection area. */
 	$: selectionArea = (() => {
@@ -93,25 +97,6 @@
 		.map((w) => `${w}px`)
 		.join(" ");
 
-	// --- Utility Functions ---
-
-	/** Debounce utility to prevent a function from being called too frequently. */
-	function debounce<T extends (...args: any[]) => any>(func: T, timeout = 300) {
-		let timer: ReturnType<typeof setTimeout>;
-		const debounced = (...args: Parameters<T>) => {
-			clearTimeout(timer);
-			timer = setTimeout(() => {
-				func.apply(this, args);
-			}, timeout);
-		};
-		// Method to immediately invoke the function with the last arguments.
-		debounced.flush = () => {
-			clearTimeout(timer);
-			func.apply(this, []);
-		};
-		return debounced;
-	}
-
 	/** Checks if a given cell coordinate is within the current selection area. */
 	function isInSelection(row: number, col: number) {
 		if (!selectionArea) return false;
@@ -144,11 +129,9 @@
 			totalHeight +=
 				spreadsheetData.rowHeights[rowIndex + i] || MIN_HEIGHT;
 		}
-		totalHeight += rowspan - 1; // Add height of borders between merged rows
+		totalHeight += rowspan - 1;
 		return totalHeight;
 	}
-
-	// --- Resizing Logic ---
 
 	const debouncedResizeUpdate = debounce(() => dispatch("update"), 100);
 
@@ -183,7 +166,6 @@
 				startHeight + diffY,
 			);
 		}
-		// Trigger local reactivity for smooth UI, but debounce the parent update.
 		spreadsheetData = spreadsheetData;
 		debouncedResizeUpdate();
 	}
@@ -193,18 +175,13 @@
 		rowBeingResized = null;
 		window.removeEventListener("mousemove", handleMouseMove);
 		window.removeEventListener("mouseup", handleMouseUp);
-		// Ensure the final state is dispatched to be saved.
 		dispatch("update");
 	}
 
-	// --- Selection Logic ---
-
 	function handleCellMouseDown(row: number, col: number) {
-		// If we are already editing the clicked cell, do nothing to allow text selection inside the input.
 		if (editingCell?.row === row && editingCell?.col === col) {
 			return;
 		}
-		// Otherwise, start a new selection.
 		isSelecting = true;
 		selection = { start: { row, col }, end: { row, col } };
 		window.addEventListener("mouseover", handleCellMouseOver);
@@ -227,8 +204,6 @@
 		window.removeEventListener("mouseover", handleCellMouseOver);
 		window.removeEventListener("mouseup", handleCellMouseUp);
 	}
-
-	// --- Public API & Styling ---
 
 	type CellStyleKey = keyof NonNullable<SpreadsheetCell["style"]>;
 
@@ -277,7 +252,6 @@
 		const isMergedCell =
 			(topLeftCell.rowspan || 1) > 1 || (topLeftCell.colspan || 1) > 1;
 
-		// Un-merge logic
 		if (isSingleCellSelection && isMergedCell) {
 			const { rowspan = 1, colspan = 1, value } = topLeftCell;
 			for (let r = minRow; r < minRow + rowspan; r++) {
@@ -291,7 +265,6 @@
 			}
 			topLeftCell.value = value;
 		}
-		// Merge logic
 		else if (!isSingleCellSelection) {
 			const newRowspan = maxRow - minRow + 1;
 			const newColspan = maxCol - minCol + 1;
@@ -322,13 +295,59 @@
 		debouncedRecalculateAndUpdate();
 	}
 
-	// --- Formula Engine ---
-
 	const debouncedRecalculateAndUpdate = debounce(() => {
 		recalculateSheet();
-		spreadsheetData = spreadsheetData; // Trigger reactivity
+		spreadsheetData = spreadsheetData;
 		dispatch("update");
 	}, 300);
+
+	function saveHistory() {
+		if (!spreadsheetData?.data) return;
+		const snapshot = JSON.parse(JSON.stringify(spreadsheetData));
+		history = history.slice(0, historyIndex + 1);
+		history.push({ data: snapshot, timestamp: Date.now() });
+		historyIndex = history.length - 1;
+		if (history.length > MAX_HISTORY) {
+			history.shift();
+			historyIndex--;
+		}
+	}
+
+	function undo() {
+		if (historyIndex > 0 && history.length > 0) {
+			historyIndex--;
+			const previousState = history[historyIndex];
+			if (previousState && previousState.data) {
+				const restored = JSON.parse(JSON.stringify(previousState.data));
+				spreadsheetData = {
+					...spreadsheetData,
+					data: restored.data,
+					colWidths: restored.colWidths || {},
+					rowHeights: restored.rowHeights || {}
+				};
+				recalculateSheet();
+				dispatch("update");
+			}
+		}
+	}
+
+	function redo() {
+		if (historyIndex < history.length - 1 && history.length > 0) {
+			historyIndex++;
+			const nextState = history[historyIndex];
+			if (nextState && nextState.data) {
+				const restored = JSON.parse(JSON.stringify(nextState.data));
+				spreadsheetData = {
+					...spreadsheetData,
+					data: restored.data,
+					colWidths: restored.colWidths || {},
+					rowHeights: restored.rowHeights || {}
+				};
+				recalculateSheet();
+				dispatch("update");
+			}
+		}
+	}
 
 	/**
 	 * Recalculates all formula cells in the sheet.
@@ -339,7 +358,6 @@
 		if (!spreadsheetData?.data) return;
 
 		const formulaCells: { row: number; col: number }[] = [];
-		// First pass: identify all formula cells and reset computed values for non-formulas.
 		for (let r = 0; r < spreadsheetData.data.length; r++) {
 			for (let c = 0; c < spreadsheetData.data[0].length; c++) {
 				const cell = spreadsheetData.data[r][c];
@@ -351,7 +369,6 @@
 			}
 		}
 
-		// Iterative calculation: Loop up to 10 times to solve dependencies.
 		for (let i = 0; i < 10; i++) {
 			let changed = false;
 			for (const { row, col } of formulaCells) {
@@ -362,7 +379,7 @@
 					changed = true;
 				}
 			}
-			if (!changed) break; // If a full pass makes no changes, all dependencies are resolved.
+			if (!changed) break;
 		}
 	}
 
@@ -386,6 +403,11 @@
 			return handleSumFunction(sumMatch[1]);
 		}
 
+		const avgMatch = upperExpr.match(/^AVG\((.*)\)$/);
+		if (avgMatch) {
+			return handleAvgFunction(avgMatch[1]);
+		}
+
 		return evaluateSimpleMath(expression.trim());
 	}
 
@@ -399,7 +421,6 @@
 		for (const arg of args) {
 			const trimmedArg = arg.trim();
 			if (trimmedArg.includes(":")) {
-				// Handle range (e.g., "A1:B2")
 				const [startRef, endRef] = trimmedArg.split(":");
 				const start = parseCellReference(startRef);
 				const end = parseCellReference(endRef);
@@ -418,7 +439,6 @@
 					}
 				}
 			} else {
-				// Handle single cell reference
 				const cellCoords = parseCellReference(trimmedArg);
 				if (cellCoords) {
 					const cell = spreadsheetData.data[cellCoords.row][cellCoords.col];
@@ -430,32 +450,181 @@
 	}
 
 	/**
+	 * Handles the AVG() function logic for ranges and individual cells.
+	 * @returns The calculated average as a string.
+	 */
+	function handleAvgFunction(argsStr: string): string {
+		const args = argsStr.split(",");
+		let sum = 0;
+		let count = 0;
+
+		for (const arg of args) {
+			const trimmedArg = arg.trim();
+			if (trimmedArg.includes(":")) {
+				const [startRef, endRef] = trimmedArg.split(":");
+				const start = parseCellReference(startRef);
+				const end = parseCellReference(endRef);
+				if (start && end) {
+					const { minRow, maxRow, minCol, maxCol } = {
+						minRow: Math.min(start.row, end.row),
+						maxRow: Math.max(start.row, end.row),
+						minCol: Math.min(start.col, end.col),
+						maxCol: Math.max(start.col, end.col),
+					};
+					for (let r = minRow; r <= maxRow; r++) {
+						for (let c = minCol; c <= maxCol; c++) {
+							const cell = spreadsheetData.data[r][c];
+							sum += getCellValueForCalculation(cell);
+							count++;
+						}
+					}
+				}
+			} else {
+				const cellCoords = parseCellReference(trimmedArg);
+				if (cellCoords) {
+					const cell = spreadsheetData.data[cellCoords.row][cellCoords.col];
+					sum += getCellValueForCalculation(cell);
+					count++;
+				}
+			}
+		}
+
+		if (count === 0) {
+			return "#ERROR!";
+		}
+
+		const average = sum / count;
+		return average.toString();
+	}
+
+	/**
 	 * Evaluates a generic mathematical expression, resolving cell references first.
+	 * Uses a safer evaluation method than eval() or new Function()
 	 * @returns The result as a string, or "#ERROR!".
 	 */
 	function evaluateSimpleMath(expression: string): string {
-		// Replace all cell references (e.g., A1, B2) with their computed numeric values.
 		const resolvedExpression = expression.replace(/[A-Z]+\d+/gi, (match) => {
 			const coords = parseCellReference(match);
 			if (coords) {
 				const cell = spreadsheetData.data[coords.row][coords.col];
-				return getCellValueForCalculation(cell).toString();
+				const value = getCellValueForCalculation(cell).toString();
+				console.log(`Replaced cell reference ${match} with value: ${value}`);
+				return value;
 			}
-			return "0"; // Treat invalid references as 0
+			return "0";
 		});
+		console.log(`Original expression: ${expression}, Resolved: ${resolvedExpression}`);
 
-		// Safely evaluate the resolved mathematical expression.
 		try {
-			// Sanity check to ensure no malicious code is evaluated.
-			if (/^[\d\s()+\-*/.]+$/.test(resolvedExpression)) {
-				const result = new Function(`return ${resolvedExpression}`)();
-				if (typeof result === "number" && isFinite(result)) {
-					return result.toString();
-				}
+			const validPattern = /^[\d\s()+\-*/.]+$/;
+			if (!validPattern.test(resolvedExpression)) {
+				console.log('Regex validation failed for:', resolvedExpression);
+				return "#ERROR!";
 			}
+			
+			const result = evaluateExpression(resolvedExpression);
+			
+			if (typeof result === "number" && isFinite(result)) {
+				return result.toString();
+			}
+			console.log('Result is not a finite number:', result, 'Type:', typeof result);
 			return "#ERROR!";
 		} catch (e) {
+			console.log('Error evaluating expression:', resolvedExpression, 'Error:', e);
 			return "#ERROR!";
+		}
+	}
+
+	/**
+	 * Manually evaluates a mathematical expression without using Function constructor
+	 * Supports: +, -, *, /, parentheses
+	 */
+	function evaluateExpression(expr: string): number {
+		expr = expr.replace(/\s/g, '');
+		
+		while (expr.includes('(')) {
+			const start = expr.lastIndexOf('(');
+			const end = expr.indexOf(')', start);
+			if (end === -1) throw new Error('Mismatched parentheses');
+			
+			const inner = expr.substring(start + 1, end);
+			const innerResult = evaluateExpression(inner);
+			expr = expr.substring(0, start) + innerResult.toString() + expr.substring(end + 1);
+		}
+		
+		while (expr.includes('*') || expr.includes('/')) {
+			const mulIndex = expr.indexOf('*');
+			const divIndex = expr.indexOf('/');
+			const opIndex = (mulIndex !== -1 && divIndex !== -1) 
+				? Math.min(mulIndex, divIndex)
+				: (mulIndex !== -1 ? mulIndex : divIndex);
+			
+			if (opIndex === -1) break;
+			
+			const left = parseOperand(expr, opIndex - 1, -1);
+			const right = parseOperand(expr, opIndex + 1, 1);
+			
+			const result = expr[opIndex] === '*' 
+				? left.value * right.value 
+				: left.value / right.value;
+			
+			expr = expr.substring(0, left.start) + result.toString() + expr.substring(right.end);
+		}
+		
+		while (expr.includes('+') || (expr.includes('-') && expr.indexOf('-') > 0)) {
+			const plusIndex = expr.indexOf('+');
+			const minusIndex = expr.indexOf('-', 1);
+			const opIndex = (plusIndex !== -1 && minusIndex !== -1)
+				? Math.min(plusIndex, minusIndex)
+				: (plusIndex !== -1 ? plusIndex : minusIndex);
+			
+			if (opIndex === -1) break;
+			
+			const left = parseOperand(expr, opIndex - 1, -1);
+			const right = parseOperand(expr, opIndex + 1, 1);
+			
+			const result = expr[opIndex] === '+'
+				? left.value + right.value
+				: left.value - right.value;
+			
+			expr = expr.substring(0, left.start) + result.toString() + expr.substring(right.end);
+		}
+		
+		const final = parseFloat(expr);
+		if (isNaN(final)) throw new Error('Invalid expression');
+		return final;
+	}
+	
+	function parseOperand(expr: string, start: number, direction: number): { value: number; start: number; end: number } {
+		let i = start;
+		let hasDecimal = false;
+		
+		if (direction < 0) {
+			while (i >= 0 && (/\d/.test(expr[i]) || expr[i] === '.' || (i === start && expr[i] === '-'))) {
+				if (expr[i] === '.') {
+					if (hasDecimal) break;
+					hasDecimal = true;
+				}
+				i--;
+			}
+			i++;
+			const numStr = expr.substring(i, start + 1);
+			const value = parseFloat(numStr);
+			return { value, start: i, end: start + 1 };
+		} else {
+			if (expr[i] === '-') {
+				i++;
+			}
+			while (i < expr.length && (/\d/.test(expr[i]) || expr[i] === '.')) {
+				if (expr[i] === '.') {
+					if (hasDecimal) break;
+					hasDecimal = true;
+				}
+				i++;
+			}
+			const numStr = expr.substring(start, i);
+			const value = parseFloat(numStr);
+			return { value, start, end: i };
 		}
 	}
 
@@ -499,8 +668,6 @@
 		return isNaN(num) ? 0 : num;
 	}
 
-	// --- Clipboard Logic ---
-
 	function handleCopy() {
 		if (!selectionArea) return;
 		const { minRow, maxRow, minCol, maxCol } = selectionArea;
@@ -525,6 +692,7 @@
 
 	function handleCut() {
 		if (!selectionArea) return;
+		saveHistory();
 		const { minRow, maxRow, minCol, maxCol } = selectionArea;
 		const bufferData: SpreadsheetCell[][] = [];
 
@@ -547,9 +715,9 @@
 
 	function handlePaste() {
 		if (!clipboardBuffer || !selectedCell) return;
+		saveHistory();
 		const { row: startRow, col: startCol } = selectedCell;
 
-		// If cutting, first clear the source area.
 		if (clipboardMode === "cut" && clipboardSourceArea) {
 			const { minRow, maxRow, minCol, maxCol } = clipboardSourceArea;
 			for (let r = minRow; r <= maxRow; r++) {
@@ -559,7 +727,6 @@
 			}
 		}
 
-		// Paste the buffer data into the target area.
 		for (let r = 0; r < clipboardBuffer.rowCount; r++) {
 			for (let c = 0; c < clipboardBuffer.colCount; c++) {
 				const targetRow = startRow + r;
@@ -582,11 +749,19 @@
 		debouncedRecalculateAndUpdate();
 	}
 
-	// --- DOM Event Handlers ---
-
-	/** Handles all keyboard events for the entire grid for navigation, deletion, and shortcuts. */
 	async function handleGridKeyDown(e: KeyboardEvent) {
-		// --- Shortcuts ---
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+			e.preventDefault();
+			e.stopPropagation();
+			undo();
+			return;
+		}
+		if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+			e.preventDefault();
+			e.stopPropagation();
+			redo();
+			return;
+		}
 		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
 			e.preventDefault();
 			handleCut();
@@ -612,13 +787,13 @@
 			return;
 		}
 
-		// --- Deletion ---
 		if (
 			(e.key === "Backspace" || e.key === "Delete") &&
 			selectionArea &&
 			!editingCell
 		) {
 			e.preventDefault();
+			saveHistory();
 			const { minRow, maxRow, minCol, maxCol } = selectionArea;
 			for (let r = minRow; r <= maxRow; r++) {
 				for (let c = minCol; c <= maxCol; c++) {
@@ -629,7 +804,6 @@
 			return;
 		}
 
-		// --- Navigation ---
 		const navigationKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"];
 		if (!navigationKeys.includes(e.key) || !selectedCell) {
 			return;
@@ -648,9 +822,8 @@
 
 		selectedCell = { row, col };
 		selection = { start: { row, col }, end: { row, col } };
-		editingCell = null; // Exit edit mode on navigation
+		editingCell = null;
 
-		// Wait for Svelte to update the DOM before trying to focus the new cell's input.
 		await tick();
 		const input = container.querySelector<HTMLInputElement>(
 			`.cell-wrapper[data-row="${row}"][data-col="${col}"] input`,
@@ -659,29 +832,34 @@
 	}
 
 	function handleCellFocus(rowIndex: number, colIndex: number) {
+		const wasEditing = editingCell !== null;
+		const cellChanged = !wasEditing || (editingCell !== null && (editingCell.row !== rowIndex || editingCell.col !== colIndex));
+		
 		selectedCell = { row: rowIndex, col: colIndex };
 		selection = {
 			start: { row: rowIndex, col: colIndex },
 			end: { row: rowIndex, col: colIndex },
 		};
 		editingCell = { row: rowIndex, col: colIndex };
+		
+		if (cellChanged) {
+			hasSavedHistoryForCurrentEdit = false;
+			saveHistory();
+			hasSavedHistoryForCurrentEdit = true;
+		}
 	}
 
-	// --- Lifecycle Hooks ---
-
 	onMount(() => {
-		// Perform an initial calculation when the component mounts.
 		recalculateSheet();
+		saveHistory();
 	});
 
 	onDestroy(() => {
-		// Clean up any stray window listeners to prevent memory leaks.
 		window.removeEventListener("mousemove", handleMouseMove);
 		window.removeEventListener("mouseup", handleMouseUp);
 		window.removeEventListener("mouseover", handleCellMouseOver);
 		window.removeEventListener("mouseup", handleCellMouseUp);
 
-		// Ensure any pending updates are saved when the component is destroyed.
 		debouncedRecalculateAndUpdate.flush();
 	});
 </script>
@@ -693,10 +871,8 @@
 	on:keydown={handleGridKeyDown}
 >
 	<div class="grid-wrapper">
-		<!-- Top-left corner block -->
 		<div class="corner-header"></div>
 
-		<!-- Column headers (A, B, C...) -->
 		<div
 			class="col-headers"
 			style="grid-template-columns: {gridTemplateColumns};"
@@ -712,7 +888,6 @@
 			{/each}
 		</div>
 
-		<!-- Row headers (1, 2, 3...) -->
 		<div class="row-headers">
 			{#each spreadsheetData.data as _, rowIndex (rowIndex)}
 				<div
@@ -729,12 +904,10 @@
 			{/each}
 		</div>
 
-		<!-- Main data grid -->
 		<div
 			class="data-grid"
 			style="grid-template-columns: {gridTemplateColumns};"
 		>
-			<!-- Dashed indicator for 'cut' operation -->
 			{#if clipboardMode === "cut" && clipboardSourceArea}
 				{@const top = rowPositions[clipboardSourceArea.minRow]}
 				{@const left = colPositions[clipboardSourceArea.minCol]}
@@ -748,10 +921,8 @@
 				></div>
 			{/if}
 
-			<!-- Render each cell -->
 			{#each spreadsheetData.data as row, rowIndex (rowIndex)}
 				{#each row as cell, colIndex (`${rowIndex}-${colIndex}`)}
-					<!-- Only render the top-left cell of a merged area -->
 					{#if !cell.merged}
 						<div
 							class="cell-wrapper"
@@ -775,11 +946,47 @@
 									? cell.value
 									: cell.computedValue}
 								on:input={(e) => {
-									cell.value = (e.target as HTMLInputElement).value;
+									const newValue = (e.target as HTMLInputElement).value;
+									const oldValue = cell.value;
+									const wasDeletion = newValue.length < oldValue.length;
+									
+									// Save history on first change or before deletion
+									if (!hasSavedHistoryForCurrentEdit || wasDeletion) {
+										saveHistory();
+										// Reset flag after deletion so next change can save history
+										hasSavedHistoryForCurrentEdit = !wasDeletion;
+									}
+									
+									cell.value = newValue;
 									debouncedRecalculateAndUpdate();
 								}}
-								on:blur={() => (editingCell = null)}
-								on:focus={() => handleCellFocus(rowIndex, colIndex)}
+								on:blur={(e) => {
+									const newValue = (e.target as HTMLInputElement).value;
+									if (lastSavedCellValue !== null && newValue !== lastSavedCellValue && hasSavedHistoryForCurrentEdit) {
+										saveHistory();
+									}
+									lastSavedCellValue = null;
+									hasSavedHistoryForCurrentEdit = false;
+									editingCell = null;
+								}}
+								on:focus={(e) => {
+									const currentValue = (e.target as HTMLInputElement).value;
+									lastSavedCellValue = currentValue;
+									handleCellFocus(rowIndex, colIndex);
+								}}
+								on:keydown={(e) => {
+									if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+										e.preventDefault();
+										e.stopPropagation();
+										undo();
+										return false;
+									} else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+										e.preventDefault();
+										e.stopPropagation();
+										redo();
+										return false;
+									}
+								}}
 								style="font-weight: {cell.style
 									?.fontWeight}; font-style: {cell.style
 									?.fontStyle}; text-align: {cell.style
@@ -797,12 +1004,17 @@
   .spreadsheet-container {
     width: 100%;
     height: 100%;
-    overflow: scroll;
+    overflow: auto;
     position: relative;
     background-color: var(--panel-bg-darker);
     scrollbar-width: none;
     -ms-overflow-style: none;
     outline: none;
+    min-height: 0;
+    min-width: 0;
+    max-width: 100%;
+    max-height: 100%;
+    contain: layout style paint;
   }
   .spreadsheet-container::-webkit-scrollbar {
     display: none;
@@ -817,6 +1029,16 @@
     position: absolute;
     top: 0;
     left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: auto;
+    max-width: 100%;
+    max-height: 100%;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .grid-wrapper::-webkit-scrollbar {
+    display: none;
   }
   .corner-header {
     grid-area: corner;
