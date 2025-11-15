@@ -31,5 +31,9 @@ export default defineConfig({
 	},
 	optimizeDeps: {
 		exclude: ['@tauri-apps/plugin-fs', '@tauri-apps/api', '@tauri-apps/plugin-sql']
-	}
+	},
+	ssr: {
+		noExternal: ['sql.js']
+	},
+	assetsInclude: ['**/*.wasm']
 });
