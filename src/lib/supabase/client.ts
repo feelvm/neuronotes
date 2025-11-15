@@ -1,19 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
+// Direct access to check what's actually available
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Debug logging (always log in production to help diagnose issues)
-console.log('[supabase] Environment check:', {
-  hasUrl: !!supabaseUrl,
-  hasKey: !!supabaseAnonKey,
-  urlLength: supabaseUrl?.length || 0,
-  keyLength: supabaseAnonKey?.length || 0,
-  urlPreview: supabaseUrl ? `${supabaseUrl.substring(0, 20)}...` : 'missing',
-  isDev: import.meta.env.DEV,
-  allEnvKeys: Object.keys(import.meta.env).filter(k => k.startsWith('VITE_'))
-});
+console.log('[supabase] ===== ENVIRONMENT DEBUG =====');
+console.log('[supabase] Raw URL value:', import.meta.env.VITE_SUPABASE_URL);
+console.log('[supabase] Raw Key value:', import.meta.env.VITE_SUPABASE_ANON_KEY ? `${import.meta.env.VITE_SUPABASE_ANON_KEY.substring(0, 20)}...` : 'undefined');
+console.log('[supabase] URL type:', typeof supabaseUrl, 'Key type:', typeof supabaseAnonKey);
+console.log('[supabase] URL truthy:', !!supabaseUrl, 'Key truthy:', !!supabaseAnonKey);
+console.log('[supabase] All VITE_ keys:', Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
+console.log('[supabase] All env keys (first 20):', Object.keys(import.meta.env).slice(0, 20));
+console.log('[supabase] ============================');
 
 // Only create client if environment variables are set
 // This allows the app to work without Supabase configured
