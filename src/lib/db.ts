@@ -257,6 +257,17 @@ export async function putSetting(setting: Setting): Promise<void> {
   }
 }
 
+export async function getAllSettings(): Promise<Setting[]> {
+  await ensureClient();
+  if (isTauri) {
+    const tauriDb = await import('./tauri_db');
+    return await tauriDb.getAllSettings();
+  } else {
+    const browserDb = await import('./browser_db');
+    return await browserDb.getAllSettings();
+  }
+}
+
 export async function get<T>(storeName: string, key: string): Promise<T | undefined> {
   await ensureClient();
   switch (storeName) {
