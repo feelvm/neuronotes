@@ -11,7 +11,8 @@ console.log('[supabase] Environment check:', {
   urlLength: supabaseUrl?.length || 0,
   keyLength: supabaseAnonKey?.length || 0,
   urlPreview: supabaseUrl ? `${supabaseUrl.substring(0, 20)}...` : 'missing',
-  isDev: import.meta.env.DEV
+  isDev: import.meta.env.DEV,
+  allEnvKeys: Object.keys(import.meta.env).filter(k => k.startsWith('VITE_'))
 });
 
 // Only create client if environment variables are set
