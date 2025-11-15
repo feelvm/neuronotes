@@ -6,6 +6,14 @@ export default defineConfig({
 	css: {
 		devSourcemap: true
 	},
+	resolve: {
+		alias: {
+			// Stub Tauri modules for browser builds (they're dynamically imported conditionally)
+			'@tauri-apps/plugin-fs': './src/lib/tauri-stubs/plugin-fs.ts',
+			'@tauri-apps/api': './src/lib/tauri-stubs/api.ts',
+			'@tauri-apps/plugin-sql': './src/lib/tauri-stubs/plugin-sql.ts'
+		}
+	},
 	build: {
 		// Enable minification and tree-shaking
 		minify: 'terser',
@@ -20,5 +28,8 @@ export default defineConfig({
 		chunkSizeWarningLimit: 1000
 		// Note: SvelteKit handles code splitting automatically,
 		// so we don't need manualChunks configuration
+	},
+	optimizeDeps: {
+		exclude: ['@tauri-apps/plugin-fs', '@tauri-apps/api', '@tauri-apps/plugin-sql']
 	}
 });
