@@ -1379,6 +1379,12 @@
                     // We set _contentLoaded = true for all imported notes to use backup content (even if empty)
                     const noteWithMeta = note as any;
                     noteWithMeta._contentLoaded = true;
+                    
+                    // Debug: log note content info
+                    if (import.meta.env.DEV) {
+                        console.log(`[import] Note ${note.id} (${note.type}): contentHTML length=${note.contentHTML?.length || 0}, has content=${!!note.contentHTML}`);
+                    }
+                    
                     // For spreadsheets, ensure _spreadsheetJson is set if spreadsheet data exists
                     if (note.type === 'spreadsheet' && note.spreadsheet && !noteWithMeta._spreadsheetJson) {
                         if (typeof note.spreadsheet === 'string') {
@@ -1387,6 +1393,12 @@
                             noteWithMeta._spreadsheetJson = JSON.stringify(note.spreadsheet);
                         }
                     }
+                    
+                    // Ensure contentHTML is explicitly set (even if empty) so putNote uses it
+                    if (note.contentHTML === undefined) {
+                        note.contentHTML = '';
+                    }
+                    
                     await db.putNote(note);
                 }
             }

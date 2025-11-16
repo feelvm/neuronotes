@@ -267,15 +267,21 @@ export async function putNote(note: Note): Promise<void> {
   }
 
   let contentHTML = note.contentHTML;
-  if (!contentHTML || contentHTML === '') {
-    if (noteWithRaw._contentLoaded === false || noteWithRaw._contentLoaded === undefined) {
-      try {
-        const existingContent = await getNoteContent(note.id);
-        if (existingContent) {
-          contentHTML = existingContent;
+  // Only try to preserve existing content if:
+  // 1. contentHTML is empty AND
+  // 2. _contentLoaded is false/undefined (meaning content wasn't explicitly loaded/set)
+  // If _contentLoaded is true, use the provided contentHTML (even if empty) - this is important for imports
+  if ((!contentHTML || contentHTML === '') && (noteWithRaw._contentLoaded === false || noteWithRaw._contentLoaded === undefined)) {
+    try {
+      const existingContent = await getNoteContent(note.id);
+      if (existingContent) {
+        contentHTML = existingContent;
+        if (import.meta.env.DEV) {
           console.log(`[browser_db] Preserved existing content for note ${note.id} (${existingContent.length} chars)`);
         }
-      } catch (e) {
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) {
         console.warn(`[browser_db] Failed to fetch existing content for note ${note.id}, using empty string:`, e);
       }
     }
