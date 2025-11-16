@@ -260,6 +260,34 @@ export async function getBackup(backupId: string): Promise<BackupData | null> {
   return backups.find(b => b.metadata.id === backupId) || null;
 }
 
+/**
+ * Save an imported backup file to the backup list without restoring it
+ */
+export async function saveImportedBackup(backupData: BackupData): Promise<BackupMetadata> {
+  // Generate a new ID and timestamp to avoid conflicts
+  const importedBackup: BackupData = {
+    ...backupData,
+    metadata: {
+      ...backupData.metadata,
+      id: `backup-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: Date.now(),
+      date: new Date().toISOString(),
+      type: 'manual',
+      description: backupData.metadata.description || 'Imported backup'
+    }
+  };
+  
+  // Recalculate size
+  const jsonData = JSON.stringify(importedBackup);
+  importedBackup.metadata.size = new Blob([jsonData]).size;
+  
+  await saveBackup(importedBackup);
+  await cleanupOldBackups();
+  
+  console.log(`[backup] Saved imported backup:`, importedBackup.metadata.id);
+  return importedBackup.metadata;
+}
+
 export async function restoreBackup(backupId: string): Promise<void> {
   const backup = await getBackup(backupId);
   if (!backup) {

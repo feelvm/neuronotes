@@ -1,5 +1,9 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
 	plugins: [sveltekit()],
@@ -9,9 +13,9 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			// Stub Tauri modules for browser builds (they're dynamically imported conditionally)
-			'@tauri-apps/plugin-fs': './src/lib/tauri-stubs/plugin-fs.ts',
-			'@tauri-apps/api': './src/lib/tauri-stubs/api.ts',
-			'@tauri-apps/plugin-sql': './src/lib/tauri-stubs/plugin-sql.ts'
+			'@tauri-apps/plugin-fs': path.resolve(__dirname, 'src/lib/tauri-stubs/plugin-fs.ts'),
+			'@tauri-apps/api': path.resolve(__dirname, 'src/lib/tauri-stubs/api.ts'),
+			'@tauri-apps/plugin-sql': path.resolve(__dirname, 'src/lib/tauri-stubs/plugin-sql.ts')
 		}
 	},
 	build: {

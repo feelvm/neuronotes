@@ -127,7 +127,7 @@ async function ensureDb(): Promise<SqlJsDatabase> {
   return db;
 }
 
-async function execute(sql: string, params: any[] = []): Promise<void> {
+export async function execute(sql: string, params: any[] = []): Promise<void> {
   try {
     const database = await ensureDb();
     const convertedSql = sql.replace(/\$(\d+)/g, '?');
@@ -426,6 +426,10 @@ export async function getAllSettings(): Promise<Setting[]> {
   })) as Setting[];
 }
 
+export async function deleteSetting(key: string): Promise<void> {
+  await execute('DELETE FROM settings WHERE key = ?', [key]);
+}
+
 export async function get<T>(storeName: string, key: string): Promise<T | undefined> {
   switch (storeName) {
     case 'settings':
@@ -490,6 +494,9 @@ export async function remove(storeName: string, key: string): Promise<void> {
       break;
     case 'calendarEvents':
       await deleteCalendarEvent(key);
+      break;
+    case 'settings':
+      await deleteSetting(key);
       break;
     default:
       console.warn(`remove() not implemented for store: ${storeName}`);

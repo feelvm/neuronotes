@@ -375,15 +375,38 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
 
     if (notes) {
       for (const note of notes) {
-        // Get content from note_content table
-        const { data: contentData } = await supabase
-          .from('note_content')
-          .select('content_html')
-          .eq('note_id', note.id)
-          .eq('user_id', userId)
-          .single();
+        // Get content from note_content table if it exists
+        // Use .maybeSingle() instead of .single() to handle cases where note_content doesn't exist
+        let contentHTML = note.content_html || '';
+        
+        try {
+          const { data: contentData, error: contentError } = await supabase
+            .from('note_content')
+            .select('content_html')
+            .eq('note_id', note.id)
+            .eq('user_id', userId)
+            .maybeSingle();
 
-        const contentHTML = contentData?.content_html || note.content_html || '';
+          // PGRST116 is "no rows returned" which is fine - use note.content_html
+          // Other errors (like 406) might indicate table doesn't exist or RLS issue
+          if (contentError) {
+            if (contentError.code === 'PGRST116') {
+              // No row found - this is expected if content is in notes table
+              contentHTML = note.content_html || '';
+            } else {
+              // Other error (like 406) - log but continue with note.content_html
+              console.warn(`[sync] Error fetching note_content for note ${note.id}:`, contentError.message, contentError.code);
+              contentHTML = note.content_html || '';
+            }
+          } else if (contentData?.content_html) {
+            // Successfully got content from note_content table
+            contentHTML = contentData.content_html;
+          }
+        } catch (err) {
+          // Catch any unexpected errors and fall back to note.content_html
+          console.warn(`[sync] Exception fetching note_content for note ${note.id}:`, err);
+          contentHTML = note.content_html || '';
+        }
 
         // Handle spreadsheet data - Supabase returns it as JSON object, need to stringify for local DB
         let spreadsheetData: any = undefined;

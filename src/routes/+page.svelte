@@ -262,6 +262,7 @@
     }
 
     let editorDiv: HTMLElement;
+    let previousNoteId: string | null = null;
     let selectedFontSize = 14;
     let SpreadsheetComponent: any = null;
     let spreadsheetComponentInstance: any;
@@ -400,16 +401,24 @@
         if (id === activeWorkspaceId) return;
         debouncedUpdateNote.flush();
 
+        // Update UI immediately for better responsiveness
         notes = [];
         folders = [];
         calendarEvents = [];
         kanban = [];
         selectedNoteId = '';
         currentFolderId = null;
-
         activeWorkspaceId = id;
-        await db.putSetting({ key: 'activeWorkspaceId', value: id });
-        await loadActiveWorkspaceData();
+
+        // Defer database operations to avoid blocking the main thread
+        requestAnimationFrame(async () => {
+            try {
+                await db.putSetting({ key: 'activeWorkspaceId', value: id });
+                await loadActiveWorkspaceData();
+            } catch (error) {
+                console.error('Failed to switch workspace:', error);
+            }
+        });
     }
 
     async function addWorkspace() {
@@ -553,6 +562,20 @@
         ? DOMPurify.sanitize(currentNote.contentHTML || '')
         : (currentNote?.contentHTML || '');
     
+    // Update editor content only when note changes (not during typing)
+    $: if (editorDiv && currentNote && currentNote.id !== previousNoteId) {
+        const sanitized = currentNote.type === 'text' && browser && DOMPurify
+            ? DOMPurify.sanitize(currentNote.contentHTML || '')
+            : (currentNote.contentHTML || '');
+        // Only update if content is different to avoid cursor loss
+        if (editorDiv.innerHTML !== sanitized) {
+            editorDiv.innerHTML = sanitized;
+        }
+        previousNoteId = currentNote.id;
+    } else if (!currentNote) {
+        previousNoteId = null;
+    }
+    
     $: parsedCurrentNote = currentNote ? (() => {
         if (currentNote.type === 'spreadsheet') {
             const noteWithRaw = currentNote as any;
@@ -590,6 +613,7 @@
             saveNoteHistory(currentNote.id, editorDiv.innerHTML);
         }
         
+        // Update UI state immediately for better responsiveness
         selectedSheetCell = null;
         sheetSelection = null;
         selectedNoteId = id;
@@ -597,35 +621,50 @@
         const note = notes.find((n) => n.id === id);
         if (note) {
             const noteWithMeta = note as any;
-            if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
+            // Defer database operations to avoid blocking the main thread
+            requestAnimationFrame(async () => {
                 try {
-                    const rawContent = await db.getNoteContent(id);
-                    // Sanitize content when loading from database
-                    note.contentHTML = (browser && DOMPurify) 
-                        ? DOMPurify.sanitize(rawContent)
-                        : rawContent;
-                    noteWithMeta._contentLoaded = true;
-                    notes = [...notes];
+                    if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
+                        const rawContent = await db.getNoteContent(id);
+                        // Sanitize content when loading from database
+                        note.contentHTML = (browser && DOMPurify) 
+                            ? DOMPurify.sanitize(rawContent)
+                            : rawContent;
+                        noteWithMeta._contentLoaded = true;
+                        notes = [...notes];
+                    }
+                    
+                    if (note.type === 'text' && note.contentHTML) {
+                        if (!noteHistory.has(id)) {
+                            saveNoteHistory(id, note.contentHTML);
+                        }
+                    }
+                    
+                    if (note.type === 'spreadsheet') {
+                        await loadSpreadsheetComponent();
+                    }
+                    
+                    await db.putSetting({
+                        key: `selectedNoteId:${activeWorkspaceId}`,
+                        value: id
+                    });
                 } catch (e) {
-                    console.error('Failed to load note content:', e);
+                    console.error('Failed to load note:', e);
                 }
-            }
-            
-            if (note.type === 'text' && note.contentHTML) {
-                if (!noteHistory.has(id)) {
-                    saveNoteHistory(id, note.contentHTML);
+            });
+        } else {
+            // Still save the setting even if note not found
+            requestAnimationFrame(async () => {
+                try {
+                    await db.putSetting({
+                        key: `selectedNoteId:${activeWorkspaceId}`,
+                        value: id
+                    });
+                } catch (e) {
+                    console.error('Failed to save selected note:', e);
                 }
-            }
-            
-            if (note.type === 'spreadsheet') {
-                await loadSpreadsheetComponent();
-            }
+            });
         }
-        
-        await db.putSetting({
-            key: `selectedNoteId:${activeWorkspaceId}`,
-            value: id
-        });
     }
 
     async function addNote(type: 'text' | 'spreadsheet' = 'text') {
@@ -1552,46 +1591,74 @@
             const fileContent = await file.text();
             const parsedData = JSON.parse(fileContent);
 
-            let dataToImport;
-            if (parsedData.data) {
-                dataToImport = parsedData.data;
+            // Check if this is a full BackupData structure with metadata
+            const isFullBackup = parsedData.metadata && parsedData.data && parsedData.version;
+            
+            let backupDataToSave: backup.BackupData;
+            
+            if (isFullBackup) {
+                // Full backup structure - save it directly
+                backupDataToSave = parsedData as backup.BackupData;
+            } else if (parsedData.data) {
+                // Has data property but no metadata - construct BackupData
+                backupDataToSave = {
+                    version: '1.0',
+                    backupDate: new Date().toISOString(),
+                    metadata: {
+                        id: `backup-${Date.now()}`,
+                        timestamp: Date.now(),
+                        date: new Date().toISOString(),
+                        size: 0,
+                        type: 'manual',
+                        description: `Imported from: ${file.name}`
+                    },
+                    data: parsedData.data
+                };
+                // Calculate size
+                const jsonData = JSON.stringify(backupDataToSave);
+                backupDataToSave.metadata.size = new Blob([jsonData]).size;
             } else if (parsedData.workspaces || parsedData.notes) {
-                dataToImport = parsedData;
+                // Just data without wrapper - construct BackupData
+                backupDataToSave = {
+                    version: '1.0',
+                    backupDate: new Date().toISOString(),
+                    metadata: {
+                        id: `backup-${Date.now()}`,
+                        timestamp: Date.now(),
+                        date: new Date().toISOString(),
+                        size: 0,
+                        type: 'manual',
+                        description: `Imported from: ${file.name}`
+                    },
+                    data: {
+                        workspaces: parsedData.workspaces || [],
+                        folders: parsedData.folders || [],
+                        notes: parsedData.notes || [],
+                        calendarEvents: parsedData.calendarEvents || [],
+                        kanban: parsedData.kanban || [],
+                        settings: parsedData.settings || []
+                    }
+                };
+                // Calculate size
+                const jsonData = JSON.stringify(backupDataToSave);
+                backupDataToSave.metadata.size = new Blob([jsonData]).size;
             } else {
                 alert('Invalid backup file format. Please select a valid backup file.');
                 target.value = '';
                 return;
             }
 
-            if (!dataToImport || typeof dataToImport !== 'object') {
-                alert('Invalid backup file format. Please select a valid backup file.');
-                target.value = '';
-                return;
-            }
-
-            const confirmed = await showDeleteDialog(
-                '⚠️ WARNING: Importing backup will REPLACE all your current data!\n\n' +
-                'This includes:\n' +
-                '- All workspaces\n' +
-                '- All notes and folders\n' +
-                '- All calendar events\n' +
-                '- All kanban boards\n' +
-                '- All settings\n\n' +
-                'Are you sure you want to continue?',
-                'Import Backup'
-            );
-
-            if (!confirmed) {
-                target.value = '';
-                return;
-            }
-
-            await importData(dataToImport);
+            // Save the backup to the backup list (without applying it)
+            await backup.saveImportedBackup(backupDataToSave);
             
             target.value = '';
             
-            // Don't reload - the UI has already been updated by importData
-            alert('Backup imported successfully!');
+            // Reload backups list if backup modal is open
+            if (showBackupModal) {
+                await loadBackups();
+            }
+            
+            alert('Backup imported successfully! You can now restore it from the backup management list.');
         } catch (error) {
             console.error('Backup import failed:', error);
             alert(`Backup import failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1630,8 +1697,61 @@
 
         try {
             await backup.restoreBackup(backupId);
-            alert('Backup restored successfully! The application will reload.');
-            window.location.reload();
+            
+            // Reload UI state from database after restore
+            const loadedWorkspaces = await db.getAllWorkspaces();
+            if (loadedWorkspaces.length > 0) {
+                workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                
+                // Set active workspace - prefer existing if valid, otherwise use first or last active setting
+                const lastActive = await db.getSettingByKey('activeWorkspaceId');
+                const preferredWorkspaceId = lastActive?.value;
+                
+                if (activeWorkspaceId && workspaces.find(w => w.id === activeWorkspaceId)) {
+                    // Keep current active workspace if it still exists
+                    // activeWorkspaceId stays the same
+                } else if (preferredWorkspaceId && workspaces.find(w => w.id === preferredWorkspaceId)) {
+                    activeWorkspaceId = preferredWorkspaceId;
+                } else {
+                    activeWorkspaceId = workspaces[0].id;
+                }
+                
+                // Save the active workspace setting
+                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
+            } else {
+                // No workspaces after restore - create default
+                const defaultWorkspace: Workspace = {
+                    id: generateUUID(),
+                    name: 'My Workspace',
+                    order: 0
+                };
+                await db.putWorkspace(defaultWorkspace);
+                workspaces = [defaultWorkspace];
+                activeWorkspaceId = defaultWorkspace.id;
+                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
+            }
+            
+            // Reload active workspace data to update UI (this will update notes, folders, calendar, kanban)
+            if (activeWorkspaceId) {
+                await loadActiveWorkspaceData();
+            }
+            
+            // Close backup modal
+            showBackupModal = false;
+            
+            // If logged in, push restored data to Supabase to sync it
+            // This ensures the restored data becomes the source of truth in the cloud
+            if (isLoggedIn) {
+                try {
+                    await sync.pushToSupabase();
+                    console.log('Restored data synced to Supabase');
+                } catch (syncError) {
+                    console.warn('Failed to sync restored data to Supabase:', syncError);
+                    // Don't throw - restore was successful, sync can happen later
+                }
+            }
+            
+            alert('Backup restored successfully!');
         } catch (error) {
             console.error('Backup restore failed:', error);
             alert(`Backup restore failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2502,14 +2622,8 @@
             </button>
             {#if showSettingsDropdown}
                 <div class="settings-dropdown" use:settingsDropdown>
-                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; createBackup(); }}>
-                        Create Backup
-                    </button>
                     <button class="settings-item" on:click={() => { showSettingsDropdown = false; showBackupModal = true; loadBackups(); }}>
                         Manage Backups
-                    </button>
-                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; backupFileInput?.click(); }}>
-                        Import Backup
                     </button>
                     <button class="settings-item" on:click={() => { showSettingsDropdown = false; showEditPanelsModal = true; }}>
                         Edit Panels
@@ -3455,9 +3569,10 @@
                                             class="contenteditable"
                                             contenteditable="true"
                                             bind:this={editorDiv}
-                                            bind:innerHTML={sanitizedNoteContent}
                                             on:input={(e) => {
                                                 if (currentNote && editorDiv) {
+                                                    // Update currentNote.contentHTML from editor
+                                                    currentNote.contentHTML = editorDiv.innerHTML;
                                                     debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
                                                     debouncedUpdateNote(currentNote);
                                                 }
@@ -3478,7 +3593,7 @@
                                                     document.execCommand('redo');
                                                 }
                                             }}
-                                        />
+                                        ></div>
                                     </div>
                                 {/if}
                             {/key}

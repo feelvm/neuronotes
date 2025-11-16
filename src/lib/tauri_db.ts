@@ -1,7 +1,17 @@
-import Database from '@tauri-apps/plugin-sql';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 
+type Database = {
+  load: (name: string) => Promise<Database>;
+  execute: (sql: string, bindValues?: any[]) => Promise<void>;
+  select: <T = any>(sql: string, bindValues?: any[]) => Promise<T[]>;
+};
+
+type DatabaseConstructor = {
+  load: (name: string) => Promise<Database>;
+};
+
 let db: Database | null = null;
+let DatabaseClass: DatabaseConstructor | null = null;
 
 const getDatabaseName = () => {
   try {
@@ -24,8 +34,12 @@ const SCHEMA_SQL = `
 export async function init(): Promise<void> {
   if (!db) {
     try {
+      if (!DatabaseClass) {
+        const module = await import('@tauri-apps/plugin-sql');
+        DatabaseClass = module.default;
+      }
       const dbName = getDatabaseName();
-      db = await Database.load(dbName);
+      db = await DatabaseClass.load(dbName);
       
       try {
         await db.execute(SCHEMA_SQL);

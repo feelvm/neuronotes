@@ -29,8 +29,12 @@ if (supabaseUrl && supabaseAnonKey) {
   if (import.meta.env.DEV) {
     console.log('[supabase] Client initialized successfully');
   }
-} else if (import.meta.env.DEV) {
-  console.warn('[supabase] Not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable cloud sync.');
+} else {
+  // Only show warning in dev mode to avoid console noise in production
+  if (import.meta.env.DEV) {
+    console.warn('[supabase] Not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable cloud sync.');
+    console.warn('[supabase] For production builds, ensure these variables are set at build time.');
+  }
 }
 
 export { supabase };

@@ -146,7 +146,7 @@ export async function getNotesByWorkspaceId(workspaceId: string): Promise<Note[]
 
 export async function getNoteContent(noteId: string): Promise<string> {
   await ensureClient();
-  if (isTauri && dbClient?.getNoteContent) {
+  if (dbClient?.getNoteContent) {
     return await dbClient.getNoteContent(noteId);
   } else if (dbClient?.get) {
     const note = await dbClient.get<Note>('notes', noteId);
@@ -473,11 +473,11 @@ export async function clearAllLocalData(): Promise<void> {
       await database.execute('DELETE FROM workspaces');
     } else {
       const browserDb = await import('./browser_db');
-      await (browserDb as any).execute('DELETE FROM notes');
-      await (browserDb as any).execute('DELETE FROM folders');
-      await (browserDb as any).execute('DELETE FROM calendarEvents');
-      await (browserDb as any).execute('DELETE FROM kanban');
-      await (browserDb as any).execute('DELETE FROM workspaces');
+      await browserDb.execute('DELETE FROM notes');
+      await browserDb.execute('DELETE FROM folders');
+      await browserDb.execute('DELETE FROM calendarEvents');
+      await browserDb.execute('DELETE FROM kanban');
+      await browserDb.execute('DELETE FROM workspaces');
     }
   } catch (e) {
     console.warn('[db] Failed to perform direct table cleanup:', e);
@@ -544,11 +544,19 @@ export async function debugTauriDetection() {
     console.log('window.__TAURI__:', '__TAURI__' in window);
     console.log('window.__TAURI_INTERNALS__:', (window as any).__TAURI_INTERNALS__ !== undefined);
     console.log('window.location:', window.location.href);
-    try {
-      const Database = await import('@tauri-apps/plugin-sql');
-      console.log('SQL plugin import successful:', !!Database);
-    } catch (e) {
-      console.log('SQL plugin import failed:', e);
+    // Only try to import if we're actually in Tauri to avoid Vite analyzing the import
+    const isTauriEnv = await checkIsTauri();
+    if (isTauriEnv) {
+      try {
+        // Use Function constructor to create a truly dynamic import that Vite can't analyze
+        const importSql = new Function('specifier', 'return import(specifier)');
+        const Database = await importSql('@tauri-apps/plugin-sql');
+        console.log('SQL plugin import successful:', !!Database);
+      } catch (e) {
+        console.log('SQL plugin import failed:', e);
+      }
+    } else {
+      console.log('Not in Tauri environment, skipping SQL plugin import test');
     }
   }
   const detected = await checkIsTauri();
