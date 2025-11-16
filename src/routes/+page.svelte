@@ -1374,6 +1374,19 @@
             if (data.notes && data.notes.length > 0) {
                 console.log('Importing notes:', data.notes.length);
                 for (const note of data.notes) {
+                    // Ensure imported notes have their content properly marked
+                    // This prevents putNote from trying to preserve existing content
+                    // We set _contentLoaded = true for all imported notes to use backup content (even if empty)
+                    const noteWithMeta = note as any;
+                    noteWithMeta._contentLoaded = true;
+                    // For spreadsheets, ensure _spreadsheetJson is set if spreadsheet data exists
+                    if (note.type === 'spreadsheet' && note.spreadsheet && !noteWithMeta._spreadsheetJson) {
+                        if (typeof note.spreadsheet === 'string') {
+                            noteWithMeta._spreadsheetJson = note.spreadsheet;
+                        } else {
+                            noteWithMeta._spreadsheetJson = JSON.stringify(note.spreadsheet);
+                        }
+                    }
                     await db.putNote(note);
                 }
             }
