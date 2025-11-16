@@ -564,6 +564,16 @@ export async function debugTauriDetection() {
   return detected;
 }
 
+// Export function to flush pending database saves (browser only)
+export async function flushDatabaseSave(): Promise<void> {
+  if (!isTauri && dbClient) {
+    const browserDb = dbClient as any;
+    if (typeof browserDb.flushDatabaseSave === 'function') {
+      browserDb.flushDatabaseSave();
+    }
+  }
+}
+
 if (typeof window !== 'undefined') {
   (window as any).verifyDatabase = verifyDatabaseStatus;
   (window as any).debugTauri = debugTauriDetection;

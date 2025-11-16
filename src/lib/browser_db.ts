@@ -119,6 +119,26 @@ export async function init(): Promise<void> {
   return initPromise;
 }
 
+// Export function to flush pending database saves
+export function flushDatabaseSave(): void {
+  if (debouncedSave) {
+    debouncedSave.flush();
+  }
+  // Also do an immediate save to ensure data is persisted
+  if (db) {
+    try {
+      const storageKey = getStorageKey();
+      const data = db.export();
+      const array = Array.from(data);
+      localStorage.setItem(storageKey, JSON.stringify(array));
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.error('[browser_db] Failed to flush database save:', e);
+      }
+    }
+  }
+}
+
 async function ensureDb(): Promise<SqlJsDatabase> {
   if (!db) {
     await init();

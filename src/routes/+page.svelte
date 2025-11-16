@@ -78,6 +78,7 @@
     let isNotesMinimized = false;
     let isCalendarMinimized = false;
     let isKanbanMinimized = false;
+    let hasHandledInitialSession = false; // Track if we've handled initial session to avoid duplicate data clearing
     
     let showNotes = true;
     let showCalendar = true;
@@ -608,48 +609,95 @@
 
     async function selectNote(id: string) {
         if (selectedNoteId === id) return;
-        debouncedUpdateNote.flush();
         
+        // Save current note before switching
         if (currentNote && currentNote.type === 'text' && editorDiv) {
+            // Update currentNote with latest content from editor before saving
+            currentNote.contentHTML = editorDiv.innerHTML;
             saveNoteHistory(currentNote.id, editorDiv.innerHTML);
+            // Flush the update to ensure it's saved
+            await debouncedUpdateNote.flush();
+        } else {
+            // For non-text notes or when editorDiv is not available, just flush
+            await debouncedUpdateNote.flush();
         }
         
-        // Update UI immediately for better responsiveness
+        // Find the note we're switching to
+        const note = notes.find((n) => n.id === id);
+        if (note) {
+            const noteWithMeta = note as any;
+            let contentUpdated = false;
+            
+            // Load content BEFORE switching to avoid clearing the editor
+            if (note.type === 'text') {
+                // If content is empty and not yet loaded, load from database
+                if ((!note.contentHTML || note.contentHTML === '') && !noteWithMeta._contentLoaded) {
+                    try {
+                        const rawContent = await db.getNoteContent(id);
+                        // Sanitize content when loading from database
+                        if (rawContent) {
+                            note.contentHTML = (browser && DOMPurify) 
+                                ? DOMPurify.sanitize(rawContent)
+                                : rawContent;
+                        } else {
+                            note.contentHTML = '';
+                        }
+                        noteWithMeta._contentLoaded = true;
+                        contentUpdated = true;
+                    } catch (e) {
+                        console.error('Failed to load note content:', e);
+                        note.contentHTML = '';
+                        noteWithMeta._contentLoaded = true;
+                        contentUpdated = true;
+                    }
+                } else {
+                    // Content exists, mark as loaded
+                    noteWithMeta._contentLoaded = true;
+                }
+                
+                // Initialize note history if needed
+                if (note.contentHTML && !noteHistory.has(id)) {
+                    saveNoteHistory(id, note.contentHTML);
+                }
+            }
+            
+            // Update notes array if content was loaded (triggers reactivity)
+            // Always update notes array to ensure reactivity works, even if content wasn't just loaded
+            // This ensures currentNote gets the updated note object with content
+            notes = [...notes];
+            
+            // Load spreadsheet component if needed (defer to avoid blocking)
+            if (note.type === 'spreadsheet') {
+                setTimeout(async () => {
+                    await loadSpreadsheetComponent();
+                }, 0);
+            }
+        }
+        
+        // Now update UI - content is already loaded and notes array is updated
+        // Set selectedNoteId AFTER notes array is updated so currentNote gets the correct note
         selectedSheetCell = null;
         sheetSelection = null;
         selectedNoteId = id;
         
-        // Defer heavy operations to avoid blocking the main thread
+        // Explicitly update editor div after a brief delay to ensure reactivity has processed
+        // This is a fallback in case the reactive statement doesn't fire immediately
+        if (note && note.type === 'text' && editorDiv) {
+            setTimeout(() => {
+                const updatedNote = notes.find((n) => n.id === id);
+                if (updatedNote && updatedNote.type === 'text' && editorDiv) {
+                    const sanitized = (browser && DOMPurify) 
+                        ? DOMPurify.sanitize(updatedNote.contentHTML || '')
+                        : (updatedNote.contentHTML || '');
+                    if (editorDiv.innerHTML !== sanitized) {
+                        editorDiv.innerHTML = sanitized;
+                    }
+                }
+            }, 0);
+        }
+        
+        // Save setting asynchronously
         setTimeout(async () => {
-            const note = notes.find((n) => n.id === id);
-            if (note) {
-                const noteWithMeta = note as any;
-                if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
-                    try {
-                        const rawContent = await db.getNoteContent(id);
-                        // Sanitize content when loading from database
-                        note.contentHTML = (browser && DOMPurify) 
-                            ? DOMPurify.sanitize(rawContent)
-                            : rawContent;
-                        noteWithMeta._contentLoaded = true;
-                        notes = [...notes];
-                    } catch (e) {
-                        console.error('Failed to load note content:', e);
-                    }
-                }
-                
-                if (note.type === 'text' && note.contentHTML) {
-                    if (!noteHistory.has(id)) {
-                        saveNoteHistory(id, note.contentHTML);
-                    }
-                }
-                
-                if (note.type === 'spreadsheet') {
-                    await loadSpreadsheetComponent();
-                }
-            }
-            
-            // Save setting asynchronously
             try {
                 await db.putSetting({
                     key: `selectedNoteId:${activeWorkspaceId}`,
@@ -863,16 +911,33 @@
     }, 300);
 
     async function updateNote(note: Note) {
-        const noteToSave = { ...note, updatedAt: Date.now() };
+        // If this is the currently selected text note, get the latest content from the editor
+        let contentHTML = note.contentHTML;
+        if (note.type === 'text' && currentNote && currentNote.id === note.id && editorDiv) {
+            // Use the editor's current content as the source of truth
+            contentHTML = editorDiv.innerHTML;
+        }
+        
+        const noteToSave = { 
+            ...note, 
+            contentHTML: contentHTML,
+            updatedAt: Date.now() 
+        };
+        
         if (browser && DOMPurify && noteToSave.type === 'text') {
             noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
         }
+        
         await db.putNote(noteToSave);
+        
+        // Update the note in the array, preserving contentHTML
         const index = notes.findIndex((n) => n.id === noteToSave.id);
         if (index !== -1) {
-            notes[index] = noteToSave;
+            // Preserve the contentHTML when updating the notes array
+            notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML };
             notes = [...notes];
         }
+        
         // Sync is debounced along with note update
         await syncIfLoggedIn();
     }
@@ -2420,6 +2485,7 @@
             const session = await auth.getSession();
             if (session) {
                 isLoggedIn = true;
+                hasHandledInitialSession = true;
                 
                 // Defer heavy sync operations to improve initial load
                 setTimeout(async () => {
@@ -2476,7 +2542,15 @@
                 console.log('Auth state changed:', event, session?.user?.email);
                 
                 if (event === 'SIGNED_IN' && session) {
+                    // Only clear data if this is a NEW sign-in, not initial session detection
+                    // If we've already handled the initial session in onMount, skip clearing
+                    if (hasHandledInitialSession) {
+                        console.log('Skipping data clear - already handled initial session');
+                        return;
+                    }
+                    
                     isLoggedIn = true;
+                    hasHandledInitialSession = true;
                     // Clear all local data before pulling new user's data
                     console.log('Clearing local data for new user...');
                     await db.clearAllLocalData();
@@ -2528,12 +2602,41 @@
         })();
 
         const handleBeforeUnload = () => {
+            // Flush pending note updates (synchronously start them)
             debouncedUpdateNote.flush();
             debouncedPersistKanban.flush();
+            // Flush database save synchronously to ensure current state is saved
+            db.flushDatabaseSave().catch(e => {
+                console.warn('Failed to flush database save on unload:', e);
+            });
+        };
+        
+        const handlePageHide = async (e: PageTransitionEvent) => {
+            // pagehide event allows async operations and is more reliable
+            // Flush pending note updates and wait for them
+            const noteUpdatePromise = debouncedUpdateNote.flush();
+            debouncedPersistKanban.flush();
+            
+            // Wait for note updates to complete, then flush database save
+            if (noteUpdatePromise && typeof noteUpdatePromise.then === 'function') {
+                try {
+                    await noteUpdatePromise;
+                } catch (e) {
+                    console.warn('Note update failed on page hide:', e);
+                }
+            }
+            
+            // Ensure database is saved after note updates complete
+            try {
+                await db.flushDatabaseSave();
+            } catch (e) {
+                console.warn('Failed to flush database save on page hide:', e);
+            }
         };
         
         if (browser) {
             window.addEventListener('beforeunload', handleBeforeUnload);
+            window.addEventListener('pagehide', handlePageHide);
         }
 
         return () => {
@@ -2550,6 +2653,7 @@
             }
             if (browser) {
                 window.removeEventListener('beforeunload', handleBeforeUnload);
+                window.removeEventListener('pagehide', handlePageHide);
             }
         };
     });
