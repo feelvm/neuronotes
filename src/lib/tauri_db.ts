@@ -29,18 +29,24 @@ export async function init(): Promise<void> {
       
       try {
         await db.execute(SCHEMA_SQL);
-        console.log(`[tauri_db] SQLite database initialized successfully (${dbName})`);
-        
-        const tables = await db.select("SELECT name FROM sqlite_master WHERE type='table'");
-        console.log(`[tauri_db] Database tables:`, (tables as any[]).map((row: any) => row.name));
+        if (import.meta.env.DEV) {
+          console.log(`[tauri_db] SQLite database initialized successfully (${dbName})`);
+          const tables = await db.select("SELECT name FROM sqlite_master WHERE type='table'");
+          console.log(`[tauri_db] Database tables:`, (tables as any[]).map((row: any) => row.name));
+        }
       } catch (schemaError) {
-        console.warn('[tauri_db] Schema creation warning (tables may already exist):', schemaError);
+        if (import.meta.env.DEV) {
+          console.warn('[tauri_db] Schema creation warning (tables may already exist):', schemaError);
+        }
         const tables = await db.select("SELECT name FROM sqlite_master WHERE type='table'");
         if ((tables as any[]).length === 0) {
-          console.error('[tauri_db] WARNING: No tables found! Attempting to create schema again...');
+          if (import.meta.env.DEV) {
+            console.error('[tauri_db] WARNING: No tables found! Attempting to create schema again...');
+          }
           await db.execute(SCHEMA_SQL);
+        } else if (import.meta.env.DEV) {
+          console.log(`[tauri_db] SQLite database initialized (${dbName})`);
         }
-        console.log(`[tauri_db] SQLite database initialized (${dbName})`);
       }
     } catch (error) {
       console.error('[tauri_db] Failed to initialize SQLite database:', error);
@@ -174,10 +180,14 @@ export async function putNote(note: Note): Promise<void> {
         const existingContent = await getNoteContent(note.id);
         if (existingContent) {
           contentHTML = existingContent;
-          console.log(`[tauri_db] Preserved existing content for note ${note.id} (${existingContent.length} chars)`);
+          if (import.meta.env.DEV) {
+            console.log(`[tauri_db] Preserved existing content for note ${note.id} (${existingContent.length} chars)`);
+          }
         }
       } catch (e) {
-        console.warn(`[tauri_db] Failed to fetch existing content for note ${note.id}, using empty string:`, e);
+        if (import.meta.env.DEV) {
+          console.warn(`[tauri_db] Failed to fetch existing content for note ${note.id}, using empty string:`, e);
+        }
       }
     }
   }

@@ -1,9 +1,11 @@
 import initSqlJs from 'sql.js';
 import type { Database as SqlJsDatabase } from 'sql.js';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
+import { debounce } from './utils/debounce';
 
 let db: SqlJsDatabase | null = null;
 let initPromise: Promise<void> | null = null;
+let debouncedSave: (() => void) | null = null;
 
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, "order" INTEGER NOT NULL DEFAULT 0);
@@ -18,7 +20,9 @@ const getStorageKey = () => {
   try {
     const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
     const key = isDev ? 'neuronotes_db_dev' : 'neuronotes_db';
-    console.log(`[browser_db] Environment detection: DEV=${isDev}, using storage key: ${key}`);
+    if (import.meta.env.DEV) {
+      console.log(`[browser_db] Environment detection: DEV=${isDev}, using storage key: ${key}`);
+    }
     return key;
   } catch (e) {
     console.warn('[browser_db] Failed to detect environment, defaulting to production key:', e);
@@ -47,20 +51,25 @@ export async function init(): Promise<void> {
           const uint8Array = new Uint8Array(array);
           db = new SQL.Database(uint8Array);
           db.run(SCHEMA_SQL);
-          console.log(`[browser_db] Loaded existing SQLite database from localStorage (${storageKey})`);
-          
-          const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
-          console.log(`[browser_db] Database tables:`, tables[0]?.values?.map((row: any) => row[0]) || []);
+          if (import.meta.env.DEV) {
+            console.log(`[browser_db] Loaded existing SQLite database from localStorage (${storageKey})`);
+            const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
+            console.log(`[browser_db] Database tables:`, tables[0]?.values?.map((row: any) => row[0]) || []);
+          }
         } catch (e) {
           console.warn('[browser_db] Failed to load saved database, creating new one:', e);
           db = new SQL.Database();
           db.run(SCHEMA_SQL);
-          console.log(`[browser_db] Created new SQLite database after load failure (${storageKey})`);
+          if (import.meta.env.DEV) {
+            console.log(`[browser_db] Created new SQLite database after load failure (${storageKey})`);
+          }
         }
       } else {
         db = new SQL.Database();
         db.run(SCHEMA_SQL);
-        console.log(`[browser_db] Created new SQLite database (${storageKey})`);
+        if (import.meta.env.DEV) {
+          console.log(`[browser_db] Created new SQLite database (${storageKey})`);
+        }
       }
       
       const verifyTables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
@@ -68,7 +77,7 @@ export async function init(): Promise<void> {
       if (tableNames.length === 0) {
         console.error('[browser_db] WARNING: No tables found after initialization!');
         db.run(SCHEMA_SQL);
-      } else {
+      } else if (import.meta.env.DEV) {
         console.log(`[browser_db] Verified tables exist:`, tableNames);
       }
 
@@ -79,17 +88,26 @@ export async function init(): Promise<void> {
             const array = Array.from(data);
             localStorage.setItem(storageKey, JSON.stringify(array));
           } catch (e) {
-            console.error('[browser_db] Failed to save database:', e);
+            if (import.meta.env.DEV) {
+              console.error('[browser_db] Failed to save database:', e);
+            }
           }
         }
       };
 
+      // Debounce saves to avoid excessive localStorage writes
+      // Saves immediately on beforeunload, otherwise debounced by 1 second
+      debouncedSave = debounce(saveDb, 1000);
+
       if (typeof window !== 'undefined') {
-        window.addEventListener('beforeunload', saveDb);
-        setInterval(saveDb, 5000);
+        window.addEventListener('beforeunload', saveDb); // Immediate save on page unload
+        // Periodic save as backup (every 10 seconds instead of 5)
+        setInterval(saveDb, 10000);
       }
 
-      console.log('[browser_db] SQLite database initialized successfully');
+      if (import.meta.env.DEV) {
+        console.log('[browser_db] SQLite database initialized successfully');
+      }
     } catch (error) {
       console.error('[browser_db] Failed to initialize SQLite database:', error);
       throw error;
@@ -117,18 +135,14 @@ async function execute(sql: string, params: any[] = []): Promise<void> {
     stmt.bind(params);
     stmt.step();
     stmt.free();
-    if (db) {
-      try {
-        const data = db.export();
-        const array = Array.from(data);
-        const storageKey = getStorageKey();
-        localStorage.setItem(storageKey, JSON.stringify(array));
-      } catch (e) {
-        console.error('[browser_db] Failed to save database:', e);
-      }
+    // Trigger debounced save instead of immediate save
+    if (debouncedSave) {
+      debouncedSave();
     }
   } catch (error) {
-    console.error('[browser_db] Execute error:', error, 'SQL:', sql, 'Params:', params);
+    if (import.meta.env.DEV) {
+      console.error('[browser_db] Execute error:', error, 'SQL:', sql, 'Params:', params);
+    }
     throw error;
   }
 }
@@ -147,7 +161,9 @@ async function select<T = any>(sql: string, params: any[] = []): Promise<T[]> {
     stmt.free();
     return results;
   } catch (error) {
-    console.error('[browser_db] Select error:', error, 'SQL:', sql, 'Params:', params);
+    if (import.meta.env.DEV) {
+      console.error('[browser_db] Select error:', error, 'SQL:', sql, 'Params:', params);
+    }
     throw error;
   }
 }

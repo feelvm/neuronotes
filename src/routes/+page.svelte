@@ -548,6 +548,11 @@
     $: currentFolder = folders.find((f) => f.id === currentFolderId);
     $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
     
+    // Sanitized content for contenteditable to prevent XSS
+    $: sanitizedNoteContent = currentNote && currentNote.type === 'text' && browser && DOMPurify
+        ? DOMPurify.sanitize(currentNote.contentHTML || '')
+        : (currentNote?.contentHTML || '');
+    
     $: parsedCurrentNote = currentNote ? (() => {
         if (currentNote.type === 'spreadsheet') {
             const noteWithRaw = currentNote as any;
@@ -594,7 +599,11 @@
             const noteWithMeta = note as any;
             if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
                 try {
-                    note.contentHTML = await db.getNoteContent(id);
+                    const rawContent = await db.getNoteContent(id);
+                    // Sanitize content when loading from database
+                    note.contentHTML = (browser && DOMPurify) 
+                        ? DOMPurify.sanitize(rawContent)
+                        : rawContent;
                     noteWithMeta._contentLoaded = true;
                     notes = [...notes];
                 } catch (e) {
@@ -777,9 +786,13 @@
             noteHistoryIndex.set(noteId, index - 1);
             const previousState = history[index - 1];
             if (previousState && currentNote && currentNote.id === noteId) {
-                currentNote.contentHTML = previousState.content;
+                // Sanitize content before setting
+                const sanitized = (browser && DOMPurify) 
+                    ? DOMPurify.sanitize(previousState.content)
+                    : previousState.content;
+                currentNote.contentHTML = sanitized;
                 if (editorDiv) {
-                    editorDiv.innerHTML = previousState.content;
+                    editorDiv.innerHTML = sanitized;
                 }
                 debouncedUpdateNote(currentNote);
                 return true;
@@ -797,9 +810,13 @@
             noteHistoryIndex.set(noteId, index + 1);
             const nextState = history[index + 1];
             if (nextState && currentNote && currentNote.id === noteId) {
-                currentNote.contentHTML = nextState.content;
+                // Sanitize content before setting
+                const sanitized = (browser && DOMPurify) 
+                    ? DOMPurify.sanitize(nextState.content)
+                    : nextState.content;
+                currentNote.contentHTML = sanitized;
                 if (editorDiv) {
-                    editorDiv.innerHTML = nextState.content;
+                    editorDiv.innerHTML = sanitized;
                 }
                 debouncedUpdateNote(currentNote);
                 return true;
@@ -1687,11 +1704,19 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
+            // Sanitize message to prevent XSS - strip all HTML, only allow text
+            const sanitizedMessage = (browser && DOMPurify) 
+                ? DOMPurify.sanitize(message, { ALLOWED_TAGS: [] })
+                : message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const sanitizedButtonText = (browser && DOMPurify)
+                ? DOMPurify.sanitize(deleteButtonText, { ALLOWED_TAGS: [] })
+                : deleteButtonText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            
             content.innerHTML = `
-                <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${message}</div>
+                <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${sanitizedMessage}</div>
                 <div style="display: flex; gap: 8px; justify-content: flex-end;">
                     <button id="cancel" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-bg); color: var(--text); cursor: pointer;">Cancel</button>
-                    <button id="delete" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--accent-red); background: rgba(255, 71, 87, 0.1); color: #ff6b81; cursor: pointer;">${deleteButtonText}</button>
+                    <button id="delete" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--accent-red); background: rgba(255, 71, 87, 0.1); color: #ff6b81; cursor: pointer;">${sanitizedButtonText}</button>
                 </div>
             `;
             
@@ -1751,8 +1776,13 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
+            // Sanitize message to prevent XSS - strip all HTML, only allow text
+            const sanitizedMessage = (browser && DOMPurify) 
+                ? DOMPurify.sanitize(message, { ALLOWED_TAGS: [] })
+                : message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            
             content.innerHTML = `
-                <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${message}</div>
+                <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${sanitizedMessage}</div>
                 <div style="display: flex; gap: 8px; justify-content: flex-end;">
                     <button id="delete-this" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-bg); color: var(--text); cursor: pointer;">Delete This Event</button>
                     <button id="delete-all" style="padding: 8px 16px; border-radius: 8px; border: 1px solid var(--accent-red); background: rgba(255, 71, 87, 0.1); color: #ff6b81; cursor: pointer;">Delete All Events</button>
@@ -2105,7 +2135,11 @@
             const note = loadedNotes.find((n) => n.id === initialSelectedId);
             if (note && note.contentHTML === '') {
                 try {
-                    note.contentHTML = await db.getNoteContent(initialSelectedId);
+                    const rawContent = await db.getNoteContent(initialSelectedId);
+                    // Sanitize content when loading from database
+                    note.contentHTML = (browser && DOMPurify) 
+                        ? DOMPurify.sanitize(rawContent)
+                        : rawContent;
                     const noteWithMeta = note as any;
                     noteWithMeta._contentLoaded = true;
                     notes = [...notes];
@@ -3346,7 +3380,7 @@
                                             class="contenteditable"
                                             contenteditable="true"
                                             bind:this={editorDiv}
-                                            bind:innerHTML={currentNote.contentHTML}
+                                            bind:innerHTML={sanitizedNoteContent}
                                             on:input={(e) => {
                                                 if (currentNote && editorDiv) {
                                                     debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
