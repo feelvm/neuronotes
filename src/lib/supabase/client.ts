@@ -19,6 +19,11 @@ if (import.meta.env.DEV) {
 let supabase: ReturnType<typeof createClient<Database>> | null = null;
 
 if (supabaseUrl && supabaseAnonKey) {
+  // Note: Supabase client may create WebSocket connections for auth token refresh,
+  // which prevents back/forward cache (bfcache). This is a known limitation.
+  // Real-time subscriptions are not used in this app, but WebSocket may still be
+  // created for auth purposes. This is acceptable for a SPA that doesn't rely on
+  // browser navigation.
   supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: true,

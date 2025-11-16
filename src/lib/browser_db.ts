@@ -1,4 +1,3 @@
-import initSqlJs from 'sql.js';
 import type { Database as SqlJsDatabase } from 'sql.js';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 import { debounce } from './utils/debounce';
@@ -6,6 +5,7 @@ import { debounce } from './utils/debounce';
 let db: SqlJsDatabase | null = null;
 let initPromise: Promise<void> | null = null;
 let debouncedSave: (() => void) | null = null;
+let SQL: any = null; // Store the SQL.js module
 
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, "order" INTEGER NOT NULL DEFAULT 0);
@@ -37,7 +37,9 @@ export async function init(): Promise<void> {
 
   initPromise = (async () => {
     try {
-      const SQL = await initSqlJs({
+      // Dynamic import to defer loading sql.js and its WASM file
+      const sqlJsModule = await import('sql.js');
+      SQL = await sqlJsModule.default({
         locateFile: (file: string) => {
           return `https://sql.js.org/dist/${file}`;
         }

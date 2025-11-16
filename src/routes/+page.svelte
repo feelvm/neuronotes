@@ -3,10 +3,11 @@
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import * as backup from '$lib/backup';
-    import * as auth from '$lib/supabase/auth';
-    import * as sync from '$lib/supabase/sync';
-    import * as migrations from '$lib/supabase/migrations';
-    import { onAuthStateChange } from '$lib/supabase/auth';
+    // Supabase imports are loaded dynamically to reduce initial bundle size
+    let auth: typeof import('$lib/supabase/auth');
+    let sync: typeof import('$lib/supabase/sync');
+    let migrations: typeof import('$lib/supabase/migrations');
+    let onAuthStateChange: typeof import('$lib/supabase/auth').onAuthStateChange;
     import { debounce } from '$lib/utils/debounce';
     import { generateUUID } from '$lib/utils/uuid';
     import { ymd, dmy, startOfWeek, localDateFromYMD } from '$lib/utils/dateHelpers';
@@ -411,14 +412,14 @@
         activeWorkspaceId = id;
 
         // Defer database operations to avoid blocking the main thread
-        requestAnimationFrame(async () => {
+        setTimeout(async () => {
             try {
                 await db.putSetting({ key: 'activeWorkspaceId', value: id });
                 await loadActiveWorkspaceData();
             } catch (error) {
                 console.error('Failed to switch workspace:', error);
             }
-        });
+        }, 0);
     }
 
     async function addWorkspace() {
@@ -613,18 +614,18 @@
             saveNoteHistory(currentNote.id, editorDiv.innerHTML);
         }
         
-        // Update UI state immediately for better responsiveness
+        // Update UI immediately for better responsiveness
         selectedSheetCell = null;
         sheetSelection = null;
         selectedNoteId = id;
         
-        const note = notes.find((n) => n.id === id);
-        if (note) {
-            const noteWithMeta = note as any;
-            // Defer database operations to avoid blocking the main thread
-            requestAnimationFrame(async () => {
-                try {
-                    if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
+        // Defer heavy operations to avoid blocking the main thread
+        setTimeout(async () => {
+            const note = notes.find((n) => n.id === id);
+            if (note) {
+                const noteWithMeta = note as any;
+                if (!noteWithMeta._contentLoaded && note.contentHTML === '') {
+                    try {
                         const rawContent = await db.getNoteContent(id);
                         // Sanitize content when loading from database
                         note.contentHTML = (browser && DOMPurify) 
@@ -632,39 +633,32 @@
                             : rawContent;
                         noteWithMeta._contentLoaded = true;
                         notes = [...notes];
+                    } catch (e) {
+                        console.error('Failed to load note content:', e);
                     }
-                    
-                    if (note.type === 'text' && note.contentHTML) {
-                        if (!noteHistory.has(id)) {
-                            saveNoteHistory(id, note.contentHTML);
-                        }
-                    }
-                    
-                    if (note.type === 'spreadsheet') {
-                        await loadSpreadsheetComponent();
-                    }
-                    
-                    await db.putSetting({
-                        key: `selectedNoteId:${activeWorkspaceId}`,
-                        value: id
-                    });
-                } catch (e) {
-                    console.error('Failed to load note:', e);
                 }
-            });
-        } else {
-            // Still save the setting even if note not found
-            requestAnimationFrame(async () => {
-                try {
-                    await db.putSetting({
-                        key: `selectedNoteId:${activeWorkspaceId}`,
-                        value: id
-                    });
-                } catch (e) {
-                    console.error('Failed to save selected note:', e);
+                
+                if (note.type === 'text' && note.contentHTML) {
+                    if (!noteHistory.has(id)) {
+                        saveNoteHistory(id, note.contentHTML);
+                    }
                 }
-            });
-        }
+                
+                if (note.type === 'spreadsheet') {
+                    await loadSpreadsheetComponent();
+                }
+            }
+            
+            // Save setting asynchronously
+            try {
+                await db.putSetting({
+                    key: `selectedNoteId:${activeWorkspaceId}`,
+                    value: id
+                });
+            } catch (e) {
+                console.error('Failed to save selected note:', e);
+            }
+        }, 0);
     }
 
     async function addNote(type: 'text' | 'spreadsheet' = 'text') {
@@ -1293,10 +1287,22 @@
     let isPasswordMismatch = false;
     let isPasswordInvalid = false;
     
+    // Helper function to load Supabase modules if not already loaded
+    async function ensureSupabaseLoaded() {
+        if (!auth) {
+            const authModule = await import('$lib/supabase/auth');
+            auth = authModule;
+            onAuthStateChange = authModule.onAuthStateChange;
+            sync = await import('$lib/supabase/sync');
+            migrations = await import('$lib/supabase/migrations');
+        }
+    }
+    
     // Helper function to sync data to Supabase if logged in
     async function syncIfLoggedIn() {
         if (isLoggedIn) {
             try {
+                await ensureSupabaseLoaded();
                 await sync.pushToSupabase();
             } catch (error) {
                 console.error('Sync failed:', error);
@@ -1310,6 +1316,7 @@
         if (!browser) return;
         
         try {
+            await ensureSupabaseLoaded();
             const user = await auth.getUser();
             if (!user) return;
             
@@ -1508,6 +1515,7 @@
             // This ensures the imported data becomes the source of truth in the cloud
             if (isLoggedIn) {
                 try {
+                    await ensureSupabaseLoaded();
                     await sync.pushToSupabase();
                     console.log('Imported data synced to Supabase');
                 } catch (syncError) {
@@ -1743,6 +1751,7 @@
             // This ensures the restored data becomes the source of truth in the cloud
             if (isLoggedIn) {
                 try {
+                    await ensureSupabaseLoaded();
                     await sync.pushToSupabase();
                     console.log('Restored data synced to Supabase');
                 } catch (syncError) {
@@ -2361,10 +2370,31 @@
         let timer: ReturnType<typeof setInterval> | undefined;
 
         (async () => {
-            DOMPurify = (await import('dompurify')).default;
+            // Defer DOMPurify import to improve initial load time
+            import('dompurify').then(module => {
+                DOMPurify = module.default;
+            }).catch(err => {
+                console.warn('Failed to load DOMPurify:', err);
+            });
+            
+            // Load Supabase modules dynamically to reduce initial bundle size
+            // Only load when needed (auth check or user interaction)
+            const loadSupabaseModules = async () => {
+                if (!auth) {
+                    const authModule = await import('$lib/supabase/auth');
+                    auth = authModule;
+                    onAuthStateChange = authModule.onAuthStateChange;
+                    sync = await import('$lib/supabase/sync');
+                    migrations = await import('$lib/supabase/migrations');
+                }
+            };
+            
             isTauri = '__TAURI__' in window;
 
             await db.init();
+            
+            // Load Supabase modules after db init but before auth check
+            await loadSupabaseModules();
 
             let loadedWorkspaces = await db.getAllWorkspaces();
             if (loadedWorkspaces.length > 0) {
@@ -2391,24 +2421,29 @@
             if (session) {
                 isLoggedIn = true;
                 
-                // Clear all local data before pulling (in case user switched accounts)
-                console.log('Clearing local data for logged-in user...');
-                await db.clearAllLocalData();
-                
-                // Pull latest data from Supabase
-                await sync.pullFromSupabase();
-                
-                // Reload workspaces after pull
-                let loadedWorkspaces = await db.getAllWorkspaces();
-                if (loadedWorkspaces.length > 0) {
-                    workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                    const lastActive = await db.getSettingByKey('activeWorkspaceId');
-                    activeWorkspaceId =
-                        workspaces.find((w) => w.id === lastActive?.value)?.id ?? workspaces[0].id;
-                }
+                // Defer heavy sync operations to improve initial load
+                setTimeout(async () => {
+                    // Clear all local data before pulling (in case user switched accounts)
+                    console.log('Clearing local data for logged-in user...');
+                    await db.clearAllLocalData();
+                    
+                    // Pull latest data from Supabase
+                    await sync.pullFromSupabase();
+                    
+                    // Reload workspaces after pull
+                    let loadedWorkspaces = await db.getAllWorkspaces();
+                    if (loadedWorkspaces.length > 0) {
+                        workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                        const lastActive = await db.getSettingByKey('activeWorkspaceId');
+                        activeWorkspaceId =
+                            workspaces.find((w) => w.id === lastActive?.value)?.id ?? workspaces[0].id;
+                        await loadActiveWorkspaceData();
+                    }
+                }, 0);
+            } else {
+                // Load workspace data immediately if not logged in
+                await loadActiveWorkspaceData();
             }
-
-            await loadActiveWorkspaceData();
 
             const updateDateTimeDisplay = () => {
                 today = new Date();
@@ -2587,6 +2622,7 @@
                     <button 
                         class="auth-btn"
                         on:click={async () => {
+                            await ensureSupabaseLoaded();
                             // Save current account data to localStorage before logout
                             await saveAccountDataToLocalStorage();
                             
@@ -2760,6 +2796,7 @@
                     <form on:submit|preventDefault={async () => {
                         if (!loginEmail || !loginPassword) return;
                         
+                        await ensureSupabaseLoaded();
                         const result = await auth.signIn(loginEmail, loginPassword, rememberMe);
                         
                         if (result.success && result.user) {
@@ -2861,6 +2898,7 @@
                                 type="button" 
                                 class="login-google-btn"
                                 on:click={async () => {
+                                    await ensureSupabaseLoaded();
                                     const result = await auth.signInWithGoogle();
                                     if (!result.success) {
                                         alert(result.error || 'Failed to sign in with Google');
@@ -2937,6 +2975,7 @@
                             return;
                         }
                         
+                        await ensureSupabaseLoaded();
                         const result = await auth.signUp(signupEmail, signupPassword);
                         
                         if (result.success) {
