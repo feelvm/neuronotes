@@ -1400,6 +1400,57 @@
             }
 
             console.log('Import completed successfully');
+            
+            // Reload UI state from database after import
+            // This ensures the UI reflects the imported data
+            const loadedWorkspaces = await db.getAllWorkspaces();
+            if (loadedWorkspaces.length > 0) {
+                workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                
+                // Set active workspace - prefer existing if valid, otherwise use first or last active setting
+                const lastActive = await db.getSettingByKey('activeWorkspaceId');
+                const preferredWorkspaceId = lastActive?.value;
+                
+                if (activeWorkspaceId && workspaces.find(w => w.id === activeWorkspaceId)) {
+                    // Keep current active workspace if it still exists
+                    // activeWorkspaceId stays the same
+                } else if (preferredWorkspaceId && workspaces.find(w => w.id === preferredWorkspaceId)) {
+                    activeWorkspaceId = preferredWorkspaceId;
+                } else {
+                    activeWorkspaceId = workspaces[0].id;
+                }
+                
+                // Save the active workspace setting
+                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
+            } else {
+                // No workspaces after import - create default
+                const defaultWorkspace: Workspace = {
+                    id: generateUUID(),
+                    name: 'My Workspace',
+                    order: 0
+                };
+                await db.putWorkspace(defaultWorkspace);
+                workspaces = [defaultWorkspace];
+                activeWorkspaceId = defaultWorkspace.id;
+                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
+            }
+            
+            // Reload active workspace data to update UI (this will update notes, folders, calendar, kanban)
+            if (activeWorkspaceId) {
+                await loadActiveWorkspaceData();
+            }
+            
+            // If logged in, push imported data to Supabase to sync it
+            // This ensures the imported data becomes the source of truth in the cloud
+            if (isLoggedIn) {
+                try {
+                    await sync.pushToSupabase();
+                    console.log('Imported data synced to Supabase');
+                } catch (syncError) {
+                    console.warn('Failed to sync imported data to Supabase:', syncError);
+                    // Don't throw - import was successful, sync can happen later
+                }
+            }
         } catch (error) {
             console.error('Import error:', error);
             throw error;
@@ -1514,9 +1565,8 @@
             
             target.value = '';
             
-            alert('Backup imported successfully! The application will reload.');
-            
-            window.location.reload();
+            // Don't reload - the UI has already been updated by importData
+            alert('Backup imported successfully!');
         } catch (error) {
             console.error('Backup import failed:', error);
             alert(`Backup import failed: ${error instanceof Error ? error.message : String(error)}`);
