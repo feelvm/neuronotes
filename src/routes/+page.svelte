@@ -96,6 +96,32 @@
             isKanbanMinimized = false;
         }
     }
+    
+    // Save content when panel is hidden - use a function instead of reactive statement to avoid cycle
+    let previousShowNotes = true;
+    function handleShowNotesChange() {
+        if (!showNotes && previousShowNotes && selectedNoteId && editorDiv) {
+            const content = editorDiv.innerHTML;
+            saveNoteHistory(selectedNoteId, content);
+            // Save content directly to database without reading from notes to avoid cycle
+            setTimeout(async () => {
+                // Get note outside reactive context to avoid cycle
+                const note = notes.find((n) => n.id === selectedNoteId);
+                if (note && note.type === 'text') {
+                    note.contentHTML = content;
+                    await debouncedUpdateNote.flush().catch((e: any) => {
+                        console.warn('Failed to save note when hiding notes panel:', e);
+                    });
+                }
+            }, 0);
+        }
+        previousShowNotes = showNotes;
+    }
+    
+    // Watch for showNotes changes and call handler
+    $: {
+        handleShowNotesChange();
+    }
     let lastNotesWidth = 50;
     let lastCalendarHeight = 50;
     let isVerticalResizing = false;
@@ -114,6 +140,54 @@
 
     $: minimizedCount =
         (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
+    
+    // Track when panel is restored to reload content if needed
+    let previousIsNotesMinimized = false;
+    $: {
+        // When panel is restored (was minimized, now not minimized)
+        if (!isNotesMinimized && previousIsNotesMinimized && selectedNoteId) {
+            // Panel just restored - ensure content is loaded
+            setTimeout(() => {
+                const note = notes.find((n) => n.id === selectedNoteId);
+                if (note && note.type === 'text' && editorDiv) {
+                    // If note has content, restore it to editor
+                    if (note.contentHTML) {
+                        const sanitized = browser && DOMPurify
+                            ? DOMPurify.sanitize(note.contentHTML)
+                            : note.contentHTML;
+                        if (editorDiv.innerHTML !== sanitized) {
+                            editorDiv.innerHTML = sanitized;
+                        }
+                    } else {
+                        // If content is missing, try to load from database
+                        const noteWithMeta = note as any;
+                        if (!noteWithMeta._contentLoaded) {
+                            db.getNoteContent(selectedNoteId).then(rawContent => {
+                                if (rawContent && editorDiv && selectedNoteId === note.id) {
+                                    const sanitized = (browser && DOMPurify) 
+                                        ? DOMPurify.sanitize(rawContent)
+                                        : rawContent;
+                                    const noteIndex = notes.findIndex((n) => n.id === note.id);
+                                    if (noteIndex !== -1) {
+                                        notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
+                                        const updatedNoteWithMeta = notes[noteIndex] as any;
+                                        updatedNoteWithMeta._contentLoaded = true;
+                                        notes = [...notes];
+                                    }
+                                    if (editorDiv && editorDiv.innerHTML !== sanitized) {
+                                        editorDiv.innerHTML = sanitized;
+                                    }
+                                }
+                            }).catch(e => {
+                                console.error('Failed to load note content when restoring panel:', e);
+                            });
+                        }
+                    }
+                }
+            }, 100); // Delay to ensure editor div is recreated in DOM
+        }
+        previousIsNotesMinimized = isNotesMinimized;
+    }
 
     $: if (isNotesMinimized) {
         notesPanelWidth = 6;
@@ -152,8 +226,65 @@
         }
     }
 
-    function toggleNotesMinimized() {
+    async function toggleNotesMinimized() {
+        // Save current note content before minimizing
+        if (selectedNoteId && editorDiv) {
+            const content = editorDiv.innerHTML;
+            saveNoteHistory(selectedNoteId, content);
+            // Update the note in the notes array using selectedNoteId to avoid cycle
+            const noteIndex = notes.findIndex((n) => n.id === selectedNoteId);
+            if (noteIndex !== -1 && notes[noteIndex].type === 'text') {
+                notes[noteIndex] = { ...notes[noteIndex], contentHTML: content };
+                notes = [...notes];
+                // Update note via debouncedUpdateNote
+                await debouncedUpdateNote.flush();
+            }
+        }
+        const wasMinimized = isNotesMinimized;
         isNotesMinimized = !isNotesMinimized;
+        
+        // When restoring the panel, ensure content is loaded
+        if (wasMinimized && !isNotesMinimized && selectedNoteId) {
+            // Panel is being restored - ensure content is loaded
+            setTimeout(() => {
+                const note = notes.find((n) => n.id === selectedNoteId);
+                if (note && note.type === 'text' && editorDiv) {
+                    // If note has content, restore it to editor
+                    if (note.contentHTML) {
+                        const sanitized = browser && DOMPurify
+                            ? DOMPurify.sanitize(note.contentHTML)
+                            : note.contentHTML;
+                        if (editorDiv.innerHTML !== sanitized) {
+                            editorDiv.innerHTML = sanitized;
+                        }
+                    } else {
+                        // If content is missing, try to load from database
+                        const noteWithMeta = note as any;
+                        if (!noteWithMeta._contentLoaded) {
+                            db.getNoteContent(selectedNoteId).then(rawContent => {
+                                if (rawContent && editorDiv && selectedNoteId === note.id) {
+                                    const sanitized = (browser && DOMPurify) 
+                                        ? DOMPurify.sanitize(rawContent)
+                                        : rawContent;
+                                    const noteIndex = notes.findIndex((n) => n.id === note.id);
+                                    if (noteIndex !== -1) {
+                                        notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
+                                        const updatedNoteWithMeta = notes[noteIndex] as any;
+                                        updatedNoteWithMeta._contentLoaded = true;
+                                        notes = [...notes];
+                                    }
+                                    if (editorDiv && editorDiv.innerHTML !== sanitized) {
+                                        editorDiv.innerHTML = sanitized;
+                                    }
+                                }
+                            }).catch(e => {
+                                console.error('Failed to load note content when restoring panel:', e);
+                            });
+                        }
+                    }
+                }
+            }, 50); // Small delay to ensure editor div is recreated
+        }
     }
     function toggleCalendarMinimized() {
         isCalendarMinimized = !isCalendarMinimized;
@@ -275,8 +406,29 @@
         end: { row: number; col: number };
     } | null = null;
 
-    $: canMergeOrUnmerge = (() => {
-        if (!sheetSelection || !parsedCurrentNote?.spreadsheet) return false;
+    // Compute canMergeOrUnmerge as a function to avoid reactive cycle
+    function getCanMergeOrUnmerge(): boolean {
+        if (!sheetSelection || !selectedNoteId) return false;
+        
+        // Find note without using currentNote to break cycle
+        const note = notes.find((n) => n.id === selectedNoteId);
+        if (!note || note.type !== 'spreadsheet') return false;
+        
+        // Get spreadsheet data directly from note to avoid cycle
+        let spreadsheet = note.spreadsheet;
+        if (!spreadsheet) {
+            const noteWithRaw = note as any;
+            if (noteWithRaw._spreadsheetJson) {
+                try {
+                    spreadsheet = JSON.parse(noteWithRaw._spreadsheetJson);
+                } catch (e) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        
         const { start, end } = sheetSelection;
         const minRow = Math.min(start.row, end.row);
         const minCol = Math.min(start.col, end.col);
@@ -285,9 +437,22 @@
 
         if (minRow !== maxRow || minCol !== maxCol) return true;
 
-        const cell = parsedCurrentNote.spreadsheet.data[minRow][minCol];
+        if (!spreadsheet || !spreadsheet.data) return false;
+        const cell = spreadsheet.data[minRow]?.[minCol];
+        if (!cell) return false;
         return (cell.rowspan || 1) > 1 || (cell.colspan || 1) > 1;
-    })();
+    }
+    
+    // Create reactive variable that updates when dependencies change, but compute in function
+    let canMergeOrUnmerge = false;
+    $: if (sheetSelection && selectedNoteId) {
+        // Use setTimeout to break cycle - compute value asynchronously
+        setTimeout(() => {
+            canMergeOrUnmerge = getCanMergeOrUnmerge();
+        }, 0);
+    } else {
+        canMergeOrUnmerge = false;
+    }
 
     function applyFormatCommand(command: string) {
         if (editorDiv) editorDiv.focus();
@@ -537,20 +702,23 @@
     type DisplayItem = (Note & { displayType: 'note' }) | (Folder & { displayType: 'folder' });
     let displayList: DisplayItem[] = [];
 
+    // Compute displayList reactively - explicitly depend on notes, folders, currentFolderId, and activeWorkspaceId
     $: {
         let items: DisplayItem[];
         if (currentFolderId === null) {
             const rootNotes = notes
-                .filter((n) => n.folderId === null)
+                .filter((n) => n.folderId === null && n.workspaceId === activeWorkspaceId)
                 .map((n) => ({ ...n, displayType: 'note' as const }));
-            const allFolders = folders.map((f) => ({
-                ...f,
-                displayType: 'folder' as const
-            }));
+            const allFolders = folders
+                .filter((f) => f.workspaceId === activeWorkspaceId)
+                .map((f) => ({
+                    ...f,
+                    displayType: 'folder' as const
+                }));
             items = [...allFolders, ...rootNotes];
         } else {
             items = notes
-                .filter((n) => n.folderId === currentFolderId)
+                .filter((n) => n.folderId === currentFolderId && n.workspaceId === activeWorkspaceId)
                 .map((n) => ({ ...n, displayType: 'note' as const }));
         }
         displayList = items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -565,28 +733,76 @@
         : (currentNote?.contentHTML || '');
     
     // Update editor content only when note changes (not during typing)
-    $: if (editorDiv && currentNote && currentNote.id !== previousNoteId) {
-        const sanitized = currentNote.type === 'text' && browser && DOMPurify
-            ? DOMPurify.sanitize(currentNote.contentHTML || '')
-            : (currentNote.contentHTML || '');
-        // Only update if content is different to avoid cursor loss
-        if (editorDiv.innerHTML !== sanitized) {
-            editorDiv.innerHTML = sanitized;
+    // Use selectedNoteId instead of currentNote to avoid cycle
+    // Also check if panel was just restored (editor might be empty after being removed from DOM)
+    $: if (editorDiv && selectedNoteId && (selectedNoteId !== previousNoteId || (editorDiv.innerHTML === '' && !isNotesMinimized))) {
+        // Find note using selectedNoteId to avoid depending on currentNote
+        const note = notes.find((n) => n.id === selectedNoteId);
+        if (note && note.type === 'text') {
+            // If content is missing, try to load it from database
+            const noteWithMeta = note as any;
+            if ((!note.contentHTML || note.contentHTML === '') && !noteWithMeta._contentLoaded) {
+                const noteId = note.id;
+                db.getNoteContent(noteId).then(rawContent => {
+                    if (rawContent && editorDiv && selectedNoteId === noteId) {
+                        const sanitized = (browser && DOMPurify) 
+                            ? DOMPurify.sanitize(rawContent)
+                            : rawContent;
+                        // Update notes array using selectedNoteId to avoid cycle
+                        const noteIndex = notes.findIndex((n) => n.id === noteId);
+                        if (noteIndex !== -1) {
+                            notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
+                            const updatedNoteWithMeta = notes[noteIndex] as any;
+                            updatedNoteWithMeta._contentLoaded = true;
+                            notes = [...notes];
+                        }
+                        // Update editor only if it's empty or different
+                        if (editorDiv && (editorDiv.innerHTML === '' || editorDiv.innerHTML !== sanitized)) {
+                            editorDiv.innerHTML = sanitized;
+                        }
+                    }
+                }).catch(e => {
+                    console.error('Failed to load note content:', e);
+                });
+                // Don't update editor yet - wait for content to load
+            } else if (note.contentHTML) {
+                // Note has content - update editor if needed
+                const sanitized = browser && DOMPurify
+                    ? DOMPurify.sanitize(note.contentHTML)
+                    : note.contentHTML;
+                
+                // Only update if:
+                // 1. Editor is empty and note has content (including when panel is restored), OR
+                // 2. Editor content is different from note content AND user switched notes
+                // Don't clear editor if it has content but note.contentHTML is empty (user might be typing)
+                // Also don't update if editor has content and we're on the same note (user might be typing)
+                if (editorDiv.innerHTML === '' && sanitized) {
+                    // Editor is empty, note has content - update it (this handles panel restoration)
+                    editorDiv.innerHTML = sanitized;
+                } else if (editorDiv.innerHTML !== sanitized && sanitized && previousNoteId !== selectedNoteId) {
+                    // User switched notes - update editor
+                    editorDiv.innerHTML = sanitized;
+                }
+                // If editor has content and we're on the same note, don't update (user is typing)
+            }
+            // If editor has content but note.contentHTML is empty, don't clear it (user might be typing)
         }
-        previousNoteId = currentNote.id;
-    } else if (!currentNote) {
+        previousNoteId = selectedNoteId;
+    } else if (!selectedNoteId) {
         previousNoteId = null;
     }
     
+    // Parse current note without mutating notes array to avoid cycle
+    // Just return a copy with parsed spreadsheet - don't update notes array in reactive statement
     $: parsedCurrentNote = currentNote ? (() => {
         if (currentNote.type === 'spreadsheet') {
             const noteWithRaw = currentNote as any;
             if (noteWithRaw._spreadsheetJson && !currentNote.spreadsheet) {
                 try {
                     const parsed = JSON.parse(noteWithRaw._spreadsheetJson);
-                    currentNote.spreadsheet = parsed;
-                    delete noteWithRaw._spreadsheetJson;
-                    return currentNote;
+                    // Return a copy with parsed spreadsheet - don't update notes array here to avoid cycle
+                    // The notes array will be updated when the note is saved via updateNote
+                    return { ...currentNote, spreadsheet: parsed };
                 } catch (e) {
                     console.error('Failed to parse spreadsheet JSON:', e);
                     return currentNote;
@@ -814,6 +1030,13 @@
         const note = notes.find((n) => n.id === id);
         if (!note) return;
         
+        // Save current note content before deleting if it's the selected note
+        if (selectedNoteId === id && currentNote && currentNote.type === 'text' && editorDiv) {
+            currentNote.contentHTML = editorDiv.innerHTML;
+            saveNoteHistory(currentNote.id, editorDiv.innerHTML);
+            await debouncedUpdateNote.flush();
+        }
+        
         const noteType = note.type === 'spreadsheet' ? 'spreadsheet' : 'note';
         const noteTitle = note.title || 'Untitled';
         
@@ -913,7 +1136,7 @@
     async function updateNote(note: Note) {
         // If this is the currently selected text note, get the latest content from the editor
         let contentHTML = note.contentHTML;
-        if (note.type === 'text' && currentNote && currentNote.id === note.id && editorDiv) {
+        if (note.type === 'text' && selectedNoteId === note.id && editorDiv) {
             // Use the editor's current content as the source of truth
             contentHTML = editorDiv.innerHTML;
         }
