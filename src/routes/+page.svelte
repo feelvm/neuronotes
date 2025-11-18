@@ -3,8 +3,7 @@
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import * as backup from '$lib/backup';
-    // Supabase imports are loaded dynamically to reduce initial bundle size
-    let auth: typeof import('$lib/supabase/auth');
+    // Supabase imports are loaded dynamically to reduce let auth: typeof import('$lib/supabase/auth');
     let sync: typeof import('$lib/supabase/sync');
     let migrations: typeof import('$lib/supabase/migrations');
     let onAuthStateChange: typeof import('$lib/supabase/auth').onAuthStateChange;
@@ -298,13 +297,18 @@
 
     function startVerticalResize(e: MouseEvent) {
         e.preventDefault();
+        e.stopPropagation();
         isVerticalResizing = true;
         window.addEventListener('mousemove', doVerticalResize);
         window.addEventListener('mouseup', stopResize);
+        // Also prevent default on body to avoid text selection
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
     }
 
     function doVerticalResize(e: MouseEvent) {
         if (!isVerticalResizing) return;
+        e.preventDefault();
         const mainEl = document.querySelector('.main');
         if (!mainEl) return;
         const mainRect = mainEl.getBoundingClientRect();
@@ -315,17 +319,27 @@
 
     function startHorizontalResize(e: MouseEvent) {
         e.preventDefault();
+        e.stopPropagation();
         isHorizontalResizing = true;
         window.addEventListener('mousemove', doHorizontalResize);
         window.addEventListener('mouseup', stopResize);
+        // Also prevent default on body to avoid text selection
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'row-resize';
     }
 
     function doHorizontalResize(e: MouseEvent) {
         if (!isHorizontalResizing) return;
-        const rightEl = document.querySelector('.right');
-        if (!rightEl) return;
-        const rightRect = rightEl.getBoundingClientRect();
-        const newHeight = ((e.clientY - rightRect.top) / rightRect.height) * 100;
+        e.preventDefault();
+        // When notes are hidden, panels are in .main; when notes are shown, they're in .right
+        let containerEl = document.querySelector('.right');
+        if (!containerEl) {
+            // When notes are hidden, use .main.calendar-kanban or .main
+            containerEl = document.querySelector('.main.calendar-kanban') || document.querySelector('.main');
+        }
+        if (!containerEl) return;
+        const containerRect = containerEl.getBoundingClientRect();
+        const newHeight = ((e.clientY - containerRect.top) / containerRect.height) * 100;
         calendarPanelHeight = Math.max(6, Math.min(94, newHeight));
         lastCalendarHeight = calendarPanelHeight;
     }
@@ -336,6 +350,9 @@
         window.removeEventListener('mousemove', doVerticalResize);
         window.removeEventListener('mousemove', doHorizontalResize);
         window.removeEventListener('mouseup', stopResize);
+        // Restore body styles
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
     }
     
     function cleanupResizeListeners() {
@@ -5361,11 +5378,17 @@
     
     .main.notes-calendar,
     .main.notes-kanban {
-        grid-template-columns: 1fr 24px 1fr;
+        grid-template-columns: var(--notes-width, 50%) 24px 1fr;
     }
     
     .main.calendar-kanban {
-        grid-template-columns: 1fr 24px 1fr;
+        grid-template-rows: var(--calendar-height, 50%) 24px 1fr;
+        grid-template-columns: 1fr;
+    }
+    
+    .main.calendar-kanban > .resizer-wrapper.horizontal {
+        grid-row: 2;
+        overflow: visible;
     }
     
     .main.calendar-kanban .right {
@@ -5403,6 +5426,7 @@
         max-height: 100%;
         transition: all 0.2s ease-in-out;
         position: relative;
+        z-index: 1;
     }
 
     .panel-header {
@@ -5616,11 +5640,18 @@
 
     .right {
         display: grid;
-        grid-template-rows: 1fr 24px 1fr;
+        grid-template-rows: var(--calendar-height, 50%) 24px 1fr;
         gap: 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
+        overflow: hidden;
+        position: relative;
+    }
+    
+    .right > .resizer-wrapper.horizontal {
+        grid-row: 2;
+        overflow: visible;
     }
     
     .right.single-panel {
@@ -6218,26 +6249,74 @@
     }
 
     @media (max-width: 1200px) {
+        .app {
+            overflow: hidden;
+            height: 100vh;
+        }
         .main {
             grid-template-columns: 1fr;
-            grid-template-rows: 50vh 24px 1fr;
+            grid-template-rows: min-content min-content;
+            gap: 12px;
             overflow-y: auto;
             overflow-x: hidden;
             scroll-behavior: smooth;
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: calc(100vh - 50px);
+        }
+        .main::-webkit-scrollbar {
+            display: none;
+        }
+        .main {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .main .resizer-wrapper {
+            display: none !important;
         }
         .panel {
             min-height: 400px;
+            height: auto;
+            flex-shrink: 0;
         }
         .right {
-            grid-template-rows: 1fr 24px 1fr;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            height: auto;
+            min-height: min-content;
+        }
+        .right .resizer-wrapper.horizontal {
+            display: none !important;
+        }
+        .right .panel {
+            flex-shrink: 0;
+            min-height: 400px;
         }
     }
 
     @media (max-width: 768px) {
+        .app {
+            overflow: hidden;
+            height: 100vh;
+        }
         .main {
             padding: 12px;
             gap: 12px;
-            grid-template-rows: 50vh 24px 50vh;
+            grid-template-rows: min-content min-content;
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: calc(100vh - 50px);
+        }
+        .main::-webkit-scrollbar {
+            display: none;
+        }
+        .main {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .main .resizer-wrapper {
+            display: none !important;
         }
         .nav {
             padding: 0 12px;
@@ -6267,8 +6346,23 @@
             max-height: 150px;
         }
         .right {
-            grid-template-rows: 1fr 24px 1fr;
-            grid-template-columns: 1fr;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            height: auto;
+            min-height: min-content;
+        }
+        .right .resizer-wrapper.horizontal {
+            display: none !important;
+        }
+        .right .panel {
+            flex-shrink: 0;
+            min-height: 300px;
+        }
+        .panel {
+            min-height: 300px;
+            height: auto;
+            flex-shrink: 0;
         }
         .calendar-grid {
             grid-template-columns: 1fr;
@@ -6303,13 +6397,32 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 10;
+        z-index: 100;
+        position: relative;
+        pointer-events: auto;
+        isolation: isolate;
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
     }
     .resizer-wrapper.vertical {
         cursor: col-resize;
+        width: 100%;
+        height: 100%;
+        min-width: 24px;
     }
     .resizer-wrapper.horizontal {
         cursor: row-resize;
+        width: 100%;
+        height: 100%;
+        min-height: 24px;
+        background: transparent;
+        position: relative;
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
     }
     .panel-resizer-pill {
         background: var(--panel-bg-darker);
@@ -6319,6 +6432,7 @@
         justify-content: space-evenly;
         transition: background-color 0.2s;
         border-radius: 8px;
+        pointer-events: auto;
     }
     .resizer-wrapper:hover .panel-resizer-pill {
         background: var(--accent-red);
