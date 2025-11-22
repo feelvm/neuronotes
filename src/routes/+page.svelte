@@ -3,7 +3,8 @@
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import * as backup from '$lib/backup';
-    // Supabase imports are loaded dynamically to reduce let auth: typeof import('$lib/supabase/auth');
+    // Supabase imports are loaded dynamically to reduce bundle size
+    let auth: typeof import('$lib/supabase/auth');
     let sync: typeof import('$lib/supabase/sync');
     let migrations: typeof import('$lib/supabase/migrations');
     let onAuthStateChange: typeof import('$lib/supabase/auth').onAuthStateChange;
@@ -1562,8 +1563,22 @@
     let newEventDate = '';
     let newEventRepeat: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom' = 'none';
     let newEventCustomDays: boolean[] = [false, false, false, false, false, false, false];
+    const eventColors = ['#FF4444', '#FF8800', '#FFD700', '#4CAF50', '#8C7AE6', '#2196F3', '#03A9F4']; // red, orange, yellow, green, purple, blue, light blue
     let newEventColor = '#8C7AE6';
     let showRepeatOptions = false;
+    
+    // Event editing state
+    let editingEventId: string | null = null;
+    let editingEventDate: string | null = null;
+    let editingEventTitle = '';
+    let editingEventTime = '';
+
+    function cycleEventColor() {
+        const currentIndex = eventColors.indexOf(newEventColor);
+        // If current color not in array, start from first color, otherwise cycle to next
+        const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % eventColors.length;
+        newEventColor = eventColors[nextIndex];
+    }
 
     function hexToRgba(hex: string, alpha: number): string {
         const r = parseInt(hex.slice(1, 3), 16);
@@ -2099,6 +2114,93 @@
         weekStart = newDate;
     }
 
+    function convertDateToISO(dateStr: string): string | null {
+        // Convert DD/MM/YYYY to YYYY-MM-DD
+        const parts = dateStr.trim().split('/');
+        if (parts.length !== 3) return null;
+        const [day, month, year] = parts;
+        if (day.length !== 2 || month.length !== 2 || year.length !== 4) return null;
+        const dayNum = parseInt(day, 10);
+        const monthNum = parseInt(month, 10);
+        const yearNum = parseInt(year, 10);
+        if (isNaN(dayNum) || isNaN(monthNum) || isNaN(yearNum)) return null;
+        if (dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) return null;
+        return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    function convertISOToDate(isoDate: string): string {
+        // Convert YYYY-MM-DD to DD/MM/YYYY
+        const [year, month, day] = isoDate.split('-');
+        return `${day}/${month}/${year}`;
+    }
+
+    function startEditingEvent(event: CalendarEvent, dateKey: string) {
+        editingEventId = event.id;
+        editingEventDate = dateKey;
+        editingEventTitle = event.title;
+        editingEventTime = event.time || '';
+        // Auto-focus the title input after a brief delay to ensure DOM is updated
+        setTimeout(() => {
+            const titleInput = document.querySelector('.event-edit-title') as HTMLInputElement;
+            if (titleInput) titleInput.focus();
+        }, 10);
+    }
+
+    function cancelEditingEvent() {
+        editingEventId = null;
+        editingEventDate = null;
+        editingEventTitle = '';
+        editingEventTime = '';
+    }
+
+    async function saveEditedEvent() {
+        if (!editingEventId || !editingEventDate) return;
+        
+        const event = calendarEvents.find(e => e.id === editingEventId);
+        if (!event) {
+            cancelEditingEvent();
+            return;
+        }
+
+        if (!editingEventTitle.trim()) {
+            alert('Event title cannot be empty.');
+            return;
+        }
+
+        // Validate time format if provided
+        let formattedTime = editingEventTime.trim();
+        if (formattedTime) {
+            const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
+            if (!timePattern.test(formattedTime)) {
+                alert('Invalid time format. Please use HH:MM format (24-hour, e.g., 14:30).');
+                return;
+            }
+            // Ensure two-digit hours
+            const [hours, minutes] = formattedTime.split(':');
+            formattedTime = `${hours.padStart(2, '0')}:${minutes}`;
+        }
+
+        try {
+            const updatedEvent: CalendarEvent = {
+                ...event,
+                title: editingEventTitle.trim(),
+                time: formattedTime || undefined
+            };
+            
+            await db.putCalendarEvent(updatedEvent);
+            const index = calendarEvents.findIndex((e) => e.id === event.id);
+            if (index !== -1) {
+                calendarEvents[index] = updatedEvent;
+                calendarEvents = [...calendarEvents];
+            }
+            await syncIfLoggedIn();
+            cancelEditingEvent();
+        } catch (error) {
+            console.error('Failed to update event:', error);
+            alert(`Failed to update event: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
     async function addEvent() {
         if (!newEventTitle.trim() || !newEventDate) {
             console.warn('Cannot add event: missing title or date', { title: newEventTitle, date: newEventDate });
@@ -2111,12 +2213,32 @@
             return;
         }
 
+        // Convert DD/MM/YYYY to YYYY-MM-DD
+        const isoDate = convertDateToISO(newEventDate);
+        if (!isoDate) {
+            alert('Invalid date format. Please use DD/MM/YYYY format.');
+            return;
+        }
+
+        // Validate time format (HH:MM)
+        let formattedTime = newEventTime.trim();
+        if (formattedTime) {
+            const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
+            if (!timePattern.test(formattedTime)) {
+                alert('Invalid time format. Please use HH:MM format (24-hour, e.g., 14:30).');
+                return;
+            }
+            // Ensure two-digit hours
+            const [hours, minutes] = formattedTime.split(':');
+            formattedTime = `${hours.padStart(2, '0')}:${minutes}`;
+        }
+
         try {
             const newEvent: CalendarEvent = {
                 id: generateUUID(),
-                date: newEventDate,
+                date: isoDate,
                 title: newEventTitle.trim(),
-                time: newEventTime || undefined,
+                time: formattedTime || undefined,
                 workspaceId: activeWorkspaceId,
                 repeat: newEventRepeat,
                 repeatOn: newEventRepeat === 'custom' 
@@ -2136,7 +2258,7 @@
             newEventTime = '';
             newEventRepeat = 'none';
             newEventCustomDays = [false, false, false, false, false, false, false];
-            newEventColor = '#8C7AE6'; // Reset to default
+            // Don't reset newEventColor - keep the selected color until page reload
             showRepeatOptions = false;
             
             console.log('Event added successfully');
@@ -2762,7 +2884,7 @@
 
             updateDateTimeDisplay();
             weekStart = startOfWeek(today, 1);
-            newEventDate = ymd(today);
+            newEventDate = convertISOToDate(ymd(today));
 
             timer = setInterval(updateDateTimeDisplay, 60 * 1000);
 
@@ -3140,22 +3262,33 @@
                     <form on:submit|preventDefault={async () => {
                         if (!loginEmail || !loginPassword) return;
                         
-                        await ensureSupabaseLoaded();
-                        const result = await auth.signIn(loginEmail, loginPassword, rememberMe);
-                        
-                        if (result.success && result.user) {
-                            isLoggedIn = true;
-                            showLoginModal = false;
-                            loginEmail = '';
-                            loginPassword = '';
-                            isEmailInvalid = false;
+                        try {
+                            await ensureSupabaseLoaded();
+                            if (!auth) {
+                                alert('Authentication module failed to load. Please refresh the page.');
+                                return;
+                            }
                             
-                            // Clear all local data before pulling new user's data
-                            console.log('Clearing local data for new user...');
-                            await db.clearAllLocalData();
+                            const result = await auth.signIn(loginEmail, loginPassword, rememberMe);
                             
-                            // Check if migration is needed (user has local data but no cloud data)
-                            if (await migrations.needsMigration()) {
+                            if (!result.success) {
+                                alert(result.error || 'Failed to sign in. Please check your credentials.');
+                                return;
+                            }
+                            
+                            if (result.success && result.user) {
+                                isLoggedIn = true;
+                                showLoginModal = false;
+                                loginEmail = '';
+                                loginPassword = '';
+                                isEmailInvalid = false;
+                                
+                                // Clear all local data before pulling new user's data
+                                console.log('Clearing local data for new user...');
+                                await db.clearAllLocalData();
+                                
+                                // Check if migration is needed (user has local data but no cloud data)
+                                if (await migrations.needsMigration()) {
                                 console.log('Migrating local data to Supabase...');
                                 const migrationResult = await migrations.migrateLocalDataToSupabase();
                                 if (migrationResult.success) {
@@ -3163,41 +3296,42 @@
                                 } else {
                                     console.error('Migration failed:', migrationResult.error);
                                 }
-                            } else {
-                                // Pull latest data from Supabase
-                                console.log('Pulling data from Supabase...');
-                                await sync.pullFromSupabase();
+                                } else {
+                                    // Pull latest data from Supabase
+                                    console.log('Pulling data from Supabase...');
+                                    await sync.pullFromSupabase();
+                                }
+                                
+                                // Clear UI state and reload workspace data
+                                notes = [];
+                                folders = [];
+                                calendarEvents = [];
+                                kanban = [];
+                                selectedNoteId = '';
+                                currentFolderId = null;
+                                
+                                // Reload workspaces and set active workspace
+                                let loadedWorkspaces = await db.getAllWorkspaces();
+                                if (loadedWorkspaces.length > 0) {
+                                    workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                                    activeWorkspaceId = workspaces[0].id;
+                                } else {
+                                    // Create default workspace if none exist
+                                    const defaultWorkspace: Workspace = {
+                                        id: generateUUID(),
+                                        name: 'My Workspace',
+                                        order: 0
+                                    };
+                                    await db.putWorkspace(defaultWorkspace);
+                                    workspaces = [defaultWorkspace];
+                                    activeWorkspaceId = defaultWorkspace.id;
+                                }
+                                
+                                await loadActiveWorkspaceData();
                             }
-                            
-                            // Clear UI state and reload workspace data
-                            notes = [];
-                            folders = [];
-                            calendarEvents = [];
-                            kanban = [];
-                            selectedNoteId = '';
-                            currentFolderId = null;
-                            
-                            // Reload workspaces and set active workspace
-                            let loadedWorkspaces = await db.getAllWorkspaces();
-                            if (loadedWorkspaces.length > 0) {
-                                workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                                activeWorkspaceId = workspaces[0].id;
-                            } else {
-                                // Create default workspace if none exist
-                                const defaultWorkspace: Workspace = {
-                                    id: generateUUID(),
-                                    name: 'My Workspace',
-                                    order: 0
-                                };
-                                await db.putWorkspace(defaultWorkspace);
-                                workspaces = [defaultWorkspace];
-                                activeWorkspaceId = defaultWorkspace.id;
-                            }
-                            
-                            await loadActiveWorkspaceData();
-                        } else {
-                            // Show error to user
-                            alert(result.error || 'Login failed');
+                        } catch (error) {
+                            console.error('Login error:', error);
+                            alert(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
                         }
                     }}>
                         <div class="login-field">
@@ -3242,12 +3376,22 @@
                                 type="button" 
                                 class="login-google-btn"
                                 on:click={async () => {
-                                    await ensureSupabaseLoaded();
-                                    const result = await auth.signInWithGoogle();
-                                    if (!result.success) {
-                                        alert(result.error || 'Failed to sign in with Google');
+                                    try {
+                                        await ensureSupabaseLoaded();
+                                        if (!auth) {
+                                            alert('Authentication module failed to load. Please refresh the page.');
+                                            return;
+                                        }
+                                        
+                                        const result = await auth.signInWithGoogle();
+                                        if (!result.success) {
+                                            alert(result.error || 'Failed to sign in with Google');
+                                        }
+                                        // OAuth will redirect, so we don't need to close modal here
+                                    } catch (error) {
+                                        console.error('Google login error:', error);
+                                        alert(`Google login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
                                     }
-                                    // OAuth will redirect, so we don't need to close modal here
                                 }}
                             >
                                 <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
@@ -4056,25 +4200,85 @@
                                         class="event" 
                                         title={ev.title}
                                         style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
+                                        on:dblclick={() => startEditingEvent(ev, ymd(d))}
                                     >
-                                        <div class="event-details">
-                                            {#if ev.time}
-                                                <div 
-                                                    class="time"
-                                                    style="color: {ev.color || 'var(--accent-purple)'};"
-                                                >
-                                                    {ev.time}
-                                                </div>
-                                            {/if}
-                                            <div class="title">{ev.title}</div>
-                                        </div>
-                                        <button
-                                            class="delete-event-btn"
-                                            on:click={() => deleteEvent(ev, ymd(d))}
-                                            title="Delete event"
-                                        >
-                                            ×
-                                        </button>
+                                        {#if editingEventId === ev.id && editingEventDate === ymd(d)}
+                                            <div class="event-details event-editing">
+                                                <input
+                                                    type="text"
+                                                    class="event-edit-time"
+                                                    bind:value={editingEventTime}
+                                                    placeholder="HH:MM"
+                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
+                                                    on:keydown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            saveEditedEvent();
+                                                        }
+                                                        if (e.key === 'Escape') {
+                                                            e.preventDefault();
+                                                            cancelEditingEvent();
+                                                        }
+                                                    }}
+                                                    on:focus={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
+                                                    }}
+                                                    on:blur={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = 'none';
+                                                    }}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    class="event-edit-title"
+                                                    bind:value={editingEventTitle}
+                                                    placeholder="Event title"
+                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
+                                                    on:keydown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            saveEditedEvent();
+                                                        }
+                                                        if (e.key === 'Escape') {
+                                                            e.preventDefault();
+                                                            cancelEditingEvent();
+                                                        }
+                                                    }}
+                                                    on:focus={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
+                                                    }}
+                                                    on:blur={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = 'none';
+                                                    }}
+                                                />
+                                            </div>
+                                        {:else}
+                                            <div class="event-details">
+                                                {#if ev.time}
+                                                    <div 
+                                                        class="time"
+                                                        style="color: {ev.color || 'var(--accent-purple)'};"
+                                                    >
+                                                        {ev.time}
+                                                    </div>
+                                                {/if}
+                                                <div class="title">{ev.title}</div>
+                                            </div>
+                                            <button
+                                                class="delete-event-btn"
+                                                on:click={() => deleteEvent(ev, ymd(d))}
+                                                title="Delete event"
+                                            >
+                                                ×
+                                            </button>
+                                        {/if}
                                     </div>
                                 {/each}
                             </div>
@@ -4082,8 +4286,20 @@
                     </div>
 
                     <div class="calendar-add">
-                        <input type="date" bind:value={newEventDate} aria-label="Event date" />
-                        <input type="time" bind:value={newEventTime} aria-label="Event time" />
+                        <input 
+                            type="text" 
+                            bind:value={newEventDate} 
+                            placeholder="DD/MM/YYYY"
+                            aria-label="Event date"
+                            pattern="\d{2}/\d{2}/\d{4}"
+                        />
+                        <input 
+                            type="text" 
+                            bind:value={newEventTime} 
+                            placeholder="HH:MM"
+                            aria-label="Event time"
+                            pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
+                        />
                         <input
                             type="text"
                             bind:value={newEventTitle}
@@ -4093,13 +4309,14 @@
                                 if (e.key === 'Enter' && !showRepeatOptions) addEvent();
                             }}
                         />
-                        <input
-                            type="color"
-                            bind:value={newEventColor}
+                        <button
+                            type="button"
+                            class="color-cycle-btn"
+                            style="background-color: {newEventColor};"
+                            on:click={cycleEventColor}
                             aria-label="Event color"
-                            class="color-picker"
-                            title="Choose event color"
-                        />
+                            title="Click to cycle through colors"
+                        ></button>
                         <button 
                             class="small-btn" 
                             class:active={showRepeatOptions}
@@ -4392,25 +4609,85 @@
                                         class="event" 
                                         title={ev.title}
                                         style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
+                                        on:dblclick={() => startEditingEvent(ev, ymd(d))}
                                     >
-                                        <div class="event-details">
-                                            {#if ev.time}
-                                                <div 
-                                                    class="time"
-                                                    style="color: {ev.color || 'var(--accent-purple)'};"
-                                                >
-                                                    {ev.time}
-                                                </div>
-                                            {/if}
-                                            <div class="title">{ev.title}</div>
-                                        </div>
-                                        <button
-                                            class="delete-event-btn"
-                                            on:click={() => deleteEvent(ev, ymd(d))}
-                                            title="Delete event"
-                                        >
-                                            ×
-                                        </button>
+                                        {#if editingEventId === ev.id && editingEventDate === ymd(d)}
+                                            <div class="event-details event-editing">
+                                                <input
+                                                    type="text"
+                                                    class="event-edit-time"
+                                                    bind:value={editingEventTime}
+                                                    placeholder="HH:MM"
+                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
+                                                    on:keydown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            saveEditedEvent();
+                                                        }
+                                                        if (e.key === 'Escape') {
+                                                            e.preventDefault();
+                                                            cancelEditingEvent();
+                                                        }
+                                                    }}
+                                                    on:focus={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
+                                                    }}
+                                                    on:blur={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = 'none';
+                                                    }}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    class="event-edit-title"
+                                                    bind:value={editingEventTitle}
+                                                    placeholder="Event title"
+                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
+                                                    on:keydown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            saveEditedEvent();
+                                                        }
+                                                        if (e.key === 'Escape') {
+                                                            e.preventDefault();
+                                                            cancelEditingEvent();
+                                                        }
+                                                    }}
+                                                    on:focus={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
+                                                    }}
+                                                    on:blur={(e) => {
+                                                        const color = ev.color || 'var(--accent-purple)';
+                                                        e.currentTarget.style.borderColor = color;
+                                                        e.currentTarget.style.boxShadow = 'none';
+                                                    }}
+                                                />
+                                            </div>
+                                        {:else}
+                                            <div class="event-details">
+                                                {#if ev.time}
+                                                    <div 
+                                                        class="time"
+                                                        style="color: {ev.color || 'var(--accent-purple)'};"
+                                                    >
+                                                        {ev.time}
+                                                    </div>
+                                                {/if}
+                                                <div class="title">{ev.title}</div>
+                                            </div>
+                                            <button
+                                                class="delete-event-btn"
+                                                on:click={() => deleteEvent(ev, ymd(d))}
+                                                title="Delete event"
+                                            >
+                                                ×
+                                            </button>
+                                        {/if}
                                     </div>
                                 {/each}
                             </div>
@@ -4418,8 +4695,20 @@
                     </div>
 
                     <div class="calendar-add">
-                        <input type="date" bind:value={newEventDate} aria-label="Event date" />
-                        <input type="time" bind:value={newEventTime} aria-label="Event time" />
+                        <input 
+                            type="text" 
+                            bind:value={newEventDate} 
+                            placeholder="DD/MM/YYYY"
+                            aria-label="Event date"
+                            pattern="\d{2}/\d{2}/\d{4}"
+                        />
+                        <input 
+                            type="text" 
+                            bind:value={newEventTime} 
+                            placeholder="HH:MM"
+                            aria-label="Event time"
+                            pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
+                        />
                         <input
                             type="text"
                             bind:value={newEventTitle}
@@ -4429,13 +4718,14 @@
                                 if (e.key === 'Enter' && !showRepeatOptions) addEvent();
                             }}
                         />
-                        <input
-                            type="color"
-                            bind:value={newEventColor}
+                        <button
+                            type="button"
+                            class="color-cycle-btn"
+                            style="background-color: {newEventColor};"
+                            on:click={cycleEventColor}
                             aria-label="Event color"
-                            class="color-picker"
-                            title="Choose event color"
-                        />
+                            title="Click to cycle through colors"
+                        ></button>
                         <button 
                             class="small-btn" 
                             class:active={showRepeatOptions}
@@ -5769,21 +6059,22 @@
         font-variant-numeric: tabular-nums;
         font-weight: 500;
     }
-    .color-picker {
-        width: 40px;
-        height: 32px;
-        padding: 2px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        cursor: pointer;
-        background: var(--panel-bg-darker);
-    }
-    .color-picker::-webkit-color-swatch-wrapper {
+    .color-cycle-btn {
+        width: 28px;
+        height: 28px;
         padding: 0;
-    }
-    .color-picker::-webkit-color-swatch {
-        border: none;
+        border: 1px solid var(--border);
         border-radius: 6px;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: transform 0.1s, opacity 0.2s;
+    }
+    .color-cycle-btn:hover {
+        transform: scale(1.05);
+        opacity: 0.9;
+    }
+    .color-cycle-btn:active {
+        transform: scale(0.95);
     }
     .delete-event-btn {
         display: flex;
@@ -5803,6 +6094,35 @@
     .delete-event-btn:hover {
         background: var(--accent-red);
         color: white;
+    }
+    .event-editing {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        width: 100%;
+    }
+    .event-edit-time,
+    .event-edit-title {
+        background: var(--panel-bg);
+        border: 1px solid var(--accent-purple);
+        border-radius: 3px;
+        padding: 2px 4px;
+        font-size: 11px;
+        color: var(--text);
+        font-family: var(--font-sans);
+        width: 100%;
+    }
+    .event-edit-time {
+        width: 50px;
+        flex-shrink: 0;
+    }
+    .event-edit-title {
+        flex: 1;
+        min-width: 0;
+    }
+    .event-edit-time:focus,
+    .event-edit-title:focus {
+        outline: none;
     }
     .calendar-controls {
         display: flex;
