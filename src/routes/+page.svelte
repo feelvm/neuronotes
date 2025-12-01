@@ -1619,17 +1619,42 @@
     }
     
     // Helper function to sync data to Supabase if logged in
+    // Uses fullSync to pull changes from other devices, then push local changes
     async function syncIfLoggedIn() {
         if (isLoggedIn) {
             try {
                 await ensureSupabaseLoaded();
-                await sync.pushToSupabase();
+                await sync.fullSync();
             } catch (error) {
                 console.error('Sync failed:', error);
                 // Don't block user operations if sync fails
             }
         }
     }
+    
+    // Set up periodic sync to pull changes from other devices (every 30 seconds)
+    let syncInterval: ReturnType<typeof setInterval> | undefined;
+    const setupPeriodicSync = () => {
+        if (syncInterval) {
+            clearInterval(syncInterval);
+            syncInterval = undefined;
+        }
+        if (isLoggedIn) {
+            syncInterval = setInterval(async () => {
+                if (isLoggedIn) {
+                    try {
+                        await ensureSupabaseLoaded();
+                        // Only pull (not full sync) to avoid overwriting local changes
+                        // Full sync happens on user actions via syncIfLoggedIn
+                        await sync.pullFromSupabase();
+                    } catch (error) {
+                        console.error('Periodic sync failed:', error);
+                        // Don't block if sync fails
+                    }
+                }
+            }, 30000); // Every 30 seconds
+        }
+    };
     
     // Save current account data to localStorage before logout
     async function saveAccountDataToLocalStorage(): Promise<void> {
@@ -2732,14 +2757,16 @@
         }
     }
 
-    async function loadKanbanData() {
-        if (isKanbanLoaded || !browser || !activeWorkspaceId) return;
+    async function loadKanbanData(force = false) {
+        if ((isKanbanLoaded && !force) || !browser || !activeWorkspaceId) return;
         try {
             const kData = await db.getKanbanByWorkspaceId(activeWorkspaceId);
             kanban = kData ? kData.columns : [];
             isKanbanLoaded = true;
+            console.log('[kanban] Loaded kanban data:', kanban.length, 'columns');
         } catch (e) {
             console.error('Failed to load kanban data:', e);
+            isKanbanLoaded = true; // Set to true even on error to prevent infinite retries
         }
     }
 
@@ -2784,9 +2811,10 @@
         }
 
         // Load calendar events and kanban data in parallel
+        // Force reload kanban to ensure we get the latest data after sync
         await Promise.all([
             loadCalendarEvents(),
-            loadKanbanData()
+            loadKanbanData(true) // Force reload to ensure we get synced data
         ]);
     }
 
@@ -2855,22 +2883,31 @@
                 
                 // Defer heavy sync operations to improve initial load
                 setTimeout(async () => {
+                    // Flush any pending database saves before clearing
+                    await db.flushDatabaseSave();
+                    
                     // Clear all local data before pulling (in case user switched accounts)
                     console.log('Clearing local data for logged-in user...');
                     await db.clearAllLocalData();
                     
-                    // Pull latest data from Supabase
-                    await sync.pullFromSupabase();
+                    // Use fullSync to pull latest data from Supabase, then push any local changes
+                    console.log('Syncing with Supabase...');
+                    await sync.fullSync();
                     
-                    // Reload workspaces after pull
+                    // Reload workspaces after sync
                     let loadedWorkspaces = await db.getAllWorkspaces();
                     if (loadedWorkspaces.length > 0) {
                         workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
                         const lastActive = await db.getSettingByKey('activeWorkspaceId');
                         activeWorkspaceId =
                             workspaces.find((w) => w.id === lastActive?.value)?.id ?? workspaces[0].id;
+                        // Reset kanban loaded flag to force reload after sync
+                        isKanbanLoaded = false;
                         await loadActiveWorkspaceData();
                     }
+                    
+                    // Set up periodic sync after initial load
+                    setupPeriodicSync();
                 }, 0);
             } else {
                 // Load workspace data immediately if not logged in
@@ -2890,6 +2927,11 @@
             // Don't set newEventDate - let it be empty so placeholder shows
 
             timer = setInterval(updateDateTimeDisplay, 60 * 1000);
+            
+            // Set up periodic sync if already logged in
+            if (isLoggedIn) {
+                setupPeriodicSync();
+            }
 
             document.addEventListener('selectionchange', updateSelectedFontSize);
             
@@ -2916,10 +2958,14 @@
                     
                     isLoggedIn = true;
                     hasHandledInitialSession = true;
+                    // Flush any pending database saves before clearing
+                    await db.flushDatabaseSave();
                     // Clear all local data before pulling new user's data
                     console.log('Clearing local data for new user...');
                     await db.clearAllLocalData();
-                    await sync.pullFromSupabase();
+                    // Use fullSync to pull latest data from Supabase, then push any local changes
+                    console.log('Syncing with Supabase...');
+                    await sync.fullSync();
                     // Clear UI state and reload
                     notes = [];
                     folders = [];
@@ -2945,9 +2991,19 @@
                         activeWorkspaceId = defaultWorkspace.id;
                     }
                     
+                    // Reset kanban loaded flag to force reload after sync
+                    isKanbanLoaded = false;
                     await loadActiveWorkspaceData();
+                    
+                    // Set up periodic sync after login
+                    setupPeriodicSync();
                 } else if (event === 'SIGNED_OUT') {
                     isLoggedIn = false;
+                    // Stop periodic sync on logout
+                    if (syncInterval) {
+                        clearInterval(syncInterval);
+                        syncInterval = undefined;
+                    }
                     // Clear UI state on logout
                     notes = [];
                     folders = [];
@@ -3322,6 +3378,8 @@
                                 loginPassword = '';
                                 isEmailInvalid = false;
                                 
+                                // Flush any pending database saves before clearing
+                                await db.flushDatabaseSave();
                                 // Clear all local data before pulling new user's data
                                 console.log('Clearing local data for new user...');
                                 await db.clearAllLocalData();
@@ -3336,9 +3394,9 @@
                                     console.error('Migration failed:', migrationResult.error);
                                 }
                                 } else {
-                                    // Pull latest data from Supabase
-                                    console.log('Pulling data from Supabase...');
-                                    await sync.pullFromSupabase();
+                                    // Use fullSync to pull latest data from Supabase, then push any local changes
+                                    console.log('Syncing with Supabase...');
+                                    await sync.fullSync();
                                 }
                                 
                                 // Clear UI state and reload workspace data
@@ -3366,7 +3424,12 @@
                                     activeWorkspaceId = defaultWorkspace.id;
                                 }
                                 
+                                // Reset kanban loaded flag to force reload after sync
+                                isKanbanLoaded = false;
                                 await loadActiveWorkspaceData();
+                                
+                                // Set up periodic sync after login
+                                setupPeriodicSync();
                             }
                         } catch (error) {
                             console.error('Login error:', error);
@@ -3517,6 +3580,8 @@
                             
                             // Clear all local data before pulling new user's data
                             console.log('Clearing local data for new user...');
+                            // Flush any pending database saves before clearing
+                            await db.flushDatabaseSave();
                             await db.clearAllLocalData();
                             
                             // Migrate any existing local data
@@ -3524,9 +3589,9 @@
                                 console.log('Migrating local data to Supabase...');
                                 await migrations.migrateLocalDataToSupabase();
                             } else {
-                                // Pull latest data from Supabase
-                                console.log('Pulling data from Supabase...');
-                                await sync.pullFromSupabase();
+                                // Use fullSync to pull latest data from Supabase, then push any local changes
+                                console.log('Syncing with Supabase...');
+                                await sync.fullSync();
                             }
                             
                             // Clear UI state and reload workspace data
