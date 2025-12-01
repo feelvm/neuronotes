@@ -2793,6 +2793,10 @@
     onMount(() => {
         if (browser) {
             backup.startAutoBackup();
+            // Collapse notes list by default on mobile
+            if (window.innerWidth <= 768) {
+                isNoteListVisible = false;
+            }
         }
         let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -3124,6 +3128,42 @@
             </button>
             {#if showSettingsDropdown}
                 <div class="settings-dropdown" use:settingsDropdown>
+                    {#if !isLoggedIn}
+                        <button 
+                            class="settings-item" 
+                            on:click={() => { 
+                                showSettingsDropdown = false; 
+                                showLoginModal = true; 
+                            }}>
+                            Log in
+                        </button>
+                    {:else}
+                        <button 
+                            class="settings-item" 
+                            on:click={async () => {
+                                showSettingsDropdown = false;
+                                await ensureSupabaseLoaded();
+                                // Save current account data to localStorage before logout
+                                await saveAccountDataToLocalStorage();
+                                
+                                const result = await auth.signOut();
+                                if (result.success) {
+                                    isLoggedIn = false;
+                                    // Clear UI state on logout
+                                    notes = [];
+                                    folders = [];
+                                    calendarEvents = [];
+                                    kanban = [];
+                                    selectedNoteId = '';
+                                    currentFolderId = null;
+                                    // Reload workspace data (will load from local DB)
+                                    await loadActiveWorkspaceData();
+                                }
+                            }}>
+                            Log out
+                        </button>
+                    {/if}
+                    <div class="settings-divider"></div>
                     <button class="settings-item" on:click={() => { showSettingsDropdown = false; showBackupModal = true; loadBackups(); }}>
                         Manage Backups
                     </button>
@@ -4118,6 +4158,123 @@
                                                         return;
                                                     }
                                                     document.execCommand('redo');
+                                                } else if (e.key === 'Enter') {
+                                                    // Check if current line has a checkbox
+                                                    const selection = window.getSelection();
+                                                    if (selection && selection.rangeCount > 0) {
+                                                        const range = selection.getRangeAt(0);
+                                                        const container = range.commonAncestorContainer;
+                                                        
+                                                        // Find the current line/block element
+                                                        let lineElement = container.nodeType === Node.TEXT_NODE 
+                                                            ? container.parentElement 
+                                                            : container as Element;
+                                                        
+                                                        // Walk up to find the block element (div, p, or the editor itself)
+                                                        while (lineElement && lineElement !== editorDiv && 
+                                                               lineElement.nodeName !== 'DIV' && 
+                                                               lineElement.nodeName !== 'P' &&
+                                                               lineElement.nodeName !== 'BR') {
+                                                            lineElement = lineElement.parentElement;
+                                                        }
+                                                        
+                                                        // Check if this line contains a checkbox
+                                                        let hasCheckbox = false;
+                                                        
+                                                        if (lineElement) {
+                                                            hasCheckbox = lineElement.querySelector('.note-checkbox') !== null;
+                                                        }
+                                                        
+                                                        // Also check if we're right after a checkbox
+                                                        const node = range.startContainer;
+                                                        const offset = range.startOffset;
+                                                        
+                                                        // Check if we're immediately after a checkbox
+                                                        if (node.nodeType === Node.TEXT_NODE && offset === 0) {
+                                                            const prevSibling = node.previousSibling;
+                                                            if (prevSibling && prevSibling.nodeName === 'INPUT' && 
+                                                                (prevSibling as HTMLInputElement).type === 'checkbox') {
+                                                                hasCheckbox = true;
+                                                            }
+                                                        } else if (node.nodeType === Node.TEXT_NODE) {
+                                                            // Check previous siblings
+                                                            let checkNode = node.previousSibling;
+                                                            while (checkNode) {
+                                                                if (checkNode.nodeName === 'INPUT' && 
+                                                                    (checkNode as HTMLInputElement).type === 'checkbox') {
+                                                                    hasCheckbox = true;
+                                                                    break;
+                                                                }
+                                                                if (checkNode.nodeName === 'BR') {
+                                                                    break;
+                                                                }
+                                                                checkNode = checkNode.previousSibling;
+                                                            }
+                                                        }
+                                                        
+                                                        // Also check the current container and its parents for checkboxes
+                                                        if (!hasCheckbox) {
+                                                            let checkElement: Node | null = container;
+                                                            while (checkElement && checkElement !== editorDiv) {
+                                                                if (checkElement.nodeType === Node.ELEMENT_NODE) {
+                                                                    const el = checkElement as Element;
+                                                                    if (el.querySelector && el.querySelector('.note-checkbox')) {
+                                                                        hasCheckbox = true;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                checkElement = checkElement.parentNode;
+                                                            }
+                                                        }
+                                                        
+                                                        if (hasCheckbox) {
+                                                            e.preventDefault();
+                                                            
+                                                            // Insert a line break
+                                                            const br = document.createElement('br');
+                                                            range.insertNode(br);
+                                                            
+                                                            // Create a new checkbox
+                                                            const checkbox = document.createElement('input');
+                                                            checkbox.type = 'checkbox';
+                                                            checkbox.className = 'note-checkbox';
+                                                            checkbox.style.marginRight = '6px';
+                                                            checkbox.style.verticalAlign = 'middle';
+                                                            checkbox.style.cursor = 'pointer';
+                                                            
+                                                            checkbox.addEventListener('change', () => {
+                                                                if (currentNote) {
+                                                                    debouncedUpdateNote(currentNote);
+                                                                }
+                                                            });
+                                                            
+                                                            // Insert checkbox after the line break
+                                                            range.setStartAfter(br);
+                                                            range.setEndAfter(br);
+                                                            range.insertNode(checkbox);
+                                                            
+                                                            // Insert space after checkbox
+                                                            const space = document.createTextNode(' ');
+                                                            range.setStartAfter(checkbox);
+                                                            range.setEndAfter(checkbox);
+                                                            range.insertNode(space);
+                                                            
+                                                            // Position cursor after the space
+                                                            range.setStartAfter(space);
+                                                            range.setEndAfter(space);
+                                                            range.collapse(true);
+                                                            
+                                                            selection.removeAllRanges();
+                                                            selection.addRange(range);
+                                                            
+                                                            // Trigger input event to save
+                                                            if (currentNote && editorDiv) {
+                                                                currentNote.contentHTML = editorDiv.innerHTML;
+                                                                debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
+                                                                debouncedUpdateNote(currentNote);
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }}
                                         ></div>
@@ -4170,14 +4327,14 @@
                             >
                                 {@html useCommonCalendar ? GlobeIcon : FolderIcon}
                             </button>
-                            <button class="small-btn" on:click={prevWeek}>&larr; Prev</button>
+                            <button class="small-btn" on:click={prevWeek}>&larr; <span class="btn-text">Prev</span></button>
                             <button
                                 class="small-btn"
                                 on:click={() => (weekStart = startOfWeek(today, 1))}
                             >
                                 Today
                             </button>
-                            <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
+                            <button class="small-btn" on:click={nextWeek}><span class="btn-text">Next</span> &rarr;</button>
                         </div>
                     {/if}
                     <button
@@ -4579,14 +4736,14 @@
                             >
                                 {@html useCommonCalendar ? GlobeIcon : FolderIcon}
                             </button>
-                            <button class="small-btn" on:click={prevWeek}>&larr; Prev</button>
+                            <button class="small-btn" on:click={prevWeek}>&larr; <span class="btn-text">Prev</span></button>
                             <button
                                 class="small-btn"
                                 on:click={() => (weekStart = startOfWeek(today, 1))}
                             >
                                 Today
                             </button>
-                            <button class="small-btn" on:click={nextWeek}>Next &rarr;</button>
+                            <button class="small-btn" on:click={nextWeek}><span class="btn-text">Next</span> &rarr;</button>
                         </div>
                     {/if}
                     <button
@@ -6648,6 +6805,9 @@
         .nav-right-placeholder {
             display: none;
         }
+        .auth-container {
+            display: none;
+        }
         .settings-container {
             position: static;
         }
@@ -6656,6 +6816,11 @@
             left: 50%;
             transform: translateX(-50%);
         }
+        .workspace-tabs {
+            overflow-x: auto;
+            flex: 1;
+            min-width: 0;
+        }
         .notes {
             grid-template-columns: 1fr;
             grid-template-rows: auto minmax(0, 1fr);
@@ -6663,7 +6828,7 @@
         .note-list {
             border-right: none;
             border-bottom: 1px solid var(--border);
-            max-height: 150px;
+            max-height: 300px;
         }
         .right {
             display: flex;
@@ -6696,13 +6861,37 @@
         .calendar-add {
             flex-wrap: nowrap;
             overflow-x: auto;
+            justify-content: center;
         }
         .calendar-add input[type='text'] {
             flex-basis: auto;
             min-width: 120px;
         }
+        .calendar-add input[type='text'][placeholder="DD/MM/YYYY"],
+        .calendar-add input[type='text'][placeholder="HH:MM"],
+        .calendar-add input[type='text'][placeholder="Event title"] {
+            min-width: 60px;
+            flex: 0 0 60px;
+        }
         .panel-header {
             padding: 8px 12px;
+        }
+        .calendar-panel .panel-header {
+            padding: 16px 12px;
+            min-height: 64px;
+            max-height: none;
+        }
+        .calendar-panel:not(.minimized) {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+        }
+        .calendar-panel:not(.minimized) .calendar-grid {
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+        .calendar-controls .small-btn .btn-text {
+            display: none;
         }
         .panel-title {
             font-size: 14px;
@@ -6710,6 +6899,9 @@
         .small-btn {
             padding: 4px 8px;
             font-size: 11px;
+        }
+        .contenteditable {
+            min-height: 280px;
         }
     }
 
