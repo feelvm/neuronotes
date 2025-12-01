@@ -2880,15 +2880,14 @@
             const updateDateTimeDisplay = () => {
                 today = new Date();
                 todayDateString = `${DAY_NAMES_LONG[today.getDay()]}, ${dmy(today)}`;
-                todayTimeString = today.toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                });
+                const hours = String(today.getHours()).padStart(2, '0');
+                const minutes = String(today.getMinutes()).padStart(2, '0');
+                todayTimeString = `${hours}:${minutes}`;
             };
 
             updateDateTimeDisplay();
             weekStart = startOfWeek(today, 1);
-            newEventDate = convertISOToDate(ymd(today));
+            // Don't set newEventDate - let it be empty so placeholder shows
 
             timer = setInterval(updateDateTimeDisplay, 60 * 1000);
 
@@ -3780,6 +3779,13 @@
                 <div class="spacer"></div>
 
                 {#if !isNotesMinimized}
+                    <button
+                        class="small-btn toggle-notelist-btn-header"
+                        on:click={toggleNoteList}
+                        title={isNoteListVisible ? 'Hide Note List' : 'Show Note List'}
+                    >
+                        {isNoteListVisible ? '«' : '»'}
+                    </button>
                     <div class="notes-actions">
                         {#if currentFolder}
                             <button
@@ -4446,21 +4452,21 @@
                         <input 
                             type="text" 
                             bind:value={newEventDate} 
-                            placeholder="DD/MM/YYYY"
+                            placeholder={dmy(today).replace(/-/g, '/')}
                             aria-label="Event date"
                             pattern="\d{2}/\d{2}/\d{4}"
                         />
                         <input 
                             type="text" 
                             bind:value={newEventTime} 
-                            placeholder="HH:MM"
+                            placeholder={todayTimeString || today.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             aria-label="Event time"
                             pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
                         />
                         <input
                             type="text"
                             bind:value={newEventTitle}
-                            placeholder="Event title"
+                            placeholder="Title"
                             aria-label="Event title"
                             on:keydown={(e) => {
                                 if (e.key === 'Enter' && !showRepeatOptions) addEvent();
@@ -4855,21 +4861,21 @@
                         <input 
                             type="text" 
                             bind:value={newEventDate} 
-                            placeholder="DD/MM/YYYY"
+                            placeholder={dmy(today).replace(/-/g, '/')}
                             aria-label="Event date"
                             pattern="\d{2}/\d{2}/\d{4}"
                         />
                         <input 
                             type="text" 
                             bind:value={newEventTime} 
-                            placeholder="HH:MM"
+                            placeholder={todayTimeString || today.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             aria-label="Event time"
                             pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
                         />
                         <input
                             type="text"
                             bind:value={newEventTitle}
-                            placeholder="Event title"
+                            placeholder="Title"
                             aria-label="Event title"
                             on:keydown={(e) => {
                                 if (e.key === 'Enter' && !showRepeatOptions) addEvent();
@@ -6849,6 +6855,9 @@
             height: auto;
             flex-shrink: 0;
         }
+        .notes-panel.minimized {
+            min-height: 0;
+        }
         .calendar-grid {
             grid-template-columns: 1fr;
             border-top: none;
@@ -6867,14 +6876,43 @@
             flex-basis: auto;
             min-width: 120px;
         }
-        .calendar-add input[type='text'][placeholder="DD/MM/YYYY"],
-        .calendar-add input[type='text'][placeholder="HH:MM"],
-        .calendar-add input[type='text'][placeholder="Event title"] {
+        .calendar-add input[type='text'] {
             min-width: 60px;
             flex: 0 0 60px;
         }
         .panel-header {
             padding: 8px 12px;
+        }
+        .notes-panel .panel-header .panel-title {
+            display: none;
+        }
+        .notes-panel .panel-header {
+            justify-content: center;
+        }
+        .notes-panel .panel-header .spacer {
+            display: none;
+        }
+        .notes-panel.minimized {
+            min-height: 0;
+            height: auto;
+        }
+        .toolbar-container {
+            position: relative;
+            min-height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .toggle-notelist-btn {
+            display: none !important;
+        }
+        .toggle-notelist-btn-header {
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
         }
         .calendar-panel .panel-header {
             padding: 16px 12px;
