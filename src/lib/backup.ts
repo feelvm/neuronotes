@@ -153,6 +153,7 @@ async function saveBackupBrowser(backupData: BackupData): Promise<void> {
 
 async function saveBackupTauri(backupData: BackupData): Promise<void> {
   try {
+    // @ts-expect-error - @tauri-apps/plugin-fs is only available in Tauri runtime
     const { writeTextFile, mkdir, readTextFile, exists, BaseDirectory } = await import('@tauri-apps/plugin-fs');
     
     try {
@@ -222,6 +223,7 @@ async function getAllBackupsBrowser(): Promise<BackupData[]> {
 
 async function getAllBackupsTauri(): Promise<BackupData[]> {
   try {
+    // @ts-expect-error - @tauri-apps/plugin-fs is only available in Tauri runtime
     const { readTextFile, exists, BaseDirectory } = await import('@tauri-apps/plugin-fs');
     
     const listFile = 'backups/backups.json';
@@ -384,6 +386,7 @@ async function deleteBackupBrowser(backupId: string): Promise<void> {
 
 async function deleteBackupTauri(backupId: string): Promise<void> {
   try {
+    // @ts-expect-error - @tauri-apps/plugin-fs is only available in Tauri runtime
     const { remove, writeTextFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
     
     const backupFile = `backups/${backupId}.json`;

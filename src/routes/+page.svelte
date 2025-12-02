@@ -1593,6 +1593,7 @@
     let isLoadingBackups = false;
     
     let isLoggedIn = false;
+    let currentUserId: string | null = null; // Track current user ID to detect user switches
     let showLoginModal = false;
     let loginEmail = '';
     let loginPassword = '';
@@ -1619,12 +1620,22 @@
     }
     
     // Helper function to sync data to Supabase if logged in
-    // Uses fullSync to pull changes from other devices, then push local changes
+    // Pushes local changes to Supabase (for user actions like create/update/delete)
     async function syncIfLoggedIn() {
         if (isLoggedIn) {
             try {
+                // Flush database to ensure all writes are persisted before syncing
+                await db.flushDatabaseSave();
+                
                 await ensureSupabaseLoaded();
-                await sync.fullSync();
+                // Just push - don't pull, as that could overwrite local changes
+                // Pull happens on initial load and periodic sync
+                const result = await sync.pushToSupabase();
+                if (!result.success) {
+                    console.error('Sync push failed:', result.error);
+                } else {
+                    console.log('Sync push successful');
+                }
             } catch (error) {
                 console.error('Sync failed:', error);
                 // Don't block user operations if sync fails
@@ -1646,7 +1657,11 @@
                         await ensureSupabaseLoaded();
                         // Only pull (not full sync) to avoid overwriting local changes
                         // Full sync happens on user actions via syncIfLoggedIn
-                        await sync.pullFromSupabase();
+                        const result = await sync.pullFromSupabase();
+                        if (result.success && activeWorkspaceId) {
+                            // Reload UI after successful pull to show changes from other devices
+                            await loadActiveWorkspaceData();
+                        }
                     } catch (error) {
                         console.error('Periodic sync failed:', error);
                         // Don't block if sync fails
@@ -2483,14 +2498,25 @@
     let kanbanDropTarget: { colId: string; taskIndex: number } | null = null;
     let isDraggingTask = false;
     const debouncedPersistKanban = debounce(async () => {
-        if (!activeWorkspaceId || !kanban) return;
+        if (!activeWorkspaceId) {
+            console.log('[kanban] Skipping save - no active workspace');
+            return;
+        }
+        // Only save if kanban exists and has at least one column
+        // Empty kanban arrays shouldn't overwrite existing data
+        if (!kanban || kanban.length === 0) {
+            console.log('[kanban] Skipping save - kanban is empty');
+            return;
+        }
         try {
-        await db.putKanban({
-            workspaceId: activeWorkspaceId,
-            columns: kanban
-        });
-            console.log('[kanban] Saved kanban data');
+            console.log(`[kanban] Saving kanban for workspace ${activeWorkspaceId}:`, kanban.length, 'columns', kanban);
+            await db.putKanban({
+                workspaceId: activeWorkspaceId,
+                columns: kanban
+            });
+            console.log('[kanban] Saved kanban data to local DB');
             await syncIfLoggedIn();
+            console.log('[kanban] Synced kanban to Supabase');
         } catch (error) {
             console.error('[kanban] Failed to save kanban:', error);
         }
@@ -2760,10 +2786,12 @@
     async function loadKanbanData(force = false) {
         if ((isKanbanLoaded && !force) || !browser || !activeWorkspaceId) return;
         try {
+            console.log(`[kanban] Loading kanban for workspace ${activeWorkspaceId}, force=${force}`);
             const kData = await db.getKanbanByWorkspaceId(activeWorkspaceId);
+            console.log(`[kanban] Retrieved from DB:`, kData ? `found ${kData.columns?.length || 0} columns` : 'null');
             kanban = kData ? kData.columns : [];
             isKanbanLoaded = true;
-            console.log('[kanban] Loaded kanban data:', kanban.length, 'columns');
+            console.log('[kanban] Loaded kanban data:', kanban.length, 'columns', kanban);
         } catch (e) {
             console.error('Failed to load kanban data:', e);
             isKanbanLoaded = true; // Set to true even on error to prevent infinite retries
@@ -2881,18 +2909,86 @@
                 isLoggedIn = true;
                 hasHandledInitialSession = true;
                 
+                // Get current user ID
+                const user = await auth.getUser();
+                const sessionUserId = user?.id || null;
+                
+                // Check if this is the same user (stored in localStorage)
+                const storedUserId = browser ? localStorage.getItem('neuronotes_current_user_id') : null;
+                const isSameUser = storedUserId === sessionUserId;
+                
+                // Store current user ID
+                if (browser && sessionUserId) {
+                    localStorage.setItem('neuronotes_current_user_id', sessionUserId);
+                }
+                currentUserId = sessionUserId;
+                
                 // Defer heavy sync operations to improve initial load
                 setTimeout(async () => {
-                    // Flush any pending database saves before clearing
+                    // Flush any pending debounced saves (notes, kanban) before syncing
+                    const noteUpdatePromise = debouncedUpdateNote.flush();
+                    const kanbanUpdatePromise = debouncedPersistKanban.flush();
+                    
+                    // Wait for both to complete
+                    if (noteUpdatePromise && typeof noteUpdatePromise.then === 'function') {
+                        try {
+                            await noteUpdatePromise;
+                        } catch (e) {
+                            console.warn('Note update failed on reload:', e);
+                        }
+                    }
+                    if (kanbanUpdatePromise && typeof kanbanUpdatePromise.then === 'function') {
+                        try {
+                            await kanbanUpdatePromise;
+                        } catch (e) {
+                            console.warn('Kanban update failed on reload:', e);
+                        }
+                    }
+                    
+                    // Flush any pending database saves before syncing
                     await db.flushDatabaseSave();
                     
-                    // Clear all local data before pulling (in case user switched accounts)
-                    console.log('Clearing local data for logged-in user...');
-                    await db.clearAllLocalData();
-                    
-                    // Use fullSync to pull latest data from Supabase, then push any local changes
-                    console.log('Syncing with Supabase...');
-                    await sync.fullSync();
+                    if (isSameUser && storedUserId) {
+                        // Same user - just sync without clearing
+                        console.log('Same user detected, syncing without clearing...');
+                        
+                        // Push local changes first
+                        console.log('Pushing local changes to Supabase...');
+                        try {
+                            await ensureSupabaseLoaded();
+                            const pushResult = await sync.pushToSupabase();
+                            if (!pushResult.success) {
+                                console.error('Push failed:', pushResult.error);
+                            }
+                        } catch (error) {
+                            console.warn('Failed to push local changes:', error);
+                        }
+                        
+                        // Then pull latest from Supabase
+                        console.log('Pulling latest data from Supabase...');
+                        try {
+                            await sync.pullFromSupabase();
+                        } catch (error) {
+                            console.warn('Failed to pull from Supabase:', error);
+                        }
+                    } else {
+                        // Different user or first time - clear and pull
+                        console.log('Different user or first login, clearing and syncing...');
+                        
+                        // Push any local changes first (in case of race condition)
+                        try {
+                            await ensureSupabaseLoaded();
+                            await sync.pushToSupabase();
+                        } catch (error) {
+                            console.warn('Failed to push before clear:', error);
+                        }
+                        
+                        // Clear all local data
+                        await db.clearAllLocalData();
+                        
+                        // Pull latest data from Supabase
+                        await sync.pullFromSupabase();
+                    }
                     
                     // Reload workspaces after sync
                     let loadedWorkspaces = await db.getAllWorkspaces();
@@ -2999,6 +3095,11 @@
                     setupPeriodicSync();
                 } else if (event === 'SIGNED_OUT') {
                     isLoggedIn = false;
+                    currentUserId = null;
+                    // Clear stored user ID
+                    if (browser) {
+                        localStorage.removeItem('neuronotes_current_user_id');
+                    }
                     // Stop periodic sync on logout
                     if (syncInterval) {
                         clearInterval(syncInterval);
@@ -3154,6 +3255,11 @@
                             const result = await auth.signOut();
                             if (result.success) {
                                 isLoggedIn = false;
+                                currentUserId = null;
+                                // Clear stored user ID
+                                if (browser) {
+                                    localStorage.removeItem('neuronotes_current_user_id');
+                                }
                                 // Clear UI state on logout
                                 notes = [];
                                 folders = [];
@@ -3204,6 +3310,11 @@
                                 const result = await auth.signOut();
                                 if (result.success) {
                                     isLoggedIn = false;
+                                    currentUserId = null;
+                                    // Clear stored user ID
+                                    if (browser) {
+                                        localStorage.removeItem('neuronotes_current_user_id');
+                                    }
                                     // Clear UI state on logout
                                     notes = [];
                                     folders = [];
@@ -3373,6 +3484,11 @@
                             
                             if (result.success && result.user) {
                                 isLoggedIn = true;
+                                currentUserId = result.user.id;
+                                // Store current user ID
+                                if (browser && result.user.id) {
+                                    localStorage.setItem('neuronotes_current_user_id', result.user.id);
+                                }
                                 showLoginModal = false;
                                 loginEmail = '';
                                 loginPassword = '';
@@ -3568,8 +3684,13 @@
                         await ensureSupabaseLoaded();
                         const result = await auth.signUp(signupEmail, signupPassword);
                         
-                        if (result.success) {
+                        if (result.success && result.user) {
                             isLoggedIn = true;
+                            currentUserId = result.user.id;
+                            // Store current user ID
+                            if (browser && result.user.id) {
+                                localStorage.setItem('neuronotes_current_user_id', result.user.id);
+                            }
                             showSignupModal = false;
                             signupEmail = '';
                             signupPassword = '';

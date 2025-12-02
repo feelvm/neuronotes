@@ -47,6 +47,7 @@ interface DbClient {
   deleteCalendarEvent?: (id: string) => Promise<void>;
   getKanbanByWorkspaceId?: (workspaceId: string) => Promise<Kanban | null>;
   putKanban?: (kanban: Kanban) => Promise<void>;
+  deleteKanban?: (workspaceId: string) => Promise<void>;
   getSettingByKey?: (key: string) => Promise<Setting | null>;
   putSetting?: (setting: Setting) => Promise<void>;
   get?: <T>(storeName: string, key: string) => Promise<T | undefined>;
@@ -235,6 +236,32 @@ export async function putKanban(kanban: Kanban): Promise<void> {
     await dbClient.putKanban(kanban);
   } else if (dbClient?.put) {
     await dbClient.put('kanban', kanban);
+  }
+}
+
+export async function deleteKanban(workspaceId: string): Promise<void> {
+  await ensureClient();
+  if (isTauri && dbClient?.deleteKanban) {
+    await dbClient.deleteKanban(workspaceId);
+  } else if (dbClient?.deleteKanban) {
+    await dbClient.deleteKanban(workspaceId);
+  } else {
+    // Fallback: try to import and call directly
+    try {
+      if (isTauri) {
+        const tauriDb = await import('./tauri_db');
+        if ((tauriDb as any).deleteKanban) {
+          await (tauriDb as any).deleteKanban(workspaceId);
+        }
+      } else {
+        const browserDb = await import('./browser_db');
+        if ((browserDb as any).deleteKanban) {
+          await (browserDb as any).deleteKanban(workspaceId);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to delete kanban:', e);
+    }
   }
 }
 
@@ -485,7 +512,7 @@ export async function clearAllLocalData(): Promise<void> {
   
   // Clear user-specific settings (keep system settings)
   if (dbClient?.getAll) {
-    const settings = await dbClient.getAll('settings');
+    const settings = await dbClient.getAll<Setting>('settings');
     for (const setting of settings) {
       // Keep system settings, delete user-specific ones
       if (setting.key.startsWith('selectedNoteId:') || setting.key === 'activeWorkspaceId' || setting.key === 'useCommonCalendar') {

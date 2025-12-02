@@ -1,10 +1,12 @@
-import type { Database as SqlJsDatabase } from 'sql.js';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 import { debounce } from './utils/debounce';
 
+// sql.js exports Database as a property of the default export
+type SqlJsDatabase = ReturnType<Awaited<ReturnType<typeof import('sql.js')['default']>>['Database']>;
+
 let db: SqlJsDatabase | null = null;
 let initPromise: Promise<void> | null = null;
-let debouncedSave: (() => void) | null = null;
+let debouncedSave: ((() => void) & { flush: () => Promise<void> }) | null = null;
 let SQL: any = null; // Store the SQL.js module
 
 const SCHEMA_SQL = `
@@ -122,7 +124,11 @@ export async function init(): Promise<void> {
 // Export function to flush pending database saves
 export function flushDatabaseSave(): void {
   if (debouncedSave) {
-    debouncedSave.flush();
+    // flush() returns a Promise but we don't need to await it here
+    // since this is called synchronously and we do an immediate save below
+    debouncedSave.flush().catch(() => {
+      // Ignore errors, we'll do immediate save below
+    });
   }
   // Also do an immediate save to ensure data is persisted
   if (db) {

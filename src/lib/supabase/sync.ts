@@ -135,6 +135,7 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
     // Push notes and handle deletions
     for (const workspace of workspaces) {
       const notes = await db.getNotesByWorkspaceId(workspace.id);
+      console.log(`[sync] Pushing ${notes.length} notes for workspace ${workspace.id}`);
       const localNoteIds = new Set(notes.map(n => n.id));
       
       // Get all notes from Supabase for this workspace
@@ -157,6 +158,7 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
       
       // Upsert existing notes
       for (const note of notes) {
+        console.log(`[sync] Pushing note ${note.id}: ${note.title}`);
         // Ensure we have the latest content - get it from DB if note doesn't have it
         let contentHTML = note.contentHTML;
         if (!contentHTML || contentHTML === '') {
@@ -197,7 +199,7 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         }
         
         // Insert/update note metadata
-        await supabase
+        const { error: noteError } = await supabase
           .from('notes')
           .upsert({
             id: note.id,
@@ -211,10 +213,15 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
             order: note.order,
             updated_at: toISOString(note.updatedAt),
           });
+        
+        if (noteError) {
+          console.error(`[sync] Failed to upsert note ${note.id}:`, noteError);
+          throw noteError;
+        }
 
         // Update note content separately if it exists
         if (contentHTML) {
-          await supabase
+          const { error: contentError } = await supabase
             .from('note_content')
             .upsert({
               note_id: note.id,
@@ -222,7 +229,13 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
               content_html: contentHTML,
               updated_at: toISOString(note.updatedAt),
             });
+          
+          if (contentError) {
+            console.error(`[sync] Failed to upsert note_content for note ${note.id}:`, contentError);
+            // Don't throw - content might be in notes table instead
+          }
         }
+        console.log(`[sync] Successfully pushed note ${note.id}`);
       }
     }
 
@@ -268,18 +281,51 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
       }
     }
 
-    // Push kanban
+    // Push kanban and handle deletions
     for (const workspace of workspaces) {
       const kanbanData = await db.getKanbanByWorkspaceId(workspace.id);
+      console.log(`[sync:push] Workspace ${workspace.id}: local kanban=${!!kanbanData}, columns=${kanbanData?.columns?.length || 0}`);
+      
+      // Get kanban from Supabase for this workspace
+      const { data: supabaseKanban } = await supabase
+        .from('kanban')
+        .select('workspace_id')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspace.id)
+        .maybeSingle();
+      
       if (kanbanData) {
-        await supabase
+        // Upsert local kanban to Supabase
+        const columnsToSave = JSON.parse(JSON.stringify(kanbanData.columns));
+        console.log(`[sync:push] Upserting kanban for workspace ${workspace.id} with ${columnsToSave.length} columns`);
+        const { error: upsertError } = await supabase
           .from('kanban')
           .upsert({
             workspace_id: workspace.id,
             user_id: userId,
-            columns: JSON.parse(JSON.stringify(kanbanData.columns)),
+            columns: columnsToSave,
             updated_at: toISOString(Date.now()),
           });
+        if (upsertError) {
+          console.error(`[sync:push] Failed to upsert kanban for workspace ${workspace.id}:`, upsertError);
+        } else {
+          console.log(`[sync:push] Upserted kanban for workspace ${workspace.id}`);
+        }
+      } else if (supabaseKanban) {
+        // Local kanban doesn't exist but Supabase has one - delete from Supabase
+        console.log(`[sync:push] Deleting Supabase kanban for workspace ${workspace.id} (no local kanban)`);
+        const { error: deleteError } = await supabase
+          .from('kanban')
+          .delete()
+          .eq('workspace_id', workspace.id)
+          .eq('user_id', userId);
+        if (deleteError) {
+          console.error(`[sync:push] Failed to delete Supabase kanban for workspace ${workspace.id}:`, deleteError);
+        } else {
+          console.log(`[sync:push] Deleted Supabase kanban for workspace ${workspace.id}`);
+        }
+      } else {
+        console.log(`[sync:push] No kanban to sync for workspace ${workspace.id}`);
       }
     }
 
@@ -334,6 +380,19 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
 
     if (workspacesError) throw workspacesError;
 
+    // Get local workspaces to find deletions
+    const localWorkspaces = await db.getAllWorkspaces();
+    const localWorkspaceIds = new Set(localWorkspaces.map(w => w.id));
+    const remoteWorkspaceIds = new Set((workspaces || []).map(w => w.id));
+
+    // Delete local workspaces that don't exist in Supabase
+    for (const localWs of localWorkspaces) {
+      if (!remoteWorkspaceIds.has(localWs.id)) {
+        await db.deleteWorkspace(localWs.id);
+      }
+    }
+
+    // Upsert workspaces from Supabase
     if (workspaces) {
       for (const ws of workspaces) {
         await db.putWorkspace({
@@ -344,145 +403,214 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
       }
     }
 
-    // Pull folders
-    const { data: folders, error: foldersError } = await supabase
-      .from('folders')
-      .select('*')
-      .eq('user_id', userId)
-      .order('order');
+    // Pull folders - need to check per workspace
+    // Use the workspaces we just pulled/updated, not local ones
+    const workspacesToCheck = workspaces || [];
+    
+    for (const workspace of workspacesToCheck) {
+      const { data: folders, error: foldersError } = await supabase
+        .from('folders')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspace.id)
+        .order('order');
 
-    if (foldersError) throw foldersError;
+      if (foldersError) throw foldersError;
 
-    if (folders) {
-      for (const folder of folders) {
-        await db.putFolder({
-          id: folder.id,
-          name: folder.name,
-          workspaceId: folder.workspace_id,
-          order: folder.order,
-        });
+      // Get local folders for this workspace
+      const localFolders = await db.getFoldersByWorkspaceId(workspace.id);
+      const remoteFolderIds = new Set((folders || []).map(f => f.id));
+
+      // Upsert folders from Supabase
+      if (folders) {
+        for (const folder of folders) {
+          await db.putFolder({
+            id: folder.id,
+            name: folder.name,
+            workspaceId: folder.workspace_id,
+            order: folder.order,
+          });
+        }
+      }
+
+      // Delete local folders not in remote
+      for (const localFolder of localFolders) {
+        if (!remoteFolderIds.has(localFolder.id)) {
+          await db.deleteFolder(localFolder.id);
+        }
       }
     }
 
-    // Pull notes
-    const { data: notes, error: notesError } = await supabase
-      .from('notes')
-      .select('*')
-      .eq('user_id', userId)
-      .order('order');
+    // Pull notes - need to check per workspace
+    for (const workspace of workspacesToCheck) {
+      const { data: notes, error: notesError } = await supabase
+        .from('notes')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspace.id)
+        .order('order');
 
-    if (notesError) throw notesError;
+      if (notesError) throw notesError;
 
-    if (notes) {
-      for (const note of notes) {
-        // Get content from note_content table if it exists
-        // Use .maybeSingle() instead of .single() to handle cases where note_content doesn't exist
-        let contentHTML = note.content_html || '';
-        
-        try {
-          const { data: contentData, error: contentError } = await supabase
-            .from('note_content')
-            .select('content_html')
-            .eq('note_id', note.id)
-            .eq('user_id', userId)
-            .maybeSingle();
+      // Get local notes for this workspace
+      const localNotes = await db.getNotesByWorkspaceId(workspace.id);
+      const remoteNoteIds = new Set((notes || []).map(n => n.id));
 
-          // PGRST116 is "no rows returned" which is fine - use note.content_html
-          // Other errors (like 406) might indicate table doesn't exist or RLS issue
-          if (contentError) {
-            if (contentError.code === 'PGRST116') {
-              // No row found - this is expected if content is in notes table
-              contentHTML = note.content_html || '';
-            } else {
-              // Other error (like 406) - log but continue with note.content_html
-              console.warn(`[sync] Error fetching note_content for note ${note.id}:`, contentError.message, contentError.code);
-              contentHTML = note.content_html || '';
+      // Upsert notes from Supabase
+      if (notes) {
+        for (const note of notes) {
+          // Get content from note_content table if it exists
+          // Use .maybeSingle() instead of .single() to handle cases where note_content doesn't exist
+          let contentHTML = note.content_html || '';
+          
+          try {
+            const { data: contentData, error: contentError } = await supabase
+              .from('note_content')
+              .select('content_html')
+              .eq('note_id', note.id)
+              .eq('user_id', userId)
+              .maybeSingle();
+
+            // PGRST116 is "no rows returned" which is fine - use note.content_html
+            // Other errors (like 406) might indicate table doesn't exist or RLS issue
+            if (contentError) {
+              if (contentError.code === 'PGRST116') {
+                // No row found - this is expected if content is in notes table
+                contentHTML = note.content_html || '';
+              } else {
+                // Other error (like 406) - log but continue with note.content_html
+                console.warn(`[sync] Error fetching note_content for note ${note.id}:`, contentError.message, contentError.code);
+                contentHTML = note.content_html || '';
+              }
+            } else if (contentData?.content_html) {
+              // Successfully got content from note_content table
+              contentHTML = contentData.content_html;
             }
-          } else if (contentData?.content_html) {
-            // Successfully got content from note_content table
-            contentHTML = contentData.content_html;
+          } catch (err) {
+            // Catch any unexpected errors and fall back to note.content_html
+            console.warn(`[sync] Exception fetching note_content for note ${note.id}:`, err);
+            contentHTML = note.content_html || '';
           }
-        } catch (err) {
-          // Catch any unexpected errors and fall back to note.content_html
-          console.warn(`[sync] Exception fetching note_content for note ${note.id}:`, err);
-          contentHTML = note.content_html || '';
-        }
 
-        // Handle spreadsheet data - Supabase returns it as JSON object, need to stringify for local DB
-        let spreadsheetData: any = undefined;
-        if (note.type === 'spreadsheet' && note.spreadsheet) {
-          // If it's already an object, stringify it; if it's a string, use it as-is
-          if (typeof note.spreadsheet === 'string') {
-            spreadsheetData = note.spreadsheet;
+          // Handle spreadsheet data - Supabase returns it as JSON object, need to stringify for local DB
+          let spreadsheetData: any = undefined;
+          if (note.type === 'spreadsheet' && note.spreadsheet) {
+            // If it's already an object, stringify it; if it's a string, use it as-is
+            if (typeof note.spreadsheet === 'string') {
+              spreadsheetData = note.spreadsheet;
+            } else {
+              spreadsheetData = JSON.stringify(note.spreadsheet);
+            }
+          }
+
+          // Ensure type is set correctly - default to 'text' if missing or invalid
+          let noteType: 'text' | 'spreadsheet' = 'text';
+          if (note.type === 'spreadsheet' && spreadsheetData) {
+            noteType = 'spreadsheet';
+          } else if (note.type === 'text' || !note.type) {
+            noteType = 'text';
           } else {
-            spreadsheetData = JSON.stringify(note.spreadsheet);
+            // If type is something else or spreadsheet but no data, default to text
+            noteType = 'text';
           }
-        }
 
-        // Ensure type is set correctly - default to 'text' if missing or invalid
-        let noteType: 'text' | 'spreadsheet' = 'text';
-        if (note.type === 'spreadsheet' && spreadsheetData) {
-          noteType = 'spreadsheet';
-        } else if (note.type === 'text' || !note.type) {
-          noteType = 'text';
-        } else {
-          // If type is something else or spreadsheet but no data, default to text
-          noteType = 'text';
+          await db.putNote({
+            id: note.id,
+            title: note.title,
+            contentHTML: contentHTML,
+            updatedAt: note.updated_at ? toTimestamp(note.updated_at) : Date.now(),
+            workspaceId: note.workspace_id,
+            folderId: note.folder_id ?? null,
+            order: note.order,
+            type: noteType,
+            spreadsheet: noteType === 'spreadsheet' ? spreadsheetData : undefined, // Only set if type is spreadsheet
+          });
         }
+      }
 
-        await db.putNote({
-          id: note.id,
-          title: note.title,
-          contentHTML: contentHTML,
-          updatedAt: toTimestamp(note.updated_at),
-          workspaceId: note.workspace_id,
-          folderId: note.folder_id,
-          order: note.order,
-          type: noteType,
-          spreadsheet: noteType === 'spreadsheet' ? spreadsheetData : undefined, // Only set if type is spreadsheet
-        });
+      // Delete local notes not in remote
+      for (const localNote of localNotes) {
+        if (!remoteNoteIds.has(localNote.id)) {
+          await db.deleteNote(localNote.id);
+        }
       }
     }
 
-    // Pull calendar events
-    const { data: events, error: eventsError } = await supabase
-      .from('calendar_events')
-      .select('*')
-      .eq('user_id', userId);
+    // Pull calendar events - need to check per workspace
+    for (const workspace of workspacesToCheck) {
+      const { data: events, error: eventsError } = await supabase
+        .from('calendar_events')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspace.id);
 
-    if (eventsError) throw eventsError;
+      if (eventsError) throw eventsError;
 
-    if (events) {
-      for (const event of events) {
-        await db.putCalendarEvent({
-          id: event.id,
-          date: event.date,
-          title: event.title,
-          time: event.time || undefined,
-          workspaceId: event.workspace_id,
-          repeat: event.repeat as any,
-          repeatOn: event.repeat_on || undefined,
-          repeatEnd: event.repeat_end || undefined,
-          exceptions: event.exceptions || undefined,
-          color: event.color || undefined,
-        });
+      // Get local events for this workspace
+      const localEvents = await db.getCalendarEventsByWorkspaceId(workspace.id);
+      const remoteEventIds = new Set((events || []).map(e => e.id));
+
+      // Upsert events from Supabase
+      if (events) {
+        for (const event of events) {
+          await db.putCalendarEvent({
+            id: event.id,
+            date: event.date,
+            title: event.title,
+            time: event.time || undefined,
+            workspaceId: event.workspace_id,
+            repeat: event.repeat as any,
+            repeatOn: event.repeat_on || undefined,
+            repeatEnd: event.repeat_end || undefined,
+            exceptions: event.exceptions || undefined,
+            color: event.color || undefined,
+          });
+        }
+      }
+
+      // Delete local events not in remote
+      for (const localEvent of localEvents) {
+        if (!remoteEventIds.has(localEvent.id)) {
+          await db.deleteCalendarEvent(localEvent.id);
+        }
       }
     }
 
-    // Pull kanban
-    const { data: kanbanData, error: kanbanError } = await supabase
-      .from('kanban')
-      .select('*')
-      .eq('user_id', userId);
+    // Pull kanban - need to check per workspace
+    for (const workspace of workspacesToCheck) {
+      const { data: kanbanData, error: kanbanError } = await supabase
+        .from('kanban')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspace.id)
+        .maybeSingle();
 
-    if (kanbanError) throw kanbanError;
+      if (kanbanError) {
+        console.error(`[sync:pull] Error fetching kanban for workspace ${workspace.id}:`, kanbanError);
+        throw kanbanError;
+      }
 
-    if (kanbanData) {
-      for (const kanban of kanbanData) {
+      // Get local kanban for this workspace
+      const localKanban = await db.getKanbanByWorkspaceId(workspace.id);
+      console.log(`[sync:pull] Workspace ${workspace.id}: remote=${!!kanbanData}, local=${!!localKanban}`);
+
+      // If remote kanban exists, upsert it
+      if (kanbanData) {
+        const columns = kanbanData.columns as any;
+        const columnCount = Array.isArray(columns) ? columns.length : 0;
+        console.log(`[sync:pull] Remote kanban has ${columnCount} columns`);
         await db.putKanban({
-          workspaceId: kanban.workspace_id,
-          columns: kanban.columns as any,
+          workspaceId: kanbanData.workspace_id,
+          columns: columns,
         });
+        console.log(`[sync:pull] Put local kanban for workspace ${kanbanData.workspace_id}`);
+      } else if (localKanban) {
+        // If local kanban exists but remote doesn't, delete local
+        console.log(`[sync:pull] No remote kanban, deleting local kanban for workspace ${workspace.id}`);
+        await db.deleteKanban(workspace.id);
+        console.log(`[sync:pull] Deleted local kanban for workspace ${workspace.id}`);
+      } else {
+        console.log(`[sync:pull] No kanban data for workspace ${workspace.id} (remote or local)`);
       }
     }
 
@@ -513,16 +641,16 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
 }
 
 /**
- * Full sync: pull then push (to handle conflicts)
+ * Full sync: pull then push (to handle conflicts and ensure deletions are synced)
  */
 export async function fullSync(): Promise<{ success: boolean; error?: string }> {
-  // Pull first to get latest from server
+  // Pull first to get latest from server (this will also handle deletions)
   const pullResult = await pullFromSupabase();
   if (!pullResult.success) {
     return pullResult;
   }
 
-  // Then push local changes
+  // Then push local changes (including any new deletions)
   const pushResult = await pushToSupabase();
   return pushResult;
 }
