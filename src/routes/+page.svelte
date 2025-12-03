@@ -1655,11 +1655,11 @@
                 if (isLoggedIn) {
                     try {
                         await ensureSupabaseLoaded();
-                        // Only pull (not full sync) to avoid overwriting local changes
-                        // Full sync happens on user actions via syncIfLoggedIn
-                        const result = await sync.pullFromSupabase();
+                        // Use fullSync to sync both directions with conflict resolution
+                        // Conflict resolution ensures we don't overwrite newer changes
+                        const result = await sync.fullSync();
                         if (result.success && activeWorkspaceId) {
-                            // Reload UI after successful pull to show changes from other devices
+                            // Reload UI after successful sync to show changes from other devices
                             await loadActiveWorkspaceData();
                         }
                     } catch (error) {

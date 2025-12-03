@@ -156,8 +156,29 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         }
       }
       
-      // Upsert existing notes
+      // Get all remote note timestamps in one query for conflict resolution
+      const noteIds = notes.map(n => n.id);
+      const { data: remoteNotes } = await supabase
+        .from('notes')
+        .select('id, updated_at')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspace.id)
+        .in('id', noteIds);
+      
+      const remoteNotesMap = new Map(
+        (remoteNotes || []).map(n => [n.id, n.updated_at ? toTimestamp(n.updated_at) : 0])
+      );
+      
+      // Upsert existing notes with conflict resolution
       for (const note of notes) {
+        // Check if remote version exists and is newer
+        const remoteUpdatedAt = remoteNotesMap.get(note.id);
+        
+        if (remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt) {
+          console.log(`[sync] Skipping push for note ${note.id} - remote version is newer (local: ${note.updatedAt}, remote: ${remoteUpdatedAt})`);
+          continue;
+        }
+        
         console.log(`[sync] Pushing note ${note.id}: ${note.title}`);
         // Ensure we have the latest content - get it from DB if note doesn't have it
         let contentHTML = note.contentHTML;
@@ -295,7 +316,17 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         .maybeSingle();
       
       if (kanbanData) {
-        // Upsert local kanban to Supabase
+        // Check if remote version exists and is newer
+        const { data: remoteKanban } = await supabase
+          .from('kanban')
+          .select('updated_at')
+          .eq('workspace_id', workspace.id)
+          .eq('user_id', userId)
+          .maybeSingle();
+        
+        // For kanban, we don't have a local updatedAt timestamp, so we'll always push
+        // but we could skip if remote was updated very recently (within last second)
+        // For now, we'll push to ensure sync works, but in the future we could add updatedAt to Kanban type
         const columnsToSave = JSON.parse(JSON.stringify(kanbanData.columns));
         console.log(`[sync:push] Upserting kanban for workspace ${workspace.id} with ${columnsToSave.length} columns`);
         const { error: upsertError } = await supabase
@@ -456,9 +487,21 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
       const localNotes = await db.getNotesByWorkspaceId(workspace.id);
       const remoteNoteIds = new Set((notes || []).map(n => n.id));
 
-      // Upsert notes from Supabase
+      // Upsert notes from Supabase with conflict resolution
       if (notes) {
+        // Create a map of local notes by ID for quick lookup
+        const localNotesMap = new Map(localNotes.map(n => [n.id, n]));
+        
         for (const note of notes) {
+          const localNote = localNotesMap.get(note.id);
+          const remoteUpdatedAt = note.updated_at ? toTimestamp(note.updated_at) : 0;
+          
+          // Conflict resolution: only update if remote is newer or note doesn't exist locally
+          if (localNote && localNote.updatedAt > remoteUpdatedAt) {
+            console.log(`[sync] Skipping note ${note.id} - local version is newer (local: ${localNote.updatedAt}, remote: ${remoteUpdatedAt})`);
+            continue; // Skip this note, local version is newer
+          }
+          
           // Get content from note_content table if it exists
           // Use .maybeSingle() instead of .single() to handle cases where note_content doesn't exist
           let contentHTML = note.content_html || '';
@@ -518,7 +561,7 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
             id: note.id,
             title: note.title,
             contentHTML: contentHTML,
-            updatedAt: note.updated_at ? toTimestamp(note.updated_at) : Date.now(),
+            updatedAt: remoteUpdatedAt || Date.now(),
             workspaceId: note.workspace_id,
             folderId: note.folder_id ?? null,
             order: note.order,
@@ -595,6 +638,8 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
       console.log(`[sync:pull] Workspace ${workspace.id}: remote=${!!kanbanData}, local=${!!localKanban}`);
 
       // If remote kanban exists, upsert it
+      // Note: For kanban, we don't have local timestamps, so we always accept remote
+      // In the future, we could add updatedAt to Kanban type for better conflict resolution
       if (kanbanData) {
         const columns = kanbanData.columns as any;
         const columnCount = Array.isArray(columns) ? columns.length : 0;
