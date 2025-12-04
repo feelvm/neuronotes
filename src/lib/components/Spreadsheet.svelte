@@ -947,7 +947,8 @@
 									: cell.computedValue}
 								on:input={(e) => {
 									const newValue = (e.target as HTMLInputElement).value;
-									const oldValue = cell.value;
+									// Ensure oldValue is always a string to avoid runtime errors
+									const oldValue = typeof cell.value === "string" ? cell.value : "";
 									const wasDeletion = newValue.length < oldValue.length;
 									
 									// Save history on first change or before deletion
