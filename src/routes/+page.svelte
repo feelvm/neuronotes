@@ -7217,4 +7217,27 @@
     .kanban-panel.minimized .panel-header .spacer {
         display: none;
     }
+
+    /* Prevent iOS zoom on input focus by using 16px font-size and scaling down visually */
+    @media (max-width: 768px) {
+        .calendar-add input {
+            font-size: 16px !important;
+            transform: scale(0.75);
+            transform-origin: left center;
+        }
+        .folder-item input,
+        .note-item input {
+            font-size: 16px !important;
+            transform: scale(0.875);
+            transform-origin: left center;
+        }
+        .kanban-task input {
+            font-size: 16px !important;
+            transform: scale(0.875);
+            transform-origin: left center;
+        }
+        .kanban-actions input {
+            font-size: 16px !important;
+        }
+    }
 </style>
