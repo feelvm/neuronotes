@@ -810,16 +810,21 @@
         previousNoteId = null;
     }
     
-    // Parse current note without mutating notes array to avoid cycle
-    // Just return a copy with parsed spreadsheet - don't update notes array in reactive statement
+    // Parse current note's spreadsheet JSON the first time it's needed.
+    // Cache the parsed object back onto the note so we don't re-parse on every update,
+    // which was causing the first edit after reload to be overwritten.
     $: parsedCurrentNote = currentNote ? (() => {
         if (currentNote.type === 'spreadsheet') {
             const noteWithRaw = currentNote as any;
-            if (noteWithRaw._spreadsheetJson && !currentNote.spreadsheet) {
+            // If _spreadsheetJson is a JSON string and we don't yet have a parsed spreadsheet object
+            if (typeof noteWithRaw._spreadsheetJson === 'string' && !currentNote.spreadsheet) {
                 try {
                     const parsed = JSON.parse(noteWithRaw._spreadsheetJson);
-                    // Return a copy with parsed spreadsheet - don't update notes array here to avoid cycle
-                    // The notes array will be updated when the note is saved via updateNote
+                    // Cache the parsed spreadsheet on the current note so future updates
+                    // operate on the same object instead of re-parsing from the original JSON.
+                    noteWithRaw.spreadsheet = parsed;
+                    // Optionally replace _spreadsheetJson with the parsed object so we don't reparse
+                    noteWithRaw._spreadsheetJson = parsed;
                     return { ...currentNote, spreadsheet: parsed };
                 } catch (e) {
                     console.error('Failed to parse spreadsheet JSON:', e);
@@ -1159,9 +1164,17 @@
             contentHTML = editorDiv.innerHTML;
         }
         
+        // If this is the currently selected spreadsheet note, get the latest spreadsheet data
+        let spreadsheet = note.spreadsheet;
+        if (note.type === 'spreadsheet' && selectedNoteId === note.id && parsedCurrentNote && parsedCurrentNote.spreadsheet) {
+            // Use the parsed current note's spreadsheet as the source of truth (it's bound to the component)
+            spreadsheet = parsedCurrentNote.spreadsheet;
+        }
+        
         const noteToSave = { 
             ...note, 
             contentHTML: contentHTML,
+            spreadsheet: spreadsheet,
             updatedAt: Date.now() 
         };
         
@@ -1171,11 +1184,11 @@
         
         await db.putNote(noteToSave);
         
-        // Update the note in the array, preserving contentHTML
+        // Update the note in the array, preserving contentHTML and spreadsheet
         const index = notes.findIndex((n) => n.id === noteToSave.id);
         if (index !== -1) {
-            // Preserve the contentHTML when updating the notes array
-            notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML };
+            // Preserve the contentHTML and spreadsheet when updating the notes array
+            notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
             notes = [...notes];
         }
         
