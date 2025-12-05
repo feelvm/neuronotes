@@ -1253,11 +1253,15 @@
             }
         }
         
-        // Sync is debounced along with note update
-        await syncIfLoggedIn();
+        // Sync is debounced separately to ensure it happens reliably even if note updates are batched
+        debouncedSyncIfLoggedIn();
     }
 
     const debouncedUpdateNote = debounce(updateNote, 400);
+    
+    // Separate debounced sync function that fires more frequently than note updates
+    // This ensures sync happens even if note updates are batched
+    const debouncedSyncIfLoggedIn = debounce(syncIfLoggedIn, 1000);
 
     async function openFolder(folderId: string) {
         debouncedUpdateNote.flush();
@@ -3198,19 +3202,31 @@
         })();
 
         const handleBeforeUnload = () => {
-            // Flush pending note updates (synchronously start them)
+            // Flush pending note updates and sync (synchronously start them)
             debouncedUpdateNote.flush();
+            debouncedSyncIfLoggedIn.flush();
             debouncedPersistKanban.flush();
             // Flush database save synchronously to ensure current state is saved
             db.flushDatabaseSave().catch(e => {
                 console.warn('Failed to flush database save on unload:', e);
             });
+            // Try to sync to Supabase (fire and forget, as beforeunload is synchronous)
+            if (isLoggedIn) {
+                ensureSupabaseLoaded().then(() => {
+                    sync.pushToSupabase().catch(e => {
+                        console.warn('Failed to sync to Supabase on beforeunload:', e);
+                    });
+                }).catch(e => {
+                    console.warn('Failed to load Supabase on beforeunload:', e);
+                });
+            }
         };
         
         const handlePageHide = async (e: PageTransitionEvent) => {
             // pagehide event allows async operations and is more reliable
-            // Flush pending note updates and wait for them
+            // Flush pending note updates and sync, then wait for them
             const noteUpdatePromise = debouncedUpdateNote.flush();
+            const syncPromise = debouncedSyncIfLoggedIn.flush();
             debouncedPersistKanban.flush();
             
             // Wait for note updates to complete, then flush database save
@@ -3222,11 +3238,36 @@
                 }
             }
             
+            // Wait for sync to complete
+            if (syncPromise && typeof syncPromise.then === 'function') {
+                try {
+                    await syncPromise;
+                } catch (e) {
+                    console.warn('Sync failed on page hide:', e);
+                }
+            }
+            
             // Ensure database is saved after note updates complete
             try {
                 await db.flushDatabaseSave();
             } catch (e) {
                 console.warn('Failed to flush database save on page hide:', e);
+            }
+            
+            // Explicitly sync to Supabase after all updates are saved
+            // This ensures changes are synced even if the debounced sync didn't fire
+            if (isLoggedIn) {
+                try {
+                    await ensureSupabaseLoaded();
+                    const syncResult = await sync.pushToSupabase();
+                    if (syncResult.success) {
+                        console.log('Successfully synced to Supabase on page hide');
+                    } else {
+                        console.warn('Failed to sync to Supabase on page hide:', syncResult.error);
+                    }
+                } catch (e) {
+                    console.warn('Error syncing to Supabase on page hide:', e);
+                }
             }
         };
         
@@ -3240,6 +3281,7 @@
             if (timer) clearInterval(timer);
             cleanupResizeListeners();
             debouncedUpdateNote.flush();
+            debouncedSyncIfLoggedIn.flush();
             debouncedPersistKanban.flush();
             
             // Cleanup auth subscription
