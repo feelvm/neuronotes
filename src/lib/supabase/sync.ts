@@ -174,9 +174,17 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         // Check if remote version exists and is newer
         const remoteUpdatedAt = remoteNotesMap.get(note.id);
         
-        if (remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt) {
+        // For any note type, always push if local was updated recently (within last 5 seconds)
+        // This ensures that local edits get synced even if remote appears newer
+        const isRecentEdit = (Date.now() - note.updatedAt) < 5000;
+        
+        if (remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt && !isRecentEdit) {
           console.log(`[sync] Skipping push for note ${note.id} - remote version is newer (local: ${note.updatedAt}, remote: ${remoteUpdatedAt})`);
           continue;
+        }
+        
+        if (isRecentEdit && remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt) {
+          console.log(`[sync] Force pushing note ${note.id} (${note.type}) - local edit was recent (local: ${note.updatedAt}, remote: ${remoteUpdatedAt})`);
         }
         
         console.log(`[sync] Pushing note ${note.id}: ${note.title}`);
@@ -195,16 +203,18 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         let spreadsheetData: any = null;
         if (note.type === 'spreadsheet') {
           if (note.spreadsheet) {
-            // If it's an object, stringify it; if it's already a string, parse then stringify to ensure it's valid JSON
+            // If it's an object, use it directly; if it's already a string, parse it first
             if (typeof note.spreadsheet === 'string') {
               try {
-                // Parse to validate, then stringify to ensure proper format
+                // Parse to validate, then use the parsed object
                 spreadsheetData = JSON.parse(note.spreadsheet);
               } catch (e) {
                 // If parsing fails, use as-is (might be malformed)
+                console.warn(`Failed to parse spreadsheet string for note ${note.id}:`, e);
                 spreadsheetData = note.spreadsheet;
               }
             } else {
+              // It's already an object, use it directly
               spreadsheetData = note.spreadsheet;
             }
           } else if (noteWithRaw._spreadsheetJson) {
@@ -216,6 +226,11 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
             } catch (e) {
               console.warn(`Failed to parse spreadsheet JSON for note ${note.id}:`, e);
             }
+          }
+          
+          // Log if we couldn't find spreadsheet data for a spreadsheet note
+          if (!spreadsheetData) {
+            console.warn(`[sync] Warning: Spreadsheet note ${note.id} has no spreadsheet data (spreadsheet=${!!note.spreadsheet}, _spreadsheetJson=${!!noteWithRaw._spreadsheetJson})`);
           }
         }
         

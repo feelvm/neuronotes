@@ -966,7 +966,21 @@
                 spreadsheet: type === 'spreadsheet' ? createEmptySpreadsheet() : undefined
             };
             await db.putNote(n);
-            notes = [...notes, n];
+            // Reload the note from database to ensure it has _spreadsheetJson set correctly for sync
+            const reloadedNotes = await db.getNotesByWorkspaceId(activeWorkspaceId);
+            const reloadedNote = reloadedNotes.find(note => note.id === n.id);
+            if (reloadedNote) {
+                // Replace the note in the array with the reloaded version from DB
+                const noteIndex = notes.findIndex(note => note.id === n.id);
+                if (noteIndex !== -1) {
+                    notes[noteIndex] = reloadedNote;
+                } else {
+                    notes = [...notes, reloadedNote];
+                }
+                notes = [...notes]; // Trigger reactivity
+            } else {
+                notes = [...notes, n];
+            }
             await selectNote(n.id);
             await syncIfLoggedIn();
         } catch (error) {
@@ -1166,9 +1180,20 @@
         
         // If this is the currently selected spreadsheet note, get the latest spreadsheet data
         let spreadsheet = note.spreadsheet;
-        if (note.type === 'spreadsheet' && selectedNoteId === note.id && parsedCurrentNote && parsedCurrentNote.spreadsheet) {
-            // Use the parsed current note's spreadsheet as the source of truth (it's bound to the component)
-            spreadsheet = parsedCurrentNote.spreadsheet;
+        // Only use parsedCurrentNote.spreadsheet if the note parameter doesn't already have spreadsheet data
+        // This allows us to pass in the latest spreadsheet data directly from the component
+        if (note.type === 'spreadsheet' && selectedNoteId === note.id) {
+            // If spreadsheet is already provided in the note parameter, use it (it's the latest from component)
+            // Otherwise, fall back to parsedCurrentNote.spreadsheet
+            if (!spreadsheet && parsedCurrentNote && parsedCurrentNote.spreadsheet) {
+                spreadsheet = parsedCurrentNote.spreadsheet;
+            }
+            // If we still don't have spreadsheet data, log a warning
+            if (!spreadsheet) {
+                console.warn(`[updateNote] No spreadsheet data found for spreadsheet note ${note.id}`);
+            } else {
+                console.log(`[updateNote] Saving spreadsheet note ${note.id} with data:`, spreadsheet);
+            }
         }
         
         const noteToSave = { 
@@ -1182,14 +1207,50 @@
             noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
         }
         
+        console.log(`[updateNote] Saving note ${noteToSave.id} (type: ${noteToSave.type}) to database with updatedAt: ${noteToSave.updatedAt}`);
         await db.putNote(noteToSave);
+        console.log(`[updateNote] Successfully saved note ${noteToSave.id} to database`);
         
-        // Update the note in the array, preserving contentHTML and spreadsheet
-        const index = notes.findIndex((n) => n.id === noteToSave.id);
-        if (index !== -1) {
-            // Preserve the contentHTML and spreadsheet when updating the notes array
-            notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
-            notes = [...notes];
+        // For spreadsheet notes, reload from database to ensure _spreadsheetJson is set correctly
+        // But preserve the updatedAt timestamp we just set
+        if (noteToSave.type === 'spreadsheet') {
+            try {
+                const reloadedNotes = await db.getNotesByWorkspaceId(noteToSave.workspaceId);
+                const reloadedNote = reloadedNotes.find(n => n.id === noteToSave.id);
+                if (reloadedNote) {
+                    console.log(`[updateNote] Reloaded note ${reloadedNote.id} from database with updatedAt: ${reloadedNote.updatedAt}`);
+                    // Preserve the updatedAt we just set (it should be the same, but ensure it is)
+                    const noteToUpdate = {
+                        ...reloadedNote,
+                        updatedAt: noteToSave.updatedAt, // Use the timestamp we just saved
+                        spreadsheet: noteToSave.spreadsheet // Also preserve the spreadsheet we just saved
+                    };
+                    const index = notes.findIndex((n) => n.id === noteToSave.id);
+                    if (index !== -1) {
+                        notes[index] = noteToUpdate;
+                        notes = [...notes];
+                        console.log(`[updateNote] Updated note in array with updatedAt: ${noteToUpdate.updatedAt}`);
+                    }
+                } else {
+                    console.warn(`[updateNote] Could not find reloaded note ${noteToSave.id} in database`);
+                }
+            } catch (e) {
+                console.warn('Failed to reload note from database after save:', e);
+                // Fall back to updating with the saved note
+                const index = notes.findIndex((n) => n.id === noteToSave.id);
+                if (index !== -1) {
+                    notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
+                    notes = [...notes];
+                }
+            }
+        } else {
+            // Update the note in the array, preserving contentHTML and spreadsheet
+            const index = notes.findIndex((n) => n.id === noteToSave.id);
+            if (index !== -1) {
+                // Preserve the contentHTML and spreadsheet when updating the notes array
+                notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
+                notes = [...notes];
+            }
         }
         
         // Sync is debounced along with note update
@@ -4323,10 +4384,46 @@
                                             bind:selectedCell={selectedSheetCell}
                                             bind:selection={sheetSelection}
                                             on:update={() => {
-                                                triggerNoteUpdate();
-                                                if (currentNote) {
-                                                    debouncedUpdateNote(currentNote);
+                                                // When spreadsheet component updates, get the latest data from parsedCurrentNote
+                                                // The bind:spreadsheetData={parsedCurrentNote.spreadsheet} updates parsedCurrentNote.spreadsheet
+                                                if (currentNote && currentNote.type === 'spreadsheet') {
+                                                    // Get the latest spreadsheet data from parsedCurrentNote (updated via bind)
+                                                    const latestSpreadsheet = parsedCurrentNote?.spreadsheet;
+                                                    
+                                                    if (latestSpreadsheet) {
+                                                        console.log('[spreadsheet update] Saving spreadsheet data for note', currentNote.id);
+                                                        
+                                                        // Update the note in the array immediately so UI reflects changes
+                                                        const index = notes.findIndex((n) => n.id === currentNote.id);
+                                                        if (index !== -1) {
+                                                            // Also update the note's _spreadsheetJson to keep it in sync
+                                                            const noteWithRaw = notes[index] as any;
+                                                            noteWithRaw.spreadsheet = latestSpreadsheet;
+                                                            noteWithRaw._spreadsheetJson = latestSpreadsheet;
+                                                            notes[index] = {
+                                                                ...notes[index],
+                                                                spreadsheet: latestSpreadsheet,
+                                                                updatedAt: Date.now()
+                                                            };
+                                                            notes = [...notes];
+                                                        }
+                                                        
+                                                        // Create note object with latest spreadsheet data for saving
+                                                        const noteWithLatestData = {
+                                                            ...currentNote,
+                                                            spreadsheet: latestSpreadsheet
+                                                        };
+                                                        
+                                                        // Use debouncedUpdateNote which will handle saving, reloading, and syncing
+                                                        debouncedUpdateNote(noteWithLatestData);
+                                                    } else {
+                                                        console.warn('[spreadsheet update] No spreadsheet data found in parsedCurrentNote for note', currentNote.id, 'parsedCurrentNote:', parsedCurrentNote);
+                                                    }
+                                                } else {
+                                                    if (!currentNote) console.warn('[spreadsheet update] No currentNote');
+                                                    if (currentNote && currentNote.type !== 'spreadsheet') console.warn('[spreadsheet update] Note is not a spreadsheet:', currentNote.type);
                                                 }
+                                                triggerNoteUpdate();
                                             }}
                                         />
                                         {:else}
