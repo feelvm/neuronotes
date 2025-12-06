@@ -1035,8 +1035,10 @@
         const note = notes.find((n) => n.id === id);
         if (note && newName.trim()) {
             note.title = newName.trim();
+            note.updatedAt = Date.now();
             await db.putNote(note);
             notes = [...notes];
+            await syncIfLoggedIn();
         }
         editingNoteId = null;
     }
