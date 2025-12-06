@@ -3065,24 +3065,19 @@
                         // Same user - just sync without clearing
                         console.log('Same user detected, syncing without clearing...');
                         
-                        // Push local changes first
-                        console.log('Pushing local changes to Supabase...');
+                        // Use fullSync which does pull-then-push to ensure we get latest changes
+                        // before pushing local changes. This prevents overwriting newer changes from other devices.
+                        console.log('Performing full sync (pull then push)...');
                         try {
                             await ensureSupabaseLoaded();
-                            const pushResult = await sync.pushToSupabase();
-                            if (!pushResult.success) {
-                                console.error('Push failed:', pushResult.error);
+                            const syncResult = await sync.fullSync();
+                            if (!syncResult.success) {
+                                console.error('Full sync failed:', syncResult.error);
+                            } else {
+                                console.log('Full sync completed successfully');
                             }
                         } catch (error) {
-                            console.warn('Failed to push local changes:', error);
-                        }
-                        
-                        // Then pull latest from Supabase
-                        console.log('Pulling latest data from Supabase...');
-                        try {
-                            await sync.pullFromSupabase();
-                        } catch (error) {
-                            console.warn('Failed to pull from Supabase:', error);
+                            console.warn('Failed to sync:', error);
                         }
                     } else {
                         // Different user or first time - clear and pull
