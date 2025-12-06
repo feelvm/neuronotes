@@ -1539,22 +1539,37 @@
     let useCommonCalendar = false;
     let today = new Date();
     let weekStart = startOfWeek(today, 1);
+    let startWithCurrentDay = false;
+    let currentDayViewDate = new Date(today);
     let todayDateString = 'Calendar';
     let todayTimeString = '';
     $: weekDays = browser
-        ? Array.from({ length: 7 }, (_, i) => {
-              const d = new Date(weekStart);
-              d.setDate(d.getDate() + i);
-              return d;
-          })
+        ? (() => {
+              if (startWithCurrentDay) {
+                  // Generate 7 days starting from currentDayViewDate
+                  const viewDate = new Date(currentDayViewDate);
+                  viewDate.setHours(0, 0, 0, 0);
+                  return Array.from({ length: 7 }, (_, i) => {
+                      const d = new Date(viewDate);
+                      d.setDate(d.getDate() + i);
+                      return d;
+                  });
+              } else {
+                  // Default: Monday-first week view
+                  return Array.from({ length: 7 }, (_, i) => {
+                      const d = new Date(weekStart);
+                      d.setDate(d.getDate() + i);
+                      return d;
+                  });
+              }
+          })()
         : [];
     $: eventsByDay = (() => {
-        if (!browser) return {};
+        if (!browser || weekDays.length === 0) return {};
 
         const occurrences: Record<string, CalendarEvent[]> = {};
-        const viewStartDate = weekStart;
-        const viewEndDate = new Date(viewStartDate);
-        viewEndDate.setDate(viewEndDate.getDate() + 6);
+        const viewStartDate = weekDays[0];
+        const viewEndDate = weekDays[6];
 
         for (const event of calendarEvents) {
             const eventStartDate = localDateFromYMD(event.date);
@@ -2222,14 +2237,34 @@
     }
 
     function prevWeek() {
-        const newDate = new Date(weekStart);
-        newDate.setDate(newDate.getDate() - 7);
-        weekStart = newDate;
+        if (startWithCurrentDay) {
+            const newDate = new Date(currentDayViewDate);
+            newDate.setDate(newDate.getDate() - 7);
+            currentDayViewDate = newDate;
+        } else {
+            const newDate = new Date(weekStart);
+            newDate.setDate(newDate.getDate() - 7);
+            weekStart = newDate;
+        }
     }
     function nextWeek() {
-        const newDate = new Date(weekStart);
-        newDate.setDate(newDate.getDate() + 7);
-        weekStart = newDate;
+        if (startWithCurrentDay) {
+            const newDate = new Date(currentDayViewDate);
+            newDate.setDate(newDate.getDate() + 7);
+            currentDayViewDate = newDate;
+        } else {
+            const newDate = new Date(weekStart);
+            newDate.setDate(newDate.getDate() + 7);
+            weekStart = newDate;
+        }
+    }
+    
+    function goToToday() {
+        if (startWithCurrentDay) {
+            currentDayViewDate = new Date(today);
+        } else {
+            weekStart = startOfWeek(today, 1);
+        }
     }
 
     function convertDateToISO(dateStr: string): string | null {
@@ -4679,6 +4714,14 @@
                                 Today
                             </button>
                             <button class="small-btn" on:click={nextWeek}><span class="btn-text">Next</span> &rarr;</button>
+                            <button
+                                class="small-btn"
+                                class:active={startWithCurrentDay}
+                                on:click={() => (startWithCurrentDay = !startWithCurrentDay)}
+                                title={startWithCurrentDay ? 'Start week with Monday' : 'Start week with current day'}
+                            >
+                                {startWithCurrentDay ? 'Mon' : 'Today'}
+                            </button>
                         </div>
                     {/if}
                     <button
@@ -5083,11 +5126,26 @@
                             <button class="small-btn" on:click={prevWeek}>&larr; <span class="btn-text">Prev</span></button>
                             <button
                                 class="small-btn"
-                                on:click={() => (weekStart = startOfWeek(today, 1))}
+                                on:click={goToToday}
                             >
                                 Today
                             </button>
                             <button class="small-btn" on:click={nextWeek}><span class="btn-text">Next</span> &rarr;</button>
+                            <button
+                                class="small-btn"
+                                class:active={startWithCurrentDay}
+                                on:click={() => {
+                                    startWithCurrentDay = !startWithCurrentDay;
+                                    if (startWithCurrentDay) {
+                                        currentDayViewDate = new Date(today);
+                                    } else {
+                                        weekStart = startOfWeek(today, 1);
+                                    }
+                                }}
+                                title={startWithCurrentDay ? 'Start week with Monday' : 'Start week with current day'}
+                            >
+                                {startWithCurrentDay ? 'Mon' : 'Today'}
+                            </button>
                         </div>
                     {/if}
                     <button
