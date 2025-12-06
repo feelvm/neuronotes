@@ -7231,8 +7231,8 @@
             display: flex;
             flex-direction: column;
             gap: 12px;
-            height: auto;
-            min-height: min-content;
+            flex: 1;
+            min-height: 0;
         }
         .right .resizer-wrapper.horizontal {
             display: none !important;
@@ -7246,8 +7246,14 @@
             height: auto;
             flex-shrink: 0;
         }
+        .notes-panel {
+            flex: 1;
+            min-height: 300px;
+            height: auto;
+        }
         .notes-panel.minimized {
             min-height: 0;
+            flex: 0 0 auto;
         }
         .calendar-grid {
             grid-template-columns: 1fr;
