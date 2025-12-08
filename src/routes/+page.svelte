@@ -1592,7 +1592,14 @@
         }
 
         for (const dayKey in occurrences) {
-            occurrences[dayKey].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+            occurrences[dayKey].sort((a, b) => {
+                // Events without time go to the top
+                if (!a.time && !b.time) return 0;
+                if (!a.time) return -1;
+                if (!b.time) return 1;
+                // Events with time are sorted by time
+                return a.time.localeCompare(b.time);
+            });
         }
 
         return occurrences;
@@ -2269,17 +2276,42 @@
     }
 
     function convertDateToISO(dateStr: string): string | null {
-        // Convert DD/MM/YYYY to YYYY-MM-DD
-        const parts = dateStr.trim().split('/');
-        if (parts.length !== 3) return null;
+        // Support multiple date formats: D/M/YYYY, D.M.YYYY, DD.MM.YYYY, D-M-YYYY, DD-MM-YYYY, DD/MM/YYYY
+        const trimmed = dateStr.trim();
+        
+        // Try different separators: /, ., -
+        let parts: string[] | null = null;
+        
+        if (trimmed.includes('/')) {
+            parts = trimmed.split('/');
+        } else if (trimmed.includes('.')) {
+            parts = trimmed.split('.');
+        } else if (trimmed.includes('-')) {
+            parts = trimmed.split('-');
+        }
+        
+        if (!parts || parts.length !== 3) return null;
+        
         const [day, month, year] = parts;
-        if (day.length !== 2 || month.length !== 2 || year.length !== 4) return null;
+        
+        // Validate year (must be 4 digits)
+        if (year.length !== 4) return null;
+        
         const dayNum = parseInt(day, 10);
         const monthNum = parseInt(month, 10);
         const yearNum = parseInt(year, 10);
+        
         if (isNaN(dayNum) || isNaN(monthNum) || isNaN(yearNum)) return null;
         if (dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) return null;
-        return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+        
+        // Validate date (e.g., check if day is valid for the month)
+        const date = new Date(yearNum, monthNum - 1, dayNum);
+        if (date.getDate() !== dayNum || date.getMonth() !== monthNum - 1 || date.getFullYear() !== yearNum) {
+            return null; // Invalid date (e.g., 31/02/2024)
+        }
+        
+        // Return in ISO format: YYYY-MM-DD
+        return `${yearNum}-${monthNum.toString().padStart(2, '0')}-${dayNum.toString().padStart(2, '0')}`;
     }
 
     function convertISOToDate(isoDate: string): string {
@@ -2367,10 +2399,10 @@
             return;
         }
 
-        // Convert DD/MM/YYYY to YYYY-MM-DD
+        // Convert date to ISO format (supports D/M/YYYY, D.M.YYYY, DD.MM.YYYY, D-M-YYYY, DD-MM-YYYY, DD/MM/YYYY)
         const isoDate = convertDateToISO(newEventDate);
         if (!isoDate) {
-            alert('Invalid date format. Please use DD/MM/YYYY format.');
+            alert('Invalid date format. Please use one of these formats: D/M/YYYY, D.M.YYYY, DD.MM.YYYY, D-M-YYYY, DD-MM-YYYY, or DD/MM/YYYY.');
             return;
         }
 
@@ -4736,6 +4768,7 @@
                                 {#each eventsByDay[ymd(d)] || [] as ev (ev.id + ymd(d))}
                                     <div 
                                         class="event" 
+                                        class:event-no-time={!ev.time}
                                         title={ev.title}
                                         style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
                                         on:dblclick={() => startEditingEvent(ev, ymd(d))}
@@ -4834,7 +4867,7 @@
                         <input 
                             type="text" 
                             bind:value={newEventTime} 
-                            placeholder={todayTimeString || today.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            placeholder="HH:MM"
                             aria-label="Event time"
                             pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
                         />
@@ -5160,6 +5193,7 @@
                                 {#each eventsByDay[ymd(d)] || [] as ev (ev.id + ymd(d))}
                                     <div 
                                         class="event" 
+                                        class:event-no-time={!ev.time}
                                         title={ev.title}
                                         style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
                                         on:dblclick={() => startEditingEvent(ev, ymd(d))}
@@ -5258,7 +5292,7 @@
                         <input 
                             type="text" 
                             bind:value={newEventTime} 
-                            placeholder={todayTimeString || today.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            placeholder="HH:MM"
                             aria-label="Event time"
                             pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
                         />
@@ -6599,6 +6633,12 @@
         line-height: 1.3;
         overflow: hidden;
         width: 100%;
+    }
+    .event.event-no-time {
+        padding: 3px 4px 1px 5px;
+        font-size: 11px;
+        line-height: 1.3;
+        min-height: auto;
     }
     .event-details {
         flex: 1;
