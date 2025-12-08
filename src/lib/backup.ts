@@ -1,6 +1,5 @@
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 import * as db from './db';
-import { isTauri } from './db';
 
 export interface BackupMetadata {
   id: string;
@@ -112,11 +111,7 @@ export async function createBackup(type: 'manual' | 'automatic' = 'manual', desc
 }
 
 async function saveBackup(backupData: BackupData): Promise<void> {
-  if (isTauri) {
-    await saveBackupTauri(backupData);
-  } else {
-    await saveBackupBrowser(backupData);
-  }
+  await saveBackupBrowser(backupData);
 }
 
 async function saveBackupBrowser(backupData: BackupData): Promise<void> {
@@ -151,43 +146,8 @@ async function saveBackupBrowser(backupData: BackupData): Promise<void> {
   }
 }
 
-async function saveBackupTauri(backupData: BackupData): Promise<void> {
-  try {
-    // @ts-expect-error - @tauri-apps/plugin-fs is only available in Tauri runtime
-    const { writeTextFile, mkdir, readTextFile, exists, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-    
-    try {
-      await mkdir('backups', { baseDir: BaseDirectory.AppData, recursive: true });
-    } catch (e) {
-    }
-    
-    const backupFile = `backups/${backupData.metadata.id}.json`;
-    await writeTextFile(backupFile, JSON.stringify(backupData, null, 2), { baseDir: BaseDirectory.AppData });
-    
-    const listFile = 'backups/backups.json';
-    let backupList: BackupMetadata[] = [];
-    if (await exists(listFile, { baseDir: BaseDirectory.AppData })) {
-      try {
-        const listJson = await readTextFile(listFile, { baseDir: BaseDirectory.AppData });
-        backupList = JSON.parse(listJson);
-      } catch (e) {
-        backupList = [];
-      }
-    }
-    backupList.push(backupData.metadata);
-    await writeTextFile(listFile, JSON.stringify(backupList, null, 2), { baseDir: BaseDirectory.AppData });
-  } catch (error) {
-    console.error('[backup] Failed to save backup in Tauri:', error);
-    throw error;
-  }
-}
-
 export async function getAllBackups(): Promise<BackupData[]> {
-  if (isTauri) {
-    return await getAllBackupsTauri();
-  } else {
-    return await getAllBackupsBrowser();
-  }
+  return await getAllBackupsBrowser();
 }
 
 async function getAllBackupsBrowser(): Promise<BackupData[]> {
@@ -217,42 +177,6 @@ async function getAllBackupsBrowser(): Promise<BackupData[]> {
     return backups;
   } catch (error) {
     console.error('[backup] Failed to get backups from browser:', error);
-    return [];
-  }
-}
-
-async function getAllBackupsTauri(): Promise<BackupData[]> {
-  try {
-    // @ts-expect-error - @tauri-apps/plugin-fs is only available in Tauri runtime
-    const { readTextFile, exists, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-    
-    const listFile = 'backups/backups.json';
-    
-    if (!(await exists(listFile, { baseDir: BaseDirectory.AppData }))) {
-      return [];
-    }
-    
-    const backupListJson = await readTextFile(listFile, { baseDir: BaseDirectory.AppData });
-    const backupList: BackupMetadata[] = JSON.parse(backupListJson);
-    const backups: BackupData[] = [];
-    
-    for (const metadata of backupList) {
-      const backupFile = `backups/${metadata.id}.json`;
-      if (await exists(backupFile, { baseDir: BaseDirectory.AppData })) {
-        try {
-          const backupJson = await readTextFile(backupFile, { baseDir: BaseDirectory.AppData });
-          const backup: BackupData = JSON.parse(backupJson);
-          backups.push(backup);
-        } catch (e) {
-          console.warn(`[backup] Failed to read backup ${metadata.id}:`, e);
-        }
-      }
-    }
-    
-    backups.sort((a, b) => b.metadata.timestamp - a.metadata.timestamp);
-    return backups;
-  } catch (error) {
-    console.error('[backup] Failed to get backups from Tauri:', error);
     return [];
   }
 }
@@ -367,11 +291,7 @@ async function importBackupData(data: {
 }
 
 export async function deleteBackup(backupId: string): Promise<void> {
-  if (isTauri) {
-    await deleteBackupTauri(backupId);
-  } else {
-    await deleteBackupBrowser(backupId);
-  }
+  await deleteBackupBrowser(backupId);
 }
 
 async function deleteBackupBrowser(backupId: string): Promise<void> {
@@ -382,25 +302,6 @@ async function deleteBackupBrowser(backupId: string): Promise<void> {
   const filtered = backups.filter(b => b.metadata.id !== backupId);
   const backupList = filtered.map(b => b.metadata);
   localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(backupList));
-}
-
-async function deleteBackupTauri(backupId: string): Promise<void> {
-  try {
-    // @ts-expect-error - @tauri-apps/plugin-fs is only available in Tauri runtime
-    const { remove, writeTextFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-    
-    const backupFile = `backups/${backupId}.json`;
-    await remove(backupFile, { baseDir: BaseDirectory.AppData });
-    
-    const backups = await getAllBackups();
-    const filtered = backups.filter(b => b.metadata.id !== backupId);
-    const backupList = filtered.map(b => b.metadata);
-    const listFile = 'backups/backups.json';
-    await writeTextFile(listFile, JSON.stringify(backupList, null, 2), { baseDir: BaseDirectory.AppData });
-  } catch (error) {
-    console.error('[backup] Failed to delete backup in Tauri:', error);
-    throw error;
-  }
 }
 
 async function cleanupOldBackups(): Promise<void> {

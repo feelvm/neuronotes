@@ -1,22 +1,10 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
 	plugins: [sveltekit()],
 	css: {
 		devSourcemap: true
-	},
-	resolve: {
-		alias: {
-			// Stub Tauri modules for browser builds (they're dynamically imported conditionally)
-			'@tauri-apps/plugin-fs': path.resolve(__dirname, 'src/lib/tauri-stubs/plugin-fs.ts'),
-			'@tauri-apps/api': path.resolve(__dirname, 'src/lib/tauri-stubs/api.ts'),
-			'@tauri-apps/plugin-sql': path.resolve(__dirname, 'src/lib/tauri-stubs/plugin-sql.ts')
-		}
 	},
 	build: {
 		// Enable minification and tree-shaking
@@ -53,9 +41,6 @@ export default defineConfig({
 		},
 		// Note: SvelteKit handles code splitting automatically,
 		// but we add manual chunks for large dependencies to improve initial load
-	},
-	optimizeDeps: {
-		exclude: ['@tauri-apps/plugin-fs', '@tauri-apps/api', '@tauri-apps/plugin-sql']
 	},
 	ssr: {
 		noExternal: ['sql.js']

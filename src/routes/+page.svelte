@@ -127,7 +127,6 @@
     let isVerticalResizing = false;
     let isHorizontalResizing = false;
     let notesPanelClientWidth = 0;
-    let isTauri = false;
 
     type NoteHistoryEntry = {
         content: string;
@@ -1989,7 +1988,7 @@
             const metadata = await backup.createBackup('manual', 'Manual backup');
             
             // In browser, also download the backup file immediately
-            if (browser && !isTauri) {
+            if (browser) {
                 try {
                     const backupData = await backup.getBackup(metadata.id);
                     if (backupData) {
@@ -2010,7 +2009,7 @@
                 }
             }
             
-            alert(`Backup created successfully!\n\nBackup ID: ${metadata.id}\nDate: ${new Date(metadata.timestamp).toLocaleString()}\nSize: ${backup.formatBackupSize(metadata.size)}\n${browser && !isTauri ? '\nThe backup file has been downloaded to your Downloads folder.' : ''}`);
+            alert(`Backup created successfully!\n\nBackup ID: ${metadata.id}\nDate: ${new Date(metadata.timestamp).toLocaleString()}\nSize: ${backup.formatBackupSize(metadata.size)}\n${browser ? '\nThe backup file has been downloaded to your Downloads folder.' : ''}`);
             await loadBackups();
         } catch (error) {
             console.error('Backup creation failed:', error);
@@ -2991,8 +2990,6 @@
                 }
             };
             
-            isTauri = '__TAURI__' in window;
-
             await db.init();
             
             // Load Supabase modules after db init but before auth check
