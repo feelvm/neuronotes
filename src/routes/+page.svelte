@@ -17,6 +17,11 @@
         getSelectedFontSize,
         handlePlainTextPaste
     } from '$lib/utils/textFormatting';
+    import LoginModal from '$lib/components/LoginModal.svelte';
+    import SignupModal from '$lib/components/SignupModal.svelte';
+    import BackupModal from '$lib/components/BackupModal.svelte';
+    import NavigationBar from '$lib/components/NavigationBar.svelte';
+    import EditPanelsModal from '$lib/components/EditPanelsModal.svelte';
     import type {
         Workspace,
         Note,
@@ -38,10 +43,6 @@
         <path d="M8 8C10.21 8 12 6.21 12 4C12 1.79 10.21 0 8 0C5.79 0 4 1.79 4 4C4 6.21 5.79 8 8 8ZM8 1C9.66 1 11 2.34 11 4C11 5.66 9.66 7 8 7C6.34 7 5 5.66 5 4C5 2.34 6.34 1 8 1ZM8 9C5.33 9 0 10.34 0 13V15C0 15.55 0.45 16 1 16H15C15.55 16 16 15.55 16 15V13C16 10.34 10.67 9 8 9ZM1 13C1.22 11.28 5.31 10 8 10C10.69 10 14.78 11.28 15 13V14H1V13Z" fill="currentColor"/>
     </svg>`;
 
-    const SettingsIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path fill-rule="evenodd" clip-rule="evenodd" d="M12 8.25C9.92894 8.25 8.25 9.92893 8.25 12C8.25 14.0711 9.92894 15.75 12 15.75C14.0711 15.75 15.75 14.0711 15.75 12C15.75 9.92893 14.0711 8.25 12 8.25ZM9.75 12C9.75 10.7574 10.7574 9.75 12 9.75C13.2426 9.75 14.25 10.7574 14.25 12C14.25 13.2426 13.2426 14.25 12 14.25C10.7574 14.25 9.75 13.2426 9.75 12Z" fill="currentColor"/>
-        <path fill-rule="evenodd" clip-rule="evenodd" d="M11.9747 1.25C11.5303 1.24999 11.1592 1.24999 10.8546 1.27077C10.5375 1.29241 10.238 1.33905 9.94761 1.45933C9.27379 1.73844 8.73843 2.27379 8.45932 2.94762C8.31402 3.29842 8.27467 3.66812 8.25964 4.06996C8.24756 4.39299 8.08454 4.66251 7.84395 4.80141C7.60337 4.94031 7.28845 4.94673 7.00266 4.79568C6.64714 4.60777 6.30729 4.45699 5.93083 4.40743C5.20773 4.31223 4.47642 4.50819 3.89779 4.95219C3.64843 5.14353 3.45827 5.3796 3.28099 5.6434C3.11068 5.89681 2.92517 6.21815 2.70294 6.60307L2.67769 6.64681C2.45545 7.03172 2.26993 7.35304 2.13562 7.62723C1.99581 7.91267 1.88644 8.19539 1.84541 8.50701C1.75021 9.23012 1.94617 9.96142 2.39016 10.5401C2.62128 10.8412 2.92173 11.0602 3.26217 11.2741C3.53595 11.4461 3.68788 11.7221 3.68786 12C3.68785 12.2778 3.53592 12.5538 3.26217 12.7258C2.92169 12.9397 2.62121 13.1587 2.39007 13.4599C1.94607 14.0385 1.75012 14.7698 1.84531 15.4929C1.88634 15.8045 1.99571 16.0873 2.13552 16.3727C2.26983 16.6469 2.45535 16.9682 2.67758 17.3531L2.70284 17.3969C2.92507 17.7818 3.11058 18.1031 3.28089 18.3565C3.45817 18.6203 3.64833 18.8564 3.89769 19.0477C4.47632 19.4917 5.20763 19.6877 5.93073 19.5925C6.30717 19.5429 6.647 19.3922 7.0025 19.2043C7.28833 19.0532 7.60329 19.0596 7.8439 19.1986C8.08452 19.3375 8.24756 19.607 8.25964 19.9301C8.27467 20.3319 8.31403 20.7016 8.45932 21.0524C8.73843 21.7262 9.27379 22.2616 9.94761 22.5407C10.238 22.661 10.5375 22.7076 10.8546 22.7292C11.1592 22.75 11.5303 22.75 11.9747 22.75H12.0252C12.4697 22.75 12.8407 22.75 13.1454 22.7292C13.4625 22.7076 13.762 22.661 14.0524 22.5407C14.7262 22.2616 15.2616 21.7262 15.5407 21.0524C15.686 20.7016 15.7253 20.3319 15.7403 19.93C15.7524 19.607 15.9154 19.3375 16.156 19.1985C16.3966 19.0596 16.7116 19.0532 16.9974 19.2042C17.3529 19.3921 17.6927 19.5429 18.0692 19.5924C18.7923 19.6876 19.5236 19.4917 20.1022 19.0477C20.3516 18.8563 20.5417 18.6203 20.719 18.3565C20.8893 18.1031 21.0748 17.7818 21.297 17.3969L21.3223 17.3531C21.5445 16.9682 21.7301 16.6468 21.8644 16.3726C22.0042 16.0872 22.1135 15.8045 22.1546 15.4929C22.2498 14.7697 22.0538 14.0384 21.6098 13.4598C21.3787 13.1586 21.0782 12.9397 20.7378 12.7258C20.464 12.5538 20.3121 12.2778 20.3121 11.9999C20.3121 11.7221 20.464 11.4462 20.7377 11.2742C21.0783 11.0603 21.3788 10.8414 21.6099 10.5401C22.0539 9.96149 22.2499 9.23019 22.1547 8.50708C22.1136 8.19546 22.0043 7.91274 21.8645 7.6273C21.7302 7.35313 21.5447 7.03183 21.3224 6.64695L21.2972 6.60318C21.0749 6.21825 20.8894 5.89688 20.7191 5.64347C20.5418 5.37967 20.3517 5.1436 20.1023 4.95225C19.5237 4.50826 18.7924 4.3123 18.0692 4.4075C17.6928 4.45706 17.353 4.60782 16.9975 4.79572C16.7117 4.94679 16.3967 4.94036 16.1561 4.80144C15.9155 4.66253 15.7524 4.39297 15.7403 4.06991C15.7253 3.66808 15.686 3.2984 15.5407 2.94762C15.2616 2.27379 14.7262 1.73844 14.0524 1.45933C13.762 1.33905 13.4625 1.29241 13.1454 1.27077C12.8407 1.24999 12.4697 1.24999 12.0252 1.25H11.9747ZM10.5216 2.84515C10.5988 2.81319 10.716 2.78372 10.9567 2.76729C11.2042 2.75041 11.5238 2.75 12 2.75C12.4762 2.75 12.7958 2.75041 13.0432 2.76729C13.284 2.78372 13.4012 2.81319 13.4783 2.84515C13.7846 2.97202 14.028 3.21536 14.1548 3.52165C14.1949 3.61826 14.228 3.76887 14.2414 4.12597C14.271 4.91835 14.68 5.68129 15.4061 6.10048C16.1321 6.51968 16.9974 6.4924 17.6984 6.12188C18.0143 5.9549 18.1614 5.90832 18.265 5.89467C18.5937 5.8514 18.9261 5.94047 19.1891 6.14228C19.2554 6.19312 19.3395 6.27989 19.4741 6.48016C19.6125 6.68603 19.7726 6.9626 20.0107 7.375C20.2488 7.78741 20.4083 8.06438 20.5174 8.28713C20.6235 8.50382 20.6566 8.62007 20.6675 8.70287C20.7108 9.03155 20.6217 9.36397 20.4199 9.62698C20.3562 9.70995 20.2424 9.81399 19.9397 10.0041C19.2684 10.426 18.8122 11.1616 18.8121 11.9999C18.8121 12.8383 19.2683 13.574 19.9397 13.9959C20.2423 14.186 20.3561 14.29 20.4198 14.373C20.6216 14.636 20.7107 14.9684 20.6674 15.2971C20.6565 15.3799 20.6234 15.4961 20.5173 15.7128C20.4082 15.9355 20.2487 16.2125 20.0106 16.6249C19.7725 17.0373 19.6124 17.3139 19.474 17.5198C19.3394 17.72 19.2553 17.8068 19.189 17.8576C18.926 18.0595 18.5936 18.1485 18.2649 18.1053C18.1613 18.0916 18.0142 18.045 17.6983 17.8781C16.9973 17.5075 16.132 17.4803 15.4059 17.8995C14.68 18.3187 14.271 19.0816 14.2414 19.874C14.228 20.2311 14.1949 20.3817 14.1548 20.4784C14.028 20.7846 13.7846 21.028 13.4783 21.1549C13.4012 21.1868 13.284 21.2163 13.0432 21.2327C12.7958 21.2496 12.4762 21.25 12 21.25C11.5238 21.25 11.2042 21.2496 10.9567 21.2327C10.716 21.2163 10.5988 21.1868 10.5216 21.1549C10.2154 21.028 9.97201 20.7846 9.84514 20.4784C9.80512 20.3817 9.77195 20.2311 9.75859 19.874C9.72896 19.0817 9.31997 18.3187 8.5939 17.8995C7.86784 17.4803 7.00262 17.5076 6.30158 17.8781C5.98565 18.0451 5.83863 18.0917 5.73495 18.1053C5.40626 18.1486 5.07385 18.0595 4.81084 17.8577C4.74458 17.8069 4.66045 17.7201 4.52586 17.5198C4.38751 17.314 4.22736 17.0374 3.98926 16.625C3.75115 16.2126 3.59171 15.9356 3.4826 15.7129C3.37646 15.4962 3.34338 15.3799 3.33248 15.2971C3.28921 14.9684 3.37828 14.636 3.5801 14.373C3.64376 14.2901 3.75761 14.186 4.0602 13.9959C4.73158 13.5741 5.18782 12.8384 5.18786 12.0001C5.18791 11.1616 4.73165 10.4259 4.06021 10.004C3.75769 9.81389 3.64385 9.70987 3.58019 9.62691C3.37838 9.3639 3.28931 9.03149 3.33258 8.7028C3.34348 8.62001 3.37656 8.50375 3.4827 8.28707C3.59181 8.06431 3.75125 7.78734 3.98935 7.37493C4.22746 6.96253 4.3876 6.68596 4.52596 6.48009C4.66055 6.27983 4.74468 6.19305 4.81093 6.14222C5.07395 5.9404 5.40636 5.85133 5.73504 5.8946C5.83873 5.90825 5.98576 5.95483 6.30173 6.12184C7.00273 6.49235 7.86791 6.51962 8.59394 6.10045C9.31998 5.68128 9.72896 4.91837 9.75859 4.12602C9.77195 3.76889 9.80512 3.61827 9.84514 3.52165C9.97201 3.21536 10.2154 2.97202 10.5216 2.84515Z" fill="currentColor"/>
-    </svg>`;
 
     const ExpandIcon = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M3 3H13V13H3V3ZM4 4V12H12V4H4ZM6 6H10V7H6V6ZM6 9H10V10H6V9Z" fill="currentColor"/>
@@ -59,13 +60,6 @@
         <path d="M8 0C3.58 0 0 3.58 0 8C0 12.42 3.58 16 8 16C12.42 16 16 12.42 16 8C16 3.58 12.42 0 8 0ZM7 14.93C4.05 14.44 1.56 11.95 1.07 9H3.09C3.57 10.84 5.16 12.43 7 12.91V14.93ZM7 11.93C5.84 11.6 4.4 10.16 4.07 9H7V11.93ZM7 8H4.07C4.4 6.84 5.84 5.4 7 5.07V8ZM7 4.09C5.16 4.57 3.57 6.16 3.09 8H1.07C1.56 5.05 4.05 2.56 7 2.07V4.09ZM9 2.07C11.95 2.56 14.44 5.05 14.93 8H12.91C12.43 6.16 10.84 4.57 9 4.09V2.07ZM9 5.07C10.16 5.4 11.6 6.84 11.93 8H9V5.07ZM9 9H11.93C11.6 10.16 10.16 11.6 9 11.93V9ZM9 12.91C10.84 12.43 12.43 10.84 12.91 9H14.93C14.44 11.95 11.95 14.44 9 14.93V12.91Z" fill="currentColor"/>
     </svg>`;
 
-    const ManualIcon = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M2 2H14V14H2V2ZM3 3V13H13V3H3ZM5 5H11V6H5V5ZM5 7H11V8H5V7ZM5 9H8V10H5V9Z" fill="currentColor"/>
-    </svg>`;
-
-    const AutomaticIcon = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M8 0L10.5 5.5L16 8L10.5 10.5L8 16L5.5 10.5L0 8L5.5 5.5L8 0ZM8 2.5L6.5 6.5L2.5 8L6.5 9.5L8 13.5L9.5 9.5L13.5 8L9.5 6.5L8 2.5ZM8 5L9 7.5L11.5 8L9 8.5L8 11L7 8.5L4.5 8L7 7.5L8 5Z" fill="currentColor"/>
-    </svg>`;
 
     const RepeatIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M17 2L21 6M21 6L17 10M21 6H7.8C6.11984 6 5.27976 6 4.63803 6.32698C4.07354 6.6146 3.6146 7.07354 3.32698 7.63803C3 8.27976 3 9.11984 3 10.8V11M3 18H16.2C17.8802 18 18.7202 18 19.362 17.673C19.9265 17.3854 20.3854 16.9265 20.673 16.362C21 15.7202 21 14.8802 21 13.2V13M3 18L7 22M3 18L7 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -377,39 +371,6 @@
         return { destroy() {} };
     }
 
-    function settingsDropdown(node: HTMLElement) {
-        function updatePosition() {
-            const settingsBtn = document.querySelector('.settings-btn') as HTMLElement;
-            if (settingsBtn && node) {
-                const rect = settingsBtn.getBoundingClientRect();
-                node.style.top = `${rect.bottom + 8}px`;
-                node.style.right = `${window.innerWidth - rect.right}px`;
-            }
-        }
-
-        function handleClickOutside(event: MouseEvent) {
-            if (node && !node.contains(event.target as Node) && 
-                !(event.target as HTMLElement)?.closest('.settings-btn')) {
-                showSettingsDropdown = false;
-            }
-        }
-
-        updatePosition();
-        window.addEventListener('resize', updatePosition);
-        window.addEventListener('scroll', updatePosition, true);
-        document.addEventListener('click', handleClickOutside);
-        
-        return {
-            update() {
-                updatePosition();
-            },
-            destroy() {
-                window.removeEventListener('resize', updatePosition);
-                window.removeEventListener('scroll', updatePosition, true);
-                document.removeEventListener('click', handleClickOutside);
-            }
-        };
-    }
 
     let editorDiv: HTMLElement;
     let previousNoteId: string | null = null;
@@ -1688,10 +1649,7 @@
         return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
     let showSettingsDropdown = false;
-    let backupFileInput: HTMLInputElement;
     let showBackupModal = false;
-    let backups: backup.BackupData[] = [];
-    let isLoadingBackups = false;
     
     let isLoggedIn = false;
     let currentUserId: string | null = null; // Track current user ID to detect user switches
@@ -1771,6 +1729,44 @@
             }, 30000); // Every 30 seconds
         }
     };
+
+    // Callback for successful login - handles post-login state updates
+    async function handleLoginSuccess(userId: string) {
+        isLoggedIn = true;
+        currentUserId = userId;
+        
+        // Clear UI state and reload workspace data
+        notes = [];
+        folders = [];
+        calendarEvents = [];
+        kanban = [];
+        selectedNoteId = '';
+        currentFolderId = null;
+        
+        // Reload workspaces and set active workspace
+        let loadedWorkspaces = await db.getAllWorkspaces();
+        if (loadedWorkspaces.length > 0) {
+            workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+            activeWorkspaceId = workspaces[0].id;
+        } else {
+            // Create default workspace if none exist
+            const defaultWorkspace: Workspace = {
+                id: generateUUID(),
+                name: 'My Workspace',
+                order: 0
+            };
+            await db.putWorkspace(defaultWorkspace);
+            workspaces = [defaultWorkspace];
+            activeWorkspaceId = defaultWorkspace.id;
+        }
+        
+        // Reset kanban loaded flag to force reload after sync
+        isKanbanLoaded = false;
+        await loadActiveWorkspaceData();
+        
+        // Set up periodic sync after login
+        setupPeriodicSync();
+    }
     
     // Save current account data to localStorage before logout
     async function saveAccountDataToLocalStorage(): Promise<void> {
@@ -1812,46 +1808,6 @@
         return password.length >= 8;
     }
     
-    function handleEmailBlur() {
-        if (loginEmail && !validateEmail(loginEmail)) {
-            isEmailInvalid = true;
-        } else {
-            isEmailInvalid = false;
-        }
-    }
-    
-    function handleSignupEmailBlur() {
-        if (signupEmail && !validateEmail(signupEmail)) {
-            isSignupEmailInvalid = true;
-        } else {
-            isSignupEmailInvalid = false;
-        }
-    }
-    
-    function handleSignupPasswordBlur() {
-        if (signupPassword && !validatePassword(signupPassword)) {
-            isPasswordInvalid = true;
-        } else {
-            isPasswordInvalid = false;
-        }
-        if (signupRepeatPassword && signupPassword !== signupRepeatPassword) {
-            isPasswordMismatch = true;
-        } else if (signupPassword && signupRepeatPassword && signupPassword === signupRepeatPassword) {
-            isPasswordMismatch = false;
-        }
-    }
-    
-    function handleSignupRepeatPasswordBlur() {
-        if (signupRepeatPassword && signupPassword !== signupRepeatPassword) {
-            isPasswordMismatch = true;
-        } else {
-            isPasswordMismatch = false;
-        }
-        // Clear password invalid state if password is valid and matches
-        if (signupPassword && validatePassword(signupPassword) && signupPassword === signupRepeatPassword) {
-            isPasswordInvalid = false;
-        }
-    }
     
     async function importData(data: {
         workspaces?: Workspace[];
@@ -1990,259 +1946,6 @@
         }
     }
 
-    async function createBackup() {
-        try {
-            const metadata = await backup.createBackup('manual', 'Manual backup');
-            
-            // In browser, also download the backup file immediately
-            if (browser) {
-                try {
-                    const backupData = await backup.getBackup(metadata.id);
-                    if (backupData) {
-                        const jsonData = JSON.stringify(backupData, null, 2);
-                        const blob = new Blob([jsonData], { type: 'application/json' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `neuronotes-backup-${metadata.id}.json`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                    }
-                } catch (downloadError) {
-                    console.warn('Failed to auto-download backup:', downloadError);
-                    // Continue even if download fails
-                }
-            }
-            
-            alert(`Backup created successfully!\n\nBackup ID: ${metadata.id}\nDate: ${new Date(metadata.timestamp).toLocaleString()}\nSize: ${backup.formatBackupSize(metadata.size)}\n${browser ? '\nThe backup file has been downloaded to your Downloads folder.' : ''}`);
-            await loadBackups();
-        } catch (error) {
-            console.error('Backup creation failed:', error);
-            alert(`Backup creation failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
-
-    async function downloadBackup(backupId: string) {
-        try {
-            const backupData = await backup.getBackup(backupId);
-            if (!backupData) {
-                alert('Backup not found.');
-                return;
-            }
-
-            const jsonData = JSON.stringify(backupData, null, 2);
-            const blob = new Blob([jsonData], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `neuronotes-backup-${backupId}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
-            alert('Backup downloaded successfully! The file has been saved to your Downloads folder.');
-        } catch (error) {
-            console.error('Backup download failed:', error);
-            alert(`Backup download failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
-
-    async function handleImportBackupFile(event: Event) {
-        const target = event.target as HTMLInputElement;
-        const file = target.files?.[0];
-        
-        if (!file) return;
-
-        try {
-            const fileContent = await file.text();
-            const parsedData = JSON.parse(fileContent);
-
-            // Check if this is a full BackupData structure with metadata
-            const isFullBackup = parsedData.metadata && parsedData.data && parsedData.version;
-            
-            let backupDataToSave: backup.BackupData;
-            
-            if (isFullBackup) {
-                // Full backup structure - save it directly
-                backupDataToSave = parsedData as backup.BackupData;
-            } else if (parsedData.data) {
-                // Has data property but no metadata - construct BackupData
-                backupDataToSave = {
-                    version: '1.0',
-                    backupDate: new Date().toISOString(),
-                    metadata: {
-                        id: `backup-${Date.now()}`,
-                        timestamp: Date.now(),
-                        date: new Date().toISOString(),
-                        size: 0,
-                        type: 'manual',
-                        description: `Imported from: ${file.name}`
-                    },
-                    data: parsedData.data
-                };
-                // Calculate size
-                const jsonData = JSON.stringify(backupDataToSave);
-                backupDataToSave.metadata.size = new Blob([jsonData]).size;
-            } else if (parsedData.workspaces || parsedData.notes) {
-                // Just data without wrapper - construct BackupData
-                backupDataToSave = {
-                    version: '1.0',
-                    backupDate: new Date().toISOString(),
-                    metadata: {
-                        id: `backup-${Date.now()}`,
-                        timestamp: Date.now(),
-                        date: new Date().toISOString(),
-                        size: 0,
-                        type: 'manual',
-                        description: `Imported from: ${file.name}`
-                    },
-                    data: {
-                        workspaces: parsedData.workspaces || [],
-                        folders: parsedData.folders || [],
-                        notes: parsedData.notes || [],
-                        calendarEvents: parsedData.calendarEvents || [],
-                        kanban: parsedData.kanban || [],
-                        settings: parsedData.settings || []
-                    }
-                };
-                // Calculate size
-                const jsonData = JSON.stringify(backupDataToSave);
-                backupDataToSave.metadata.size = new Blob([jsonData]).size;
-            } else {
-                alert('Invalid backup file format. Please select a valid backup file.');
-                target.value = '';
-                return;
-            }
-
-            // Save the backup to the backup list (without applying it)
-            await backup.saveImportedBackup(backupDataToSave);
-            
-            target.value = '';
-            
-            // Reload backups list if backup modal is open
-            if (showBackupModal) {
-                await loadBackups();
-            }
-            
-            alert('Backup imported successfully! You can now restore it from the backup management list.');
-        } catch (error) {
-            console.error('Backup import failed:', error);
-            alert(`Backup import failed: ${error instanceof Error ? error.message : String(error)}`);
-            target.value = '';
-        }
-    }
-
-    async function loadBackups() {
-        isLoadingBackups = true;
-        try {
-            backups = await backup.getAllBackups();
-        } catch (error) {
-            console.error('Failed to load backups:', error);
-            alert(`Failed to load backups: ${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            isLoadingBackups = false;
-        }
-    }
-
-    async function restoreFromBackup(backupId: string) {
-        const confirmed = await showDeleteDialog(
-            '⚠️ WARNING: Restoring from backup will REPLACE all your current data!\n\n' +
-            'This includes:\n' +
-            '- All workspaces\n' +
-            '- All notes and folders\n' +
-            '- All calendar events\n' +
-            '- All kanban boards\n' +
-            '- All settings\n\n' +
-            'Are you sure you want to continue?',
-            'Restore Backup'
-        );
-
-        if (!confirmed) {
-            return;
-        }
-
-        try {
-            await backup.restoreBackup(backupId);
-            
-            // Reload UI state from database after restore
-            const loadedWorkspaces = await db.getAllWorkspaces();
-            if (loadedWorkspaces.length > 0) {
-                workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                
-                // Set active workspace - prefer existing if valid, otherwise use first or last active setting
-                const lastActive = await db.getSettingByKey('activeWorkspaceId');
-                const preferredWorkspaceId = lastActive?.value;
-                
-                if (activeWorkspaceId && workspaces.find(w => w.id === activeWorkspaceId)) {
-                    // Keep current active workspace if it still exists
-                    // activeWorkspaceId stays the same
-                } else if (preferredWorkspaceId && workspaces.find(w => w.id === preferredWorkspaceId)) {
-                    activeWorkspaceId = preferredWorkspaceId;
-                } else {
-                    activeWorkspaceId = workspaces[0].id;
-                }
-                
-                // Save the active workspace setting
-                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
-            } else {
-                // No workspaces after restore - create default
-                const defaultWorkspace: Workspace = {
-                    id: generateUUID(),
-                    name: 'My Workspace',
-                    order: 0
-                };
-                await db.putWorkspace(defaultWorkspace);
-                workspaces = [defaultWorkspace];
-                activeWorkspaceId = defaultWorkspace.id;
-                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
-            }
-            
-            // Reload active workspace data to update UI (this will update notes, folders, calendar, kanban)
-            if (activeWorkspaceId) {
-                await loadActiveWorkspaceData();
-            }
-            
-            // Close backup modal
-            showBackupModal = false;
-            
-            // If logged in, push restored data to Supabase to sync it
-            // This ensures the restored data becomes the source of truth in the cloud
-            if (isLoggedIn) {
-                try {
-                    await ensureSupabaseLoaded();
-                    await sync.pushToSupabase();
-                    console.log('Restored data synced to Supabase');
-                } catch (syncError) {
-                    console.warn('Failed to sync restored data to Supabase:', syncError);
-                    // Don't throw - restore was successful, sync can happen later
-                }
-            }
-            
-            alert('Backup restored successfully!');
-        } catch (error) {
-            console.error('Backup restore failed:', error);
-            alert(`Backup restore failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
-
-    async function deleteBackupItem(backupId: string) {
-        const confirmed = await showDeleteDialog('Are you sure you want to delete this backup?');
-        if (!confirmed) {
-            return;
-        }
-
-        try {
-            await backup.deleteBackup(backupId);
-            await loadBackups();
-            alert('Backup deleted successfully!');
-        } catch (error) {
-            console.error('Backup deletion failed:', error);
-            alert(`Backup deletion failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
 
     function prevWeek() {
         if (startWithCurrentDay) {
@@ -2491,6 +2194,7 @@
             } else if (choice === 'all') {
                 await db.deleteCalendarEvent(event.id);
                 calendarEvents = calendarEvents.filter((e) => e.id !== event.id);
+                await syncIfLoggedIn();
             }
         }
     }
@@ -3026,6 +2730,11 @@
             
             // Load Supabase modules after db init but before auth check
             await loadSupabaseModules();
+            
+            // Track which user's session we've already handled in onMount
+            // This prevents the auth state change handler from duplicating the work
+            // Must be declared BEFORE we check for session and BEFORE setting up the subscription
+            let handledUserIdInOnMount: string | null = null;
 
             let loadedWorkspaces = await db.getAllWorkspaces();
             if (loadedWorkspaces.length > 0) {
@@ -3048,18 +2757,31 @@
             useCommonCalendar = calendarModeSetting?.value === true;
 
             // Check if user is already logged in
+            // IMPORTANT: We must check for session and set handledUserIdInOnMount BEFORE
+            // subscribing to auth state changes, because the subscription might fire immediately
             const session = await auth.getSession();
             if (session) {
-                isLoggedIn = true;
-                hasHandledInitialSession = true;
-                
-                // Get current user ID
+                // Get current user ID immediately
                 const user = await auth.getUser();
                 const sessionUserId = user?.id || null;
                 
-                // Check if this is the same user (stored in localStorage)
+                // CRITICAL: Mark that we're handling this user's session in onMount
+                // This must be set BEFORE subscribing to auth state changes, because
+                // the subscription might fire immediately and we need to skip it
+                if (sessionUserId) {
+                    handledUserIdInOnMount = sessionUserId;
+                    console.log(`[onMount] Marking user ${sessionUserId} as handled in onMount`);
+                }
+                
+                isLoggedIn = true;
+                hasHandledInitialSession = true;
+                
+                // Check if this is the same user
+                // IMPORTANT: We check currentUserId (from previous session) instead of localStorage
+                // because localStorage gets cleared on logout, but currentUserId persists until logout
+                // This way we can detect if it's the same user even after logout/login
                 const storedUserId = browser ? localStorage.getItem('neuronotes_current_user_id') : null;
-                const isSameUser = storedUserId === sessionUserId;
+                const isSameUser = (currentUserId === sessionUserId) || (storedUserId === sessionUserId);
                 
                 // Store current user ID
                 if (browser && sessionUserId) {
@@ -3092,41 +2814,47 @@
                     // Flush any pending database saves before syncing
                     await db.flushDatabaseSave();
                     
-                    if (isSameUser && storedUserId) {
+                    if (isSameUser) {
                         // Same user - just sync without clearing
-                        console.log('Same user detected, syncing without clearing...');
+                        console.log('[onMount] Same user detected, syncing without clearing...');
                         
                         // Use fullSync which does pull-then-push to ensure we get latest changes
                         // before pushing local changes. This prevents overwriting newer changes from other devices.
-                        console.log('Performing full sync (pull then push)...');
+                        console.log('[onMount] Performing full sync (pull then push)...');
                         try {
                             await ensureSupabaseLoaded();
                             const syncResult = await sync.fullSync();
                             if (!syncResult.success) {
-                                console.error('Full sync failed:', syncResult.error);
+                                console.error('[onMount] Full sync failed:', syncResult.error);
                             } else {
-                                console.log('Full sync completed successfully');
+                                console.log('[onMount] Full sync completed successfully');
                             }
                         } catch (error) {
-                            console.warn('Failed to sync:', error);
+                            console.warn('[onMount] Failed to sync:', error);
                         }
                     } else {
                         // Different user or first time - clear and pull
-                        console.log('Different user or first login, clearing and syncing...');
+                        console.log('[onMount] Different user or first login, clearing and syncing...');
+                        console.log(`[onMount] currentUserId: ${currentUserId}, sessionUserId: ${sessionUserId}, storedUserId: ${storedUserId}`);
                         
-                        // Push any local changes first (in case of race condition)
-                        try {
-                            await ensureSupabaseLoaded();
-                            await sync.pushToSupabase();
-                        } catch (error) {
-                            console.warn('Failed to push before clear:', error);
-                        }
+                        // IMPORTANT: Don't push local changes before clearing when switching users
+                        // The local data belongs to a different user, we don't want to mix it
+                        // Just clear and pull the new user's data
                         
                         // Clear all local data
                         await db.clearAllLocalData();
                         
-                        // Pull latest data from Supabase
-                        await sync.pullFromSupabase();
+                        // Pull latest data from Supabase for the new user
+                        console.log('[onMount] Pulling data from Supabase for user:', sessionUserId);
+                        const pullResult = await sync.pullFromSupabase();
+                        if (!pullResult.success) {
+                            console.error('[onMount] Failed to pull data:', pullResult.error);
+                        } else {
+                            console.log('[onMount] Successfully pulled data from Supabase');
+                            await db.flushDatabaseSave();
+                            const pulledWorkspaces = await db.getAllWorkspaces();
+                            console.log(`[onMount] Pulled ${pulledWorkspaces.length} workspaces`);
+                        }
                     }
                     
                     // Reload workspaces after sync
@@ -3180,27 +2908,78 @@
             }
             
             // Listen for auth state changes
+            // IMPORTANT: The subscription might fire immediately with the current session
+            // So we must ensure handledUserIdInOnMount is set BEFORE subscribing
             const { data: { subscription } } = onAuthStateChange(async (event, session) => {
-                console.log('Auth state changed:', event, session?.user?.email);
+                // Capture previousUserId before it changes
+                const previousUserId = currentUserId;
+                console.log('Auth state changed:', event, session?.user?.email, 'handledUserIdInOnMount:', handledUserIdInOnMount, 'previousUserId:', previousUserId);
                 
                 if (event === 'SIGNED_IN' && session) {
-                    // Only clear data if this is a NEW sign-in, not initial session detection
-                    // If we've already handled the initial session in onMount, skip clearing
-                    if (hasHandledInitialSession) {
-                        console.log('Skipping data clear - already handled initial session');
+                    const newUserId = session.user.id;
+                    const isSwitchingUsers = previousUserId && previousUserId !== newUserId;
+                    
+                    // CRITICAL: If onMount already handled this user's session, skip this handler
+                    // This prevents duplicate clearing/pulling when Google OAuth redirects back
+                    // and both onMount and this handler try to process the same login
+                    if (handledUserIdInOnMount === newUserId) {
+                        console.log(`[auth-state-change] Skipping - onMount already handled session for user ${newUserId}`);
+                        // Still update the state variables
+                        isLoggedIn = true;
+                        currentUserId = newUserId;
+                        if (browser && newUserId) {
+                            localStorage.setItem('neuronotes_current_user_id', newUserId);
+                        }
                         return;
                     }
                     
+                    // If switching to a different user, we need to sync their data
+                    // If same user and already handled initial session, skip (to avoid duplicate clearing)
+                    if (hasHandledInitialSession && !isSwitchingUsers) {
+                        console.log('[auth-state-change] Skipping - already handled initial session for same user');
+                        return;
+                    }
+                    
+                    // If switching users, reset the flags so we handle the new user's session
+                    if (isSwitchingUsers) {
+                        console.log(`[auth-state-change] Switching from user ${previousUserId} to ${newUserId} - will sync new user's data`);
+                        hasHandledInitialSession = false;
+                        handledUserIdInOnMount = null; // Reset so we can handle the new user
+                    }
+                    
                     isLoggedIn = true;
+                    currentUserId = newUserId;
                     hasHandledInitialSession = true;
+                    
+                    // Store new user ID
+                    if (browser && newUserId) {
+                        localStorage.setItem('neuronotes_current_user_id', newUserId);
+                    }
+                    
                     // Flush any pending database saves before clearing
                     await db.flushDatabaseSave();
                     // Clear all local data before pulling new user's data
                     console.log('Clearing local data for new user...');
                     await db.clearAllLocalData();
-                    // Use fullSync to pull latest data from Supabase, then push any local changes
-                    console.log('Syncing with Supabase...');
-                    await sync.fullSync();
+                    // IMPORTANT: After clearing local data, we should ONLY pull from Supabase, not push
+                    // Using fullSync() would push the empty local state and delete everything from Supabase!
+                    console.log('Pulling data from Supabase for user:', newUserId);
+                    const pullResult = await sync.pullFromSupabase();
+                    if (!pullResult.success) {
+                        console.error('Failed to pull data from Supabase:', pullResult.error);
+                        alert(`Warning: Failed to restore your data from cloud. Error: ${pullResult.error}`);
+                    } else {
+                        console.log('Successfully pulled data from Supabase');
+                        // Flush database to ensure all pulled data is persisted
+                        await db.flushDatabaseSave();
+                        // Verify data was pulled by checking workspaces
+                        const pulledWorkspaces = await db.getAllWorkspaces();
+                        console.log(`Pulled ${pulledWorkspaces.length} workspaces from Supabase`);
+                        if (pulledWorkspaces.length === 0) {
+                            console.warn('No workspaces found in Supabase for this user - data may not exist in cloud');
+                            alert('No data found in cloud for this account. If you had data before, it may have been lost. Please restore from a backup if available.');
+                        }
+                    }
                     // Clear UI state and reload
                     notes = [];
                     folders = [];
@@ -3233,8 +3012,26 @@
                     // Set up periodic sync after login
                     setupPeriodicSync();
                 } else if (event === 'SIGNED_OUT') {
+                    // IMPORTANT: Sync data to Supabase before clearing (if we were logged in)
+                    // This ensures data is saved when user logs out via Google OAuth or other automatic logout
+                    if (isLoggedIn && previousUserId) {
+                        try {
+                            console.log('[SIGNED_OUT] Syncing data to Supabase before logout...');
+                            await db.flushDatabaseSave();
+                            await ensureSupabaseLoaded();
+                            await sync.pushToSupabase();
+                            console.log('[SIGNED_OUT] Data synced successfully');
+                        } catch (error) {
+                            console.error('[SIGNED_OUT] Failed to sync before logout:', error);
+                        }
+                    }
+                    
                     isLoggedIn = false;
+                    const loggedOutUserId = currentUserId;
                     currentUserId = null;
+                    // Reset the flags so next login will handle the session
+                    hasHandledInitialSession = false;
+                    handledUserIdInOnMount = null;
                     // Clear stored user ID
                     if (browser) {
                         localStorage.removeItem('neuronotes_current_user_id');
@@ -3359,354 +3156,88 @@
 </script>
 
 <div class="app">
-    <div class="nav">
-        <div class="brand">NEURONOTES</div>
-
-        <div class="workspace-tabs">
-            {#each workspaces as ws, i (ws.id)}
-                <div
-                    class="workspace-tab"
-                    class:active={ws.id === activeWorkspaceId}
-                    class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
-                    draggable="true"
-                    on:dragstart={(e) => handleWorkspaceDragStart(e, ws.id)}
-                    on:dragover|preventDefault
-                    on:drop={(e) => handleWorkspaceDrop(e, i)}
-                    on:dragend={handleWorkspaceDragEnd}
-                    on:click={() => switchWorkspace(ws.id)}
-                >
-                    {#if editingWorkspaceId === ws.id}
-                        <input
-                            value={ws.name}
-                            use:focus
-                            on:blur={(e) =>
-                                renameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
-                            on:keydown={(e) => {
-                                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                                if (e.key === 'Escape') editingWorkspaceId = null;
-                            }}
-                        />
-                    {:else}
-                        <div
-                            class="workspace-name"
-                            on:dblclick={() => (editingWorkspaceId = ws.id)}
-                            title="Double-click to rename"
-                        >
-                            {ws.name}
-                        </div>
-                    {/if}
-                    <button
-                        class="delete-ws-btn"
-                        title="Delete Workspace"
-                        on:click|stopPropagation={() => deleteWorkspace(ws.id)}
-                    >
-                        ×
-                    </button>
-                </div>
-            {/each}
-            <button class="add-workspace-btn" on:click={addWorkspace} title="New Workspace">
-                +
-            </button>
-        </div>
-
-        <div class="spacer"></div>
-        
-        <div class="nav-buttons-group">
-            <div class="auth-container">
-                {#if !isLoggedIn}
-                    <button 
-                        class="auth-btn"
-                        on:click={() => showLoginModal = true}
-                        title="Login"
-                    >
-                        Log in
-                    </button>
-                {:else}
-                    <button 
-                        class="auth-btn"
-                        on:click={async () => {
-                            await ensureSupabaseLoaded();
-                            // Save current account data to localStorage before logout
-                            await saveAccountDataToLocalStorage();
-                            
-                            const result = await auth.signOut();
-                            if (result.success) {
-                                isLoggedIn = false;
-                                currentUserId = null;
-                                // Clear stored user ID
-                                if (browser) {
-                                    localStorage.removeItem('neuronotes_current_user_id');
-                                }
-                                // Clear UI state on logout
-                                notes = [];
-                                folders = [];
-                                calendarEvents = [];
-                                kanban = [];
-                                selectedNoteId = '';
-                                currentFolderId = null;
-                                // Reload workspace data (will load from local DB)
-                                await loadActiveWorkspaceData();
-                            }
-                        }}
-                        title="Logout"
-                    >
-                        Log out
-                    </button>
-                {/if}
-            </div>
-        
-        <div class="settings-container">
-            <button 
-                class="settings-btn"
-                class:active={showSettingsDropdown}
-                on:click={() => showSettingsDropdown = !showSettingsDropdown}
-                title="Settings"
-            >
-                {@html SettingsIcon}
-            </button>
-            {#if showSettingsDropdown}
-                <div class="settings-dropdown" use:settingsDropdown>
-                    {#if !isLoggedIn}
-                        <button 
-                            class="settings-item" 
-                            on:click={() => { 
-                                showSettingsDropdown = false; 
-                                showLoginModal = true; 
-                            }}>
-                            Log in
-                        </button>
-                    {:else}
-                        <button 
-                            class="settings-item" 
-                            on:click={async () => {
-                                showSettingsDropdown = false;
-                                await ensureSupabaseLoaded();
-                                // Save current account data to localStorage before logout
-                                await saveAccountDataToLocalStorage();
-                                
-                                const result = await auth.signOut();
-                                if (result.success) {
-                                    isLoggedIn = false;
-                                    currentUserId = null;
-                                    // Clear stored user ID
-                                    if (browser) {
-                                        localStorage.removeItem('neuronotes_current_user_id');
-                                    }
-                                    // Clear UI state on logout
-                                    notes = [];
-                                    folders = [];
-                                    calendarEvents = [];
-                                    kanban = [];
-                                    selectedNoteId = '';
-                                    currentFolderId = null;
-                                    // Reload workspace data (will load from local DB)
-                                    await loadActiveWorkspaceData();
-                                }
-                            }}>
-                            Log out
-                        </button>
-                    {/if}
-                    <div class="settings-divider"></div>
-                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; showBackupModal = true; loadBackups(); }}>
-                        Manage Backups
-                    </button>
-                    <button class="settings-item" on:click={() => { showSettingsDropdown = false; showEditPanelsModal = true; }}>
-                        Edit Panels
-                    </button>
-                </div>
-            {/if}
-            <input
-                type="file"
-                accept=".json"
-                bind:this={backupFileInput}
-                style="display: none;"
-                on:change={handleImportBackupFile}
-            />
-        </div>
-        </div>
-    </div>
-
-    {#if showBackupModal}
-        <div 
-            class="backup-modal-overlay" 
-            role="button"
-            tabindex="0"
-            on:click={() => showBackupModal = false}
-            on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
-                    e.preventDefault();
-                    showBackupModal = false;
+    <NavigationBar
+        {workspaces}
+        {activeWorkspaceId}
+        {isLoggedIn}
+        {editingWorkspaceId}
+        {draggedWorkspaceId}
+        {showSettingsDropdown}
+        onSwitchWorkspace={switchWorkspace}
+        onAddWorkspace={addWorkspace}
+        onRenameWorkspace={renameWorkspace}
+        onDeleteWorkspace={deleteWorkspace}
+        onWorkspaceDragStart={handleWorkspaceDragStart}
+        onWorkspaceDrop={handleWorkspaceDrop}
+        onWorkspaceDragEnd={handleWorkspaceDragEnd}
+        onSetEditingWorkspaceId={(id) => editingWorkspaceId = id}
+        onShowLoginModal={() => showLoginModal = true}
+        onLogout={async () => {
+            await ensureSupabaseLoaded();
+            // Sync current account data to Supabase before logout
+            if (isLoggedIn) {
+                try {
+                    await db.flushDatabaseSave();
+                    await sync.pushToSupabase();
+                    console.log('[logout] Synced data to Supabase before logout');
+                } catch (error) {
+                    console.error('[logout] Failed to sync before logout:', error);
                 }
-            }}
-        >
-            <div 
-                class="backup-modal" 
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="backup-modal-title"
-                tabindex="-1"
-                on:click|stopPropagation
-                on:keydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.stopPropagation();
-                    }
-                }}
-            >
-                <div class="backup-modal-header">
-                    <h2>Backup Management</h2>
-                    <button class="backup-modal-close" on:click={() => showBackupModal = false}>×</button>
-                </div>
-                <div class="backup-modal-content">
-                    <div class="backup-actions">
-                        <button class="backup-btn" on:click={createBackup}>
-                            Create New Backup
-                        </button>
-                        <button class="backup-btn" on:click={() => backupFileInput?.click()}>
-                            Import Backup
-                        </button>
-                        <button class="backup-btn" on:click={loadBackups}>
-                            Refresh List
-                        </button>
-                    </div>
-                    {#if isLoadingBackups}
-                        <div class="backup-loading">Loading backups...</div>
-                    {:else if backups.length === 0}
-                        <div class="backup-empty">No backups found. Create your first backup!</div>
-                    {:else}
-                        <div class="backup-list">
-                            {#each backups as backupItem (backupItem.metadata.id)}
-                                <div class="backup-item">
-                                    <div class="backup-info">
-                                        <div class="backup-date">
-                                            {new Date(backupItem.metadata.timestamp).toLocaleString()}
-                                        </div>
-                                        <div class="backup-meta">
-                                            <span class="backup-type">
-                                                <span class="backup-type-icon">{@html backupItem.metadata.type === 'manual' ? ManualIcon : AutomaticIcon}</span>
-                                                {backupItem.metadata.type === 'manual' ? 'Manual' : 'Automatic'}
-                                            </span>
-                                            <span class="backup-size">{backup.formatBackupSize(backupItem.metadata.size)}</span>
-                                            {#if backupItem.metadata.description}
-                                                <span class="backup-description">{backupItem.metadata.description}</span>
-                                            {/if}
-                                        </div>
-                                    </div>
-                                    <div class="backup-actions-item">
-                                        <button class="backup-action-btn restore" on:click={() => restoreFromBackup(backupItem.metadata.id)}>
-                                            Restore
-                                        </button>
-                                        <button class="backup-action-btn download" on:click={() => downloadBackup(backupItem.metadata.id)}>
-                                            Download
-                                        </button>
-                                        <button class="backup-action-btn delete" on:click={() => deleteBackupItem(backupItem.metadata.id)}>
-                                            Delete
-                                        </button>
-                                    </div>
-                                </div>
-                            {/each}
-                        </div>
-                    {/if}
-                </div>
-            </div>
-        </div>
-    {/if}
-
-    {#if showLoginModal}
-        <div 
-            class="login-modal-overlay" 
-            role="button"
-            tabindex="0"
-            on:click={() => showLoginModal = false}
-            on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
-                    e.preventDefault();
-                    showLoginModal = false;
+            }
+            // Save current account data to localStorage before logout
+            await saveAccountDataToLocalStorage();
+            
+            const result = await auth.signOut();
+            if (result.success) {
+                isLoggedIn = false;
+                currentUserId = null;
+                // Clear stored user ID
+                if (browser) {
+                    localStorage.removeItem('neuronotes_current_user_id');
                 }
-            }}
-        >
-            <div 
-                class="login-modal" 
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="login-modal-title"
-                tabindex="-1"
-                on:click|stopPropagation
-                on:keydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.stopPropagation();
-                    }
-                }}
-            >
-                <div class="login-modal-header">
-                    <h2 id="login-modal-title">Login</h2>
-                    <button class="login-modal-close" on:click={() => showLoginModal = false}>×</button>
-                </div>
-                <div class="login-modal-content">
-                    <form on:submit|preventDefault={async () => {
-                        if (!loginEmail || !loginPassword) return;
-                        
-                        try {
-                            await ensureSupabaseLoaded();
-                            if (!auth) {
-                                alert('Authentication module failed to load. Please refresh the page.');
-                                return;
-                            }
-                            
-                            const result = await auth.signIn(loginEmail, loginPassword, rememberMe);
-                            
-                            if (!result.success) {
-                                alert(result.error || 'Failed to sign in. Please check your credentials.');
-                                return;
-                            }
-                            
-                            if (result.success && result.user) {
-                                isLoggedIn = true;
-                                currentUserId = result.user.id;
-                                // Store current user ID
-                                if (browser && result.user.id) {
-                                    localStorage.setItem('neuronotes_current_user_id', result.user.id);
-                                }
-                                showLoginModal = false;
-                                loginEmail = '';
-                                loginPassword = '';
-                                isEmailInvalid = false;
-                                
-                                // Flush any pending database saves before clearing
-                                await db.flushDatabaseSave();
-                                // Clear all local data before pulling new user's data
-                                console.log('Clearing local data for new user...');
-                                await db.clearAllLocalData();
-                                
-                                // Check if migration is needed (user has local data but no cloud data)
-                                if (await migrations.needsMigration()) {
-                                console.log('Migrating local data to Supabase...');
-                                const migrationResult = await migrations.migrateLocalDataToSupabase();
-                                if (migrationResult.success) {
-                                    console.log('Migration successful:', migrationResult.migrated);
+                // Clear UI state on logout
+                notes = [];
+                folders = [];
+                calendarEvents = [];
+                kanban = [];
+                selectedNoteId = '';
+                currentFolderId = null;
+                // Reload workspace data (will load from local DB)
+                await loadActiveWorkspaceData();
+            }
+        }}
+        onToggleSettingsDropdown={() => showSettingsDropdown = !showSettingsDropdown}
+        onShowBackupModal={() => showBackupModal = true}
+        onShowEditPanelsModal={() => showEditPanelsModal = true}
+    />
+
+    <BackupModal
+        open={showBackupModal}
+        isLoggedIn={isLoggedIn}
+        onClose={() => showBackupModal = false}
+        onRestore={async () => {
+            // Reload UI state from database after restore
+            const loadedWorkspaces = await db.getAllWorkspaces();
+            if (loadedWorkspaces.length > 0) {
+                workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                
+                // Set active workspace - prefer existing if valid, otherwise use first or last active setting
+                const lastActive = await db.getSettingByKey('activeWorkspaceId');
+                const preferredWorkspaceId = lastActive?.value;
+                
+                if (activeWorkspaceId && workspaces.find(w => w.id === activeWorkspaceId)) {
+                    // Keep current active workspace if it still exists
+                    // activeWorkspaceId stays the same
+                } else if (preferredWorkspaceId && workspaces.find(w => w.id === preferredWorkspaceId)) {
+                    activeWorkspaceId = preferredWorkspaceId;
                                 } else {
-                                    console.error('Migration failed:', migrationResult.error);
-                                }
+                    activeWorkspaceId = workspaces[0].id;
+                }
+                
+                // Save the active workspace setting
+                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
                                 } else {
-                                    // Use fullSync to pull latest data from Supabase, then push any local changes
-                                    console.log('Syncing with Supabase...');
-                                    await sync.fullSync();
-                                }
-                                
-                                // Clear UI state and reload workspace data
-                                notes = [];
-                                folders = [];
-                                calendarEvents = [];
-                                kanban = [];
-                                selectedNoteId = '';
-                                currentFolderId = null;
-                                
-                                // Reload workspaces and set active workspace
-                                let loadedWorkspaces = await db.getAllWorkspaces();
-                                if (loadedWorkspaces.length > 0) {
-                                    workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                                    activeWorkspaceId = workspaces[0].id;
-                                } else {
-                                    // Create default workspace if none exist
+                // No workspaces after restore - create default
                                     const defaultWorkspace: Workspace = {
                                         id: generateUUID(),
                                         name: 'My Workspace',
@@ -3715,375 +3246,67 @@
                                     await db.putWorkspace(defaultWorkspace);
                                     workspaces = [defaultWorkspace];
                                     activeWorkspaceId = defaultWorkspace.id;
+                await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
                                 }
                                 
-                                // Reset kanban loaded flag to force reload after sync
-                                isKanbanLoaded = false;
+            // Reload active workspace data to update UI (this will update notes, folders, calendar, kanban)
+            if (activeWorkspaceId) {
                                 await loadActiveWorkspaceData();
-                                
-                                // Set up periodic sync after login
-                                setupPeriodicSync();
-                            }
-                        } catch (error) {
-                            console.error('Login error:', error);
-                            alert(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                        }
-                    }}>
-                        <div class="login-field">
-                            <label for="login-email">Email</label>
-                            <input
-                                id="login-email"
-                                type="email"
-                                class:invalid={isEmailInvalid}
-                                bind:value={loginEmail}
-                                placeholder="Enter your email"
-                                required
-                                on:blur={handleEmailBlur}
-                                on:input={() => {
-                                    if (isEmailInvalid && loginEmail && validateEmail(loginEmail)) {
-                                        isEmailInvalid = false;
-                                    }
-                                }}
-                            />
-                        </div>
-                        <div class="login-field">
-                            <label for="login-password">Password</label>
-                            <input
-                                id="login-password"
-                                type="password"
-                                bind:value={loginPassword}
-                                placeholder="Enter your password"
-                                required
-                            />
-                        </div>
-                        <div class="login-field checkbox-field">
-                            <label>
-                                <input type="checkbox" bind:checked={rememberMe} />
-                                <span>Remember me</span>
-                            </label>
-                        </div>
-                        <div class="login-actions">
-                            <button type="submit" class="login-submit-btn">Login</button>
-                            <div class="login-divider">
-                                <span>or</span>
-                            </div>
-                            <button 
-                                type="button" 
-                                class="login-google-btn"
-                                on:click={async () => {
-                                    try {
-                                        await ensureSupabaseLoaded();
-                                        if (!auth) {
-                                            alert('Authentication module failed to load. Please refresh the page.');
-                                            return;
-                                        }
-                                        
-                                        const result = await auth.signInWithGoogle();
-                                        if (!result.success) {
-                                            alert(result.error || 'Failed to sign in with Google');
-                                        }
-                                        // OAuth will redirect, so we don't need to close modal here
-                                    } catch (error) {
-                                        console.error('Google login error:', error);
-                                        alert(`Google login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                                    }
-                                }}
-                            >
-                                <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-                                    <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-                                    <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
-                                    <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.348 6.175 0 7.55 0 9s.348 2.825.957 4.039l3.007-2.332z"/>
-                                    <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z"/>
-                                </svg>
-                                Sign in with Google
-                            </button>
-                            <button type="button" class="login-signup-btn" on:click={() => {
+            }
+        }}
+        showDeleteDialog={showDeleteDialog}
+        ensureSupabaseLoaded={ensureSupabaseLoaded}
+        sync={sync}
+    />
+
+    <LoginModal
+        open={showLoginModal}
+        bind:loginEmail
+        bind:loginPassword
+        bind:rememberMe
+        bind:isEmailInvalid
+        onClose={() => showLoginModal = false}
+        onOpenSignup={() => {
                                 showLoginModal = false;
                                 showSignupModal = true;
-                            }}>Sign Up</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    {/if}
+        }}
+        onLoginSuccess={handleLoginSuccess}
+    />
 
-    {#if showSignupModal}
-        <div 
-            class="login-modal-overlay" 
-            role="button"
-            tabindex="0"
-            on:click={() => showSignupModal = false}
-            on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
-                    e.preventDefault();
-                    showSignupModal = false;
-                }
-            }}
-        >
-            <div 
-                class="login-modal" 
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="signup-modal-title"
-                tabindex="-1"
-                on:click|stopPropagation
-                on:keydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.stopPropagation();
-                    }
-                }}
-            >
-                <div class="login-modal-header">
-                    <h2 id="signup-modal-title">Sign Up</h2>
-                    <button class="login-modal-close" on:click={() => showSignupModal = false}>×</button>
-                </div>
-                <div class="login-modal-content">
-                    <form on:submit|preventDefault={async () => {
-                        if (!signupEmail || !signupPassword || !signupRepeatPassword) return;
-                        
-                        // Validate email and password
-                        if (!validateEmail(signupEmail)) {
-                            isSignupEmailInvalid = true;
-                            return;
-                        }
-                        
-                        if (!validatePassword(signupPassword)) {
-                            isPasswordInvalid = true;
-                            return;
-                        }
-                        
-                        if (signupPassword !== signupRepeatPassword) {
-                            isPasswordMismatch = true;
-                            return;
-                        }
-                        
-                        await ensureSupabaseLoaded();
-                        const result = await auth.signUp(signupEmail, signupPassword);
-                        
-                        if (result.success && result.user) {
-                            isLoggedIn = true;
-                            currentUserId = result.user.id;
-                            // Store current user ID
-                            if (browser && result.user.id) {
-                                localStorage.setItem('neuronotes_current_user_id', result.user.id);
-                            }
+    <SignupModal
+        open={showSignupModal}
+        bind:signupEmail
+        bind:signupPassword
+        bind:signupRepeatPassword
+        bind:isSignupEmailInvalid
+        bind:isPasswordMismatch
+        bind:isPasswordInvalid
+        onClose={() => showSignupModal = false}
+        onOpenLogin={() => {
                             showSignupModal = false;
-                            signupEmail = '';
-                            signupPassword = '';
-                            signupRepeatPassword = '';
-                            isSignupEmailInvalid = false;
-                            isPasswordInvalid = false;
-                            isPasswordMismatch = false;
-                            
-                            // Clear all local data before pulling new user's data
-                            console.log('Clearing local data for new user...');
-                            // Flush any pending database saves before clearing
-                            await db.flushDatabaseSave();
-                            await db.clearAllLocalData();
-                            
-                            // Migrate any existing local data
-                            if (await migrations.needsMigration()) {
-                                console.log('Migrating local data to Supabase...');
-                                await migrations.migrateLocalDataToSupabase();
-                            } else {
-                                // Use fullSync to pull latest data from Supabase, then push any local changes
-                                console.log('Syncing with Supabase...');
-                                await sync.fullSync();
-                            }
-                            
-                            // Clear UI state and reload workspace data
-                            notes = [];
-                            folders = [];
-                            calendarEvents = [];
-                            kanban = [];
-                            selectedNoteId = '';
-                            currentFolderId = null;
-                            
-                            // Reload workspaces and set active workspace
-                            let loadedWorkspaces = await db.getAllWorkspaces();
-                            if (loadedWorkspaces.length > 0) {
-                                workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                                activeWorkspaceId = workspaces[0].id;
-                            } else {
-                                // Create default workspace if none exist
-                                const defaultWorkspace: Workspace = {
-                                    id: generateUUID(),
-                                    name: 'My Workspace',
-                                    order: 0
-                                };
-                                await db.putWorkspace(defaultWorkspace);
-                                workspaces = [defaultWorkspace];
-                                activeWorkspaceId = defaultWorkspace.id;
-                            }
-                            
-                            await loadActiveWorkspaceData();
-                        } else {
-                            alert(result.error || 'Signup failed');
-                        }
-                    }}>
-                        <div class="login-field">
-                            <label for="signup-email">Email</label>
-                            <input
-                                id="signup-email"
-                                type="email"
-                                class:invalid={isSignupEmailInvalid}
-                                bind:value={signupEmail}
-                                placeholder="Enter your email"
-                                required
-                                on:blur={handleSignupEmailBlur}
-                                on:input={() => {
-                                    if (isSignupEmailInvalid && signupEmail && validateEmail(signupEmail)) {
-                                        isSignupEmailInvalid = false;
-                                    }
-                                }}
-                            />
-                        </div>
-                        <div class="login-field">
-                            <label for="signup-password">Password</label>
-                            <input
-                                id="signup-password"
-                                type="password"
-                                class:invalid={isPasswordInvalid}
-                                bind:value={signupPassword}
-                                placeholder="Enter your password (min 8 characters)"
-                                required
-                                on:blur={handleSignupPasswordBlur}
-                                on:input={() => {
-                                    if (isPasswordInvalid && signupPassword && validatePassword(signupPassword)) {
-                                        isPasswordInvalid = false;
-                                    }
-                                    if (signupRepeatPassword && signupPassword !== signupRepeatPassword) {
-                                        isPasswordMismatch = true;
-                                    } else if (signupRepeatPassword && signupPassword === signupRepeatPassword) {
-                                        isPasswordMismatch = false;
-                                        // Clear password invalid state if password is valid and matches
-                                        if (validatePassword(signupPassword)) {
-                                            isPasswordInvalid = false;
-                                        }
-                                    }
-                                }}
-                            />
-                        </div>
-                        <div class="login-field">
-                            <label for="signup-repeat-password">Repeat Password</label>
-                            <input
-                                id="signup-repeat-password"
-                                type="password"
-                                class:invalid={isPasswordMismatch}
-                                bind:value={signupRepeatPassword}
-                                placeholder="Repeat your password"
-                                required
-                                on:blur={handleSignupRepeatPasswordBlur}
-                                on:input={() => {
-                                    if (signupRepeatPassword && signupPassword !== signupRepeatPassword) {
-                                        isPasswordMismatch = true;
-                                    } else {
-                                        isPasswordMismatch = false;
-                                    }
-                                    // Clear password invalid state if password is valid and matches
-                                    if (signupPassword && validatePassword(signupPassword) && signupPassword === signupRepeatPassword) {
-                                        isPasswordInvalid = false;
-                                    }
-                                }}
-                            />
-                        </div>
-                        <div class="login-actions">
-                            <button type="submit" class="login-submit-btn">Register</button>
-                            <button type="button" class="login-signup-btn" on:click={() => {
-                                showSignupModal = false;
-                                showLoginModal = true;
-                            }}>Back to Login</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    {/if}
+            showLoginModal = true;
+        }}
+        onSignupSuccess={handleLoginSuccess}
+    />
 
-    {#if showEditPanelsModal}
-        <div 
-            class="backup-modal-overlay" 
-            role="button"
-            tabindex="0"
-            on:click={() => showEditPanelsModal = false}
-            on:keydown={(e) => {
-                if (e.key === 'Escape' || e.key === 'Enter') {
-                    showEditPanelsModal = false;
-                }
-            }}
-        >
-            <div 
-                class="backup-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="edit-panels-modal-title"
-                tabindex="-1"
-                on:click|stopPropagation
-                on:keydown={(e) => {
-                    if (e.key === 'Escape') {
-                        showEditPanelsModal = false;
-                    }
-                }}
-            >
-                <div class="backup-modal-header">
-                    <h2 id="edit-panels-modal-title">Edit Panels</h2>
-                    <button class="backup-modal-close" on:click={() => showEditPanelsModal = false}>×</button>
-                </div>
-                <div class="backup-modal-content">
-                    <p style="margin-bottom: 20px; color: var(--text-secondary);">Select which panels to display:</p>
-                    <div style="display: flex; flex-direction: column; gap: 12px;">
-                        <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 12px; border-radius: 8px; border: 1px solid var(--border); transition: background 0.2s;" 
-                               class:active={showNotes}
-                               on:mouseenter={(e) => e.currentTarget.style.background = 'var(--panel-bg-darker)'}
-                               on:mouseleave={(e) => e.currentTarget.style.background = 'transparent'}>
-                            <input type="checkbox" bind:checked={showNotes} style="width: 18px; height: 18px; cursor: pointer;" />
-                            <span style="font-weight: 500;">Notes</span>
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 12px; border-radius: 8px; border: 1px solid var(--border); transition: background 0.2s;" 
-                               class:active={showCalendar}
-                               on:mouseenter={(e) => e.currentTarget.style.background = 'var(--panel-bg-darker)'}
-                               on:mouseleave={(e) => e.currentTarget.style.background = 'transparent'}>
-                            <input type="checkbox" bind:checked={showCalendar} style="width: 18px; height: 18px; cursor: pointer;" />
-                            <span style="font-weight: 500;">Calendar</span>
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 12px; border-radius: 8px; border: 1px solid var(--border); transition: background 0.2s;" 
-                               class:active={showKanban}
-                               on:mouseenter={(e) => e.currentTarget.style.background = 'var(--panel-bg-darker)'}
-                               on:mouseleave={(e) => e.currentTarget.style.background = 'transparent'}>
-                            <input type="checkbox" bind:checked={showKanban} style="width: 18px; height: 18px; cursor: pointer;" />
-                            <span style="font-weight: 500;">Kanban</span>
-                        </label>
-                    </div>
-                    {#if !showNotes && !showCalendar && !showKanban}
-                        <p style="margin-top: 16px; color: var(--accent-red); font-size: 14px;">At least one panel must be visible.</p>
-                    {/if}
-                </div>
-                <div class="backup-modal-footer">
-                    <button 
-                        class="backup-btn" 
-                        on:click={() => {
-                            if (showNotes || showCalendar || showKanban) {
-                                showEditPanelsModal = false;
-                                if (!showNotes) {
-                                    isNotesMinimized = false;
-                                }
-                                if (!showCalendar) {
-                                    isCalendarMinimized = false;
-                                }
-                                if (!showKanban) {
-                                    isKanbanMinimized = false;
-                                }
-                            }
-                        }}
-                        disabled={!showNotes && !showCalendar && !showKanban}
-                    >
-                        Done
-                    </button>
-                </div>
-            </div>
-        </div>
-    {/if}
+    <EditPanelsModal
+        open={showEditPanelsModal}
+        bind:showNotes
+        bind:showCalendar
+        bind:showKanban
+        onClose={() => showEditPanelsModal = false}
+        onDone={() => {
+            if (!showNotes) {
+                isNotesMinimized = false;
+            }
+            if (!showCalendar) {
+                isCalendarMinimized = false;
+            }
+            if (!showKanban) {
+                isKanbanMinimized = false;
+            }
+        }}
+    />
 
     <div
         class="main"
@@ -5697,212 +4920,6 @@
         user-select: none;
     }
 
-    .login-modal-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 2000;
-    }
-
-    .login-modal {
-        background: var(--panel-bg);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        width: 90%;
-        max-width: 400px;
-        display: flex;
-        flex-direction: column;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    }
-
-    .login-modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 20px;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .login-modal-header h2 {
-        margin: 0;
-        font-size: 20px;
-        font-weight: 600;
-    }
-
-    .login-modal-close {
-        background: none;
-        border: none;
-        font-size: 28px;
-        cursor: pointer;
-        color: var(--text);
-        padding: 0;
-        width: 32px;
-        height: 32px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 4px;
-    }
-
-    .login-modal-close:hover {
-        background: var(--border);
-    }
-
-    .login-modal-content {
-        padding: 20px;
-    }
-
-    .login-field {
-        margin-bottom: 20px;
-    }
-
-    .login-field label {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--text);
-    }
-
-    .login-field input[type="email"],
-    .login-field input[type="password"] {
-        width: 100%;
-        padding: 10px 12px;
-        background: var(--panel-bg-darker);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        color: var(--text);
-        font-size: 14px;
-        transition: border-color 0.2s, background-color 0.2s;
-    }
-
-    .login-field input[type="email"]:focus,
-    .login-field input[type="password"]:focus {
-        outline: none;
-        border-color: var(--accent-red);
-    }
-
-    .login-field input[type="email"].invalid,
-    .login-field input[type="password"].invalid {
-        border-color: var(--accent-red);
-        background: rgba(255, 71, 87, 0.1);
-    }
-
-    .login-field input[type="email"].invalid:focus,
-    .login-field input[type="password"].invalid:focus {
-        border-color: var(--accent-red);
-        background: rgba(255, 71, 87, 0.15);
-    }
-
-    .login-field.checkbox-field {
-        margin-bottom: 24px;
-    }
-
-    .login-field.checkbox-field label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        cursor: pointer;
-        margin-bottom: 0;
-    }
-
-    .login-field.checkbox-field input[type="checkbox"] {
-        width: auto;
-        cursor: pointer;
-    }
-
-    .login-actions {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .login-divider {
-        display: flex;
-        align-items: center;
-        text-align: center;
-        margin: 8px 0;
-    }
-
-    .login-divider::before,
-    .login-divider::after {
-        content: '';
-        flex: 1;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .login-divider span {
-        padding: 0 12px;
-        color: var(--text-secondary);
-        font-size: 13px;
-    }
-
-    .login-google-btn {
-        width: 100%;
-        padding: 10px 16px;
-        background: white;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        color: #3c4043;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        transition: background-color 0.2s, box-shadow 0.2s;
-    }
-
-    .login-google-btn:hover {
-        background: #f8f9fa;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    }
-
-    .login-google-btn:active {
-        background: #f1f3f4;
-    }
-
-    .login-google-btn svg {
-        flex-shrink: 0;
-    }
-
-    .login-submit-btn,
-    .login-signup-btn {
-        flex: 1;
-        padding: 12px 20px;
-        border: none;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-
-    .login-submit-btn {
-        background: var(--accent-red);
-        color: white;
-    }
-
-    .login-submit-btn:hover {
-        background: #ff3838;
-    }
-
-    .login-signup-btn {
-        background: var(--panel-bg-darker);
-        color: var(--text);
-        border: 1px solid var(--border);
-    }
-
-    .login-signup-btn:hover {
-        background: var(--border);
-    }
 
     .backup-modal-overlay {
         position: fixed;
