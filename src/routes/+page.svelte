@@ -1653,6 +1653,7 @@
     
     let isLoggedIn = false;
     let currentUserId: string | null = null; // Track current user ID to detect user switches
+    let userEmail: string | null = null; // Track current user email
     let showLoginModal = false;
     let loginEmail = '';
     let loginPassword = '';
@@ -1734,6 +1735,11 @@
     async function handleLoginSuccess(userId: string) {
         isLoggedIn = true;
         currentUserId = userId;
+        
+        // Fetch and set user email
+        await ensureSupabaseLoaded();
+        const user = await auth.getUser();
+        userEmail = user?.email || null;
         
         // Clear UI state and reload workspace data
         notes = [];
@@ -2764,6 +2770,7 @@
                 // Get current user ID immediately
                 const user = await auth.getUser();
                 const sessionUserId = user?.id || null;
+                userEmail = user?.email || null;
                 
                 // CRITICAL: Mark that we're handling this user's session in onMount
                 // This must be set BEFORE subscribing to auth state changes, because
@@ -2927,6 +2934,7 @@
                         // Still update the state variables
                         isLoggedIn = true;
                         currentUserId = newUserId;
+                        userEmail = session.user.email || null;
                         if (browser && newUserId) {
                             localStorage.setItem('neuronotes_current_user_id', newUserId);
                         }
@@ -2949,6 +2957,7 @@
                     
                     isLoggedIn = true;
                     currentUserId = newUserId;
+                    userEmail = session.user.email || null;
                     hasHandledInitialSession = true;
                     
                     // Store new user ID
@@ -3029,6 +3038,7 @@
                     isLoggedIn = false;
                     const loggedOutUserId = currentUserId;
                     currentUserId = null;
+                    userEmail = null;
                     // Reset the flags so next login will handle the session
                     hasHandledInitialSession = false;
                     handledUserIdInOnMount = null;
@@ -3160,6 +3170,7 @@
         {workspaces}
         {activeWorkspaceId}
         {isLoggedIn}
+        {userEmail}
         {editingWorkspaceId}
         {draggedWorkspaceId}
         {showSettingsDropdown}
