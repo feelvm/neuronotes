@@ -18,6 +18,15 @@
 	const MIN_WIDTH = 40;
 	const MIN_HEIGHT = 25;
 
+	/** Efficient deep clone using structuredClone with fallback for older browsers */
+	function deepClone<T>(obj: T): T {
+		if (typeof structuredClone !== 'undefined') {
+			return structuredClone(obj);
+		}
+		// Fallback for older browsers
+		return JSON.parse(JSON.stringify(obj));
+	}
+
 	let container: HTMLElement;
 	let isSelecting = false;
 	let editingCell: { row: number; col: number } | null = null;
@@ -303,7 +312,7 @@
 
 	function saveHistory() {
 		if (!spreadsheetData?.data) return;
-		const snapshot = JSON.parse(JSON.stringify(spreadsheetData));
+		const snapshot = deepClone(spreadsheetData);
 		history = history.slice(0, historyIndex + 1);
 		history.push({ data: snapshot, timestamp: Date.now() });
 		historyIndex = history.length - 1;
@@ -318,7 +327,7 @@
 			historyIndex--;
 			const previousState = history[historyIndex];
 			if (previousState && previousState.data) {
-				const restored = JSON.parse(JSON.stringify(previousState.data));
+				const restored = deepClone(previousState.data);
 				spreadsheetData = {
 					...spreadsheetData,
 					data: restored.data,
@@ -336,7 +345,7 @@
 			historyIndex++;
 			const nextState = history[historyIndex];
 			if (nextState && nextState.data) {
-				const restored = JSON.parse(JSON.stringify(nextState.data));
+				const restored = deepClone(nextState.data);
 				spreadsheetData = {
 					...spreadsheetData,
 					data: restored.data,
@@ -677,7 +686,7 @@
 			const rowData: SpreadsheetCell[] = [];
 			for (let c = minCol; c <= maxCol; c++) {
 				rowData.push(
-					JSON.parse(JSON.stringify(spreadsheetData.data[r][c])),
+					deepClone(spreadsheetData.data[r][c]),
 				);
 			}
 			bufferData.push(rowData);
@@ -700,7 +709,7 @@
 			const rowData: SpreadsheetCell[] = [];
 			for (let c = minCol; c <= maxCol; c++) {
 				rowData.push(
-					JSON.parse(JSON.stringify(spreadsheetData.data[r][c])),
+					deepClone(spreadsheetData.data[r][c]),
 				);
 			}
 			bufferData.push(rowData);
@@ -736,8 +745,8 @@
 					targetRow < spreadsheetData.data.length &&
 					targetCol < spreadsheetData.data[0].length
 				) {
-					spreadsheetData.data[targetRow][targetCol] = JSON.parse(
-						JSON.stringify(clipboardBuffer.data[r][c]),
+					spreadsheetData.data[targetRow][targetCol] = deepClone(
+						clipboardBuffer.data[r][c],
 					);
 				}
 			}

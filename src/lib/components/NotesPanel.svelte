@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import { generateUUID } from '$lib/utils/uuid';
@@ -120,7 +120,7 @@
                             editorDiv.innerHTML = sanitized;
                         }
                         // Update formatting state after content is loaded
-                        setTimeout(() => updateFormattingState(), 0);
+                        tick().then(() => updateFormattingState());
                     }
                 }).catch(e => {
                     console.error('Failed to load note content:', e);
@@ -136,7 +136,7 @@
                     editorDiv.innerHTML = sanitized;
                 }
                 // Update formatting state after content is set
-                setTimeout(() => updateFormattingState(), 0);
+                tick().then(() => updateFormattingState());
             }
         }
         previousNoteId = selectedNoteId;
@@ -200,9 +200,9 @@
     
     let canMergeOrUnmerge = false;
     $: if (sheetSelection && selectedNoteId) {
-        setTimeout(() => {
+        tick().then(() => {
             canMergeOrUnmerge = getCanMergeOrUnmerge();
-        }, 0);
+        });
     } else {
         canMergeOrUnmerge = false;
     }
@@ -280,7 +280,7 @@
         selectedNoteId = id;
         
         if (note && note.type === 'text' && editorDiv) {
-            setTimeout(() => {
+            tick().then(() => {
                 const updatedNote = notes.find((n) => n.id === id);
                 if (updatedNote && updatedNote.type === 'text' && editorDiv) {
                     const sanitized = (browser && DOMPurify) 
@@ -290,7 +290,7 @@
                         editorDiv.innerHTML = sanitized;
                     }
                 }
-            }, 0);
+            });
         }
         
         setTimeout(async () => {
@@ -867,11 +867,12 @@
         draggedItemType = null;
     }
 
-    function applyFormatCommand(command: string) {
+    async function applyFormatCommand(command: string) {
         if (editorDiv) editorDiv.focus();
         applyFormat(command);
         // Update formatting state after applying command
-        setTimeout(() => updateFormattingState(), 0);
+        await tick();
+        updateFormattingState();
     }
 
     function modifyFontSize(amount: number) {
@@ -1631,11 +1632,10 @@
                                             debouncedUpdateNote(currentNote);
                                         }
                                     }}
-                                    on:focus={() => {
-                                        setTimeout(() => {
-                                            updateFormattingState();
-                                            updateSelectedFontSize();
-                                        }, 0);
+                                    on:focus={async () => {
+                                        await tick();
+                                        updateFormattingState();
+                                        updateSelectedFontSize();
                                     }}
                                     on:paste={handlePlainTextPaste}
                                     on:keydown={(e) => {

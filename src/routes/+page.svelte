@@ -309,15 +309,20 @@
             return;
         }
 
-        const notesToDelete = await db.getNotesByWorkspaceId(id);
-        for (const note of notesToDelete) await db.deleteNote(note.id);
+        // Batch all delete operations in parallel for better performance
+        const [notesToDelete, foldersToDelete, eventsToDelete] = await Promise.all([
+            db.getNotesByWorkspaceId(id),
+            db.getFoldersByWorkspaceId(id),
+            db.getCalendarEventsByWorkspaceId(id)
+        ]);
 
-        const foldersToDelete = await db.getFoldersByWorkspaceId(id);
-        for (const f of foldersToDelete) await db.deleteFolder(f.id);
-
-        const eventsToDelete = await db.getCalendarEventsByWorkspaceId(id);
-        for (const e of eventsToDelete) await db.deleteCalendarEvent(e.id);
-        await db.deleteWorkspace(id);
+        // Delete all items in parallel
+        await Promise.all([
+            ...notesToDelete.map(note => db.deleteNote(note.id)),
+            ...foldersToDelete.map(folder => db.deleteFolder(folder.id)),
+            ...eventsToDelete.map(event => db.deleteCalendarEvent(event.id)),
+            db.deleteWorkspace(id)
+        ]);
 
         workspaces = workspaces.filter((w) => w.id !== id);
         if (activeWorkspaceId === id) {

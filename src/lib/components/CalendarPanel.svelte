@@ -68,9 +68,27 @@
           })()
         : [];
 
-    $: eventsByDay = (() => {
-        if (!browser || weekDays.length === 0) return {};
+    // Memoization for eventsByDay to prevent unnecessary recalculations
+    let cachedEventsByDay: Record<string, CalendarEvent[]> = {};
+    let cachedWeekDaysKey = '';
+    let cachedEventsKey = '';
 
+    $: eventsByDay = (() => {
+        if (!browser || weekDays.length === 0) {
+            cachedEventsByDay = {};
+            return {};
+        }
+
+        // Create cache keys based on inputs
+        const weekDaysKey = weekDays.map(d => ymd(d)).join(',');
+        const eventsKey = calendarEvents.map(e => `${e.id}:${e.date}:${e.repeat || 'none'}`).join(',');
+
+        // Return cached result if inputs haven't changed
+        if (weekDaysKey === cachedWeekDaysKey && eventsKey === cachedEventsKey) {
+            return cachedEventsByDay;
+        }
+
+        // Recalculate only when inputs actually change
         const occurrences: Record<string, CalendarEvent[]> = {};
         const viewStartDate = weekDays[0];
         const viewEndDate = weekDays[6];
@@ -102,6 +120,11 @@
                 return a.time.localeCompare(b.time);
             });
         }
+
+        // Update cache
+        cachedEventsByDay = occurrences;
+        cachedWeekDaysKey = weekDaysKey;
+        cachedEventsKey = eventsKey;
 
         return occurrences;
     })();
