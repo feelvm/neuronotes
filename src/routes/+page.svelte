@@ -22,6 +22,9 @@
     import BackupModal from '$lib/components/BackupModal.svelte';
     import NavigationBar from '$lib/components/NavigationBar.svelte';
     import EditPanelsModal from '$lib/components/EditPanelsModal.svelte';
+    import CalendarPanel from '$lib/components/CalendarPanel.svelte';
+    import KanbanPanel from '$lib/components/KanbanPanel.svelte';
+    import NotesPanel from '$lib/components/NotesPanel.svelte';
     import type {
         Workspace,
         Note,
@@ -68,7 +71,7 @@
     let DOMPurify: any;
     let notesPanelWidth = 50;
     let calendarPanelHeight = 50;
-    let isNoteListVisible = true;
+    let calendarPanelWidth = 50; // Width when calendar and kanban are side by side
     let isNotesMinimized = false;
     let isCalendarMinimized = false;
     let isKanbanMinimized = false;
@@ -78,6 +81,7 @@
     let showCalendar = true;
     let showKanban = true;
     let showEditPanelsModal = false;
+    let savePanelSelection = false;
     
     $: {
         if (!showNotes) {
@@ -91,96 +95,14 @@
         }
     }
     
-    // Save content when panel is hidden - use a function instead of reactive statement to avoid cycle
-    let previousShowNotes = true;
-    function handleShowNotesChange() {
-        if (!showNotes && previousShowNotes && selectedNoteId && editorDiv) {
-            const content = editorDiv.innerHTML;
-            saveNoteHistory(selectedNoteId, content);
-            // Save content directly to database without reading from notes to avoid cycle
-            setTimeout(async () => {
-                // Get note outside reactive context to avoid cycle
-                const note = notes.find((n) => n.id === selectedNoteId);
-                if (note && note.type === 'text') {
-                    note.contentHTML = content;
-                    await debouncedUpdateNote.flush().catch((e: any) => {
-                        console.warn('Failed to save note when hiding notes panel:', e);
-                    });
-                }
-            }, 0);
-        }
-        previousShowNotes = showNotes;
-    }
-    
-    // Watch for showNotes changes and call handler
-    $: {
-        handleShowNotesChange();
-    }
     let lastNotesWidth = 50;
     let lastCalendarHeight = 50;
     let isVerticalResizing = false;
     let isHorizontalResizing = false;
     let notesPanelClientWidth = 0;
 
-    type NoteHistoryEntry = {
-        content: string;
-        timestamp: number;
-    };
-
-    const noteHistory: Map<string, NoteHistoryEntry[]> = new Map();
-    const noteHistoryIndex: Map<string, number> = new Map();
-    const MAX_NOTE_HISTORY = 50;
-
     $: minimizedCount =
         (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
-    
-    // Track when panel is restored to reload content if needed
-    let previousIsNotesMinimized = false;
-    $: {
-        // When panel is restored (was minimized, now not minimized)
-        if (!isNotesMinimized && previousIsNotesMinimized && selectedNoteId) {
-            // Panel just restored - ensure content is loaded
-            setTimeout(() => {
-                const note = notes.find((n) => n.id === selectedNoteId);
-                if (note && note.type === 'text' && editorDiv) {
-                    // If note has content, restore it to editor
-                    if (note.contentHTML) {
-                        const sanitized = browser && DOMPurify
-                            ? DOMPurify.sanitize(note.contentHTML)
-                            : note.contentHTML;
-                        if (editorDiv.innerHTML !== sanitized) {
-                            editorDiv.innerHTML = sanitized;
-                        }
-                    } else {
-                        // If content is missing, try to load from database
-                        const noteWithMeta = note as any;
-                        if (!noteWithMeta._contentLoaded) {
-                            db.getNoteContent(selectedNoteId).then(rawContent => {
-                                if (rawContent && editorDiv && selectedNoteId === note.id) {
-                                    const sanitized = (browser && DOMPurify) 
-                                        ? DOMPurify.sanitize(rawContent)
-                                        : rawContent;
-                                    const noteIndex = notes.findIndex((n) => n.id === note.id);
-                                    if (noteIndex !== -1) {
-                                        notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
-                                        const updatedNoteWithMeta = notes[noteIndex] as any;
-                                        updatedNoteWithMeta._contentLoaded = true;
-                                        notes = [...notes];
-                                    }
-                                    if (editorDiv && editorDiv.innerHTML !== sanitized) {
-                                        editorDiv.innerHTML = sanitized;
-                                    }
-                                }
-                            }).catch(e => {
-                                console.error('Failed to load note content when restoring panel:', e);
-                            });
-                        }
-                    }
-                }
-            }, 100); // Delay to ensure editor div is recreated in DOM
-        }
-        previousIsNotesMinimized = isNotesMinimized;
-    }
 
     $: if (isNotesMinimized) {
         notesPanelWidth = 6;
@@ -201,9 +123,6 @@
         loadCalendarEvents();
     }
 
-    $: if (browser && !isKanbanMinimized && !isKanbanLoaded) {
-        loadKanbanData();
-    }
 
     $: if (minimizedCount === 2) {
         if (!isNotesMinimized) notesPanelWidth = 94;
@@ -219,74 +138,14 @@
         }
     }
 
-    async function toggleNotesMinimized() {
-        // Save current note content before minimizing
-        if (selectedNoteId && editorDiv) {
-            const content = editorDiv.innerHTML;
-            saveNoteHistory(selectedNoteId, content);
-            // Update the note in the notes array using selectedNoteId to avoid cycle
-            const noteIndex = notes.findIndex((n) => n.id === selectedNoteId);
-            if (noteIndex !== -1 && notes[noteIndex].type === 'text') {
-                notes[noteIndex] = { ...notes[noteIndex], contentHTML: content };
-                notes = [...notes];
-                // Update note via debouncedUpdateNote
-                await debouncedUpdateNote.flush();
-            }
-        }
-        const wasMinimized = isNotesMinimized;
+    function toggleNotesMinimized() {
         isNotesMinimized = !isNotesMinimized;
-        
-        // When restoring the panel, ensure content is loaded
-        if (wasMinimized && !isNotesMinimized && selectedNoteId) {
-            // Panel is being restored - ensure content is loaded
-            setTimeout(() => {
-                const note = notes.find((n) => n.id === selectedNoteId);
-                if (note && note.type === 'text' && editorDiv) {
-                    // If note has content, restore it to editor
-                    if (note.contentHTML) {
-                        const sanitized = browser && DOMPurify
-                            ? DOMPurify.sanitize(note.contentHTML)
-                            : note.contentHTML;
-                        if (editorDiv.innerHTML !== sanitized) {
-                            editorDiv.innerHTML = sanitized;
-                        }
-                    } else {
-                        // If content is missing, try to load from database
-                        const noteWithMeta = note as any;
-                        if (!noteWithMeta._contentLoaded) {
-                            db.getNoteContent(selectedNoteId).then(rawContent => {
-                                if (rawContent && editorDiv && selectedNoteId === note.id) {
-                                    const sanitized = (browser && DOMPurify) 
-                                        ? DOMPurify.sanitize(rawContent)
-                                        : rawContent;
-                                    const noteIndex = notes.findIndex((n) => n.id === note.id);
-                                    if (noteIndex !== -1) {
-                                        notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
-                                        const updatedNoteWithMeta = notes[noteIndex] as any;
-                                        updatedNoteWithMeta._contentLoaded = true;
-                                        notes = [...notes];
-                                    }
-                                    if (editorDiv && editorDiv.innerHTML !== sanitized) {
-                                        editorDiv.innerHTML = sanitized;
-                                    }
-                                }
-                            }).catch(e => {
-                                console.error('Failed to load note content when restoring panel:', e);
-                            });
-                        }
-                    }
-                }
-            }, 50); // Small delay to ensure editor div is recreated
-        }
     }
     function toggleCalendarMinimized() {
         isCalendarMinimized = !isCalendarMinimized;
     }
     function toggleKanbanMinimized() {
         isKanbanMinimized = !isKanbanMinimized;
-    }
-    function toggleNoteList() {
-        isNoteListVisible = !isNoteListVisible;
     }
 
     function startVerticalResize(e: MouseEvent) {
@@ -303,12 +162,22 @@
     function doVerticalResize(e: MouseEvent) {
         if (!isVerticalResizing) return;
         e.preventDefault();
-        const mainEl = document.querySelector('.main');
-        if (!mainEl) return;
-        const mainRect = mainEl.getBoundingClientRect();
-        const newWidth = ((e.clientX - mainRect.left) / mainRect.width) * 100;
-        notesPanelWidth = Math.max(6, Math.min(94, newWidth));
-        lastNotesWidth = notesPanelWidth;
+        if (!showNotes && showCalendar && showKanban) {
+            // Resizing calendar and kanban when side by side
+            const rightEl = document.querySelector('.right');
+            if (!rightEl) return;
+            const rightRect = rightEl.getBoundingClientRect();
+            const newWidth = ((e.clientX - rightRect.left) / rightRect.width) * 100;
+            calendarPanelWidth = Math.max(6, Math.min(94, newWidth));
+        } else {
+            // Resizing notes panel
+            const mainEl = document.querySelector('.main');
+            if (!mainEl) return;
+            const mainRect = mainEl.getBoundingClientRect();
+            const newWidth = ((e.clientX - mainRect.left) / mainRect.width) * 100;
+            notesPanelWidth = Math.max(6, Math.min(94, newWidth));
+            lastNotesWidth = notesPanelWidth;
+        }
     }
 
     function startHorizontalResize(e: MouseEvent) {
@@ -372,169 +241,7 @@
     }
 
 
-    let editorDiv: HTMLElement;
-    let previousNoteId: string | null = null;
-    let selectedFontSize = 14;
-    let SpreadsheetComponent: any = null;
-    let spreadsheetComponentInstance: any;
-    let isSpreadsheetLoaded = false;
-    let selectedSheetCell: { row: number; col: number } | null = null;
-    let sheetSelection: {
-        start: { row: number; col: number };
-        end: { row: number; col: number };
-    } | null = null;
 
-    // Compute canMergeOrUnmerge as a function to avoid reactive cycle
-    function getCanMergeOrUnmerge(): boolean {
-        if (!sheetSelection || !selectedNoteId) return false;
-        
-        // Find note without using currentNote to break cycle
-        const note = notes.find((n) => n.id === selectedNoteId);
-        if (!note || note.type !== 'spreadsheet') return false;
-        
-        // Get spreadsheet data directly from note to avoid cycle
-        let spreadsheet = note.spreadsheet;
-        if (!spreadsheet) {
-            const noteWithRaw = note as any;
-            if (noteWithRaw._spreadsheetJson) {
-                try {
-                    spreadsheet = JSON.parse(noteWithRaw._spreadsheetJson);
-                } catch (e) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        
-        const { start, end } = sheetSelection;
-        const minRow = Math.min(start.row, end.row);
-        const minCol = Math.min(start.col, end.col);
-        const maxRow = Math.max(start.row, end.row);
-        const maxCol = Math.max(start.col, end.col);
-
-        if (minRow !== maxRow || minCol !== maxCol) return true;
-
-        if (!spreadsheet || !spreadsheet.data) return false;
-        const cell = spreadsheet.data[minRow]?.[minCol];
-        if (!cell) return false;
-        return (cell.rowspan || 1) > 1 || (cell.colspan || 1) > 1;
-    }
-    
-    // Create reactive variable that updates when dependencies change, but compute in function
-    let canMergeOrUnmerge = false;
-    $: if (sheetSelection && selectedNoteId) {
-        // Use setTimeout to break cycle - compute value asynchronously
-        setTimeout(() => {
-            canMergeOrUnmerge = getCanMergeOrUnmerge();
-        }, 0);
-    } else {
-        canMergeOrUnmerge = false;
-    }
-
-    function applyFormatCommand(command: string) {
-        if (editorDiv) editorDiv.focus();
-        applyFormat(command);
-    }
-
-    function modifyFontSize(amount: number) {
-        if (!editorDiv) return;
-        editorDiv.focus();
-        
-        selectedFontSize = modifyFontSizeUtil(editorDiv, amount);
-        editorDiv.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-
-    function updateSelectedFontSize() {
-        if (!browser || !editorDiv) return;
-        selectedFontSize = getSelectedFontSize(editorDiv);
-    }
-
-    function insertCheckbox() {
-        if (!editorDiv) return;
-        editorDiv.focus();
-
-        const selection = window.getSelection();
-        if (!selection || selection.rangeCount === 0) return;
-
-        const range = selection.getRangeAt(0);
-        
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'note-checkbox';
-        checkbox.style.marginRight = '6px';
-        checkbox.style.verticalAlign = 'middle';
-        checkbox.style.cursor = 'pointer';
-        
-        checkbox.addEventListener('change', () => {
-            if (currentNote) {
-                debouncedUpdateNote(currentNote);
-            }
-        });
-
-        range.deleteContents();
-        
-        // Insert checkbox first
-        range.insertNode(checkbox);
-        
-        // Insert space after checkbox
-        const space = document.createTextNode(' ');
-        range.setStartAfter(checkbox);
-        range.setEndAfter(checkbox);
-        range.insertNode(space);
-        
-        // Insert a zero-width space as cursor anchor after the regular space
-        const cursorAnchor = document.createTextNode('\u200B');
-        range.setStartAfter(space);
-        range.setEndAfter(space);
-        range.insertNode(cursorAnchor);
-        
-        // Position cursor at the zero-width space
-        const cursorRange = document.createRange();
-        cursorRange.setStart(cursorAnchor, 0);
-        cursorRange.setEnd(cursorAnchor, 0);
-        cursorRange.collapse(true);
-        
-        selection.removeAllRanges();
-        selection.addRange(cursorRange);
-
-        // Force cursor position multiple times to ensure it sticks
-        const forceCursor = () => {
-            const sel = window.getSelection();
-            if (sel && cursorAnchor.parentNode) {
-                try {
-                    const fixRange = document.createRange();
-                    fixRange.setStart(cursorAnchor, 0);
-                    fixRange.setEnd(cursorAnchor, 0);
-                    fixRange.collapse(true);
-                    sel.removeAllRanges();
-                    sel.addRange(fixRange);
-                } catch (e) {
-                    // Fallback: position after cursor anchor
-                    const fallbackRange = document.createRange();
-                    fallbackRange.setStartAfter(cursorAnchor);
-                    fallbackRange.setEndAfter(cursorAnchor);
-                    fallbackRange.collapse(true);
-                    sel.removeAllRanges();
-                    sel.addRange(fallbackRange);
-                }
-            }
-            editorDiv.focus();
-        };
-        
-        // Force cursor position immediately and after delays
-        forceCursor();
-        setTimeout(forceCursor, 0);
-        setTimeout(forceCursor, 10);
-        requestAnimationFrame(() => {
-            requestAnimationFrame(forceCursor);
-        });
-
-        // Delay input event to allow cursor to settle
-        setTimeout(() => {
-        editorDiv.dispatchEvent(new Event('input', { bubbles: true }));
-        }, 20);
-    }
 
     let workspaces: Workspace[] = [];
     let activeWorkspaceId = '';
@@ -544,15 +251,9 @@
     $: activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
     async function switchWorkspace(id: string) {
         if (id === activeWorkspaceId) return;
-        debouncedUpdateNote.flush();
 
         // Update UI immediately for better responsiveness
-        notes = [];
-        folders = [];
         calendarEvents = [];
-        kanban = [];
-        selectedNoteId = '';
-        currentFolderId = null;
         activeWorkspaceId = id;
 
         // Defer database operations to avoid blocking the main thread
@@ -665,836 +366,6 @@
         draggedWorkspaceId = null;
     }
 
-    let notes: Note[] = [];
-    let folders: Folder[] = [];
-    let selectedNoteId = '';
-    let currentFolderId: string | null = null;
-    let dragOverFolderId: string | null = null;
-    let dropIndex: number | null = null;
-    let dragOverRoot = false;
-    let editingFolderId: string | null = null;
-    let editingNoteId: string | null = null;
-    let isEditingHeaderName = false;
-    let draggedItemType: 'folder' | 'note' | null = null;
-    let isDragging = false;
-    type DisplayItem = (Note & { displayType: 'note' }) | (Folder & { displayType: 'folder' });
-    let displayList: DisplayItem[] = [];
-
-    // Compute displayList reactively - explicitly depend on notes, folders, currentFolderId, and activeWorkspaceId
-    $: {
-        let items: DisplayItem[];
-        if (currentFolderId === null) {
-            const rootNotes = notes
-                .filter((n) => n.folderId === null && n.workspaceId === activeWorkspaceId)
-                .map((n) => ({ ...n, displayType: 'note' as const }));
-            const allFolders = folders
-                .filter((f) => f.workspaceId === activeWorkspaceId)
-                .map((f) => ({
-                    ...f,
-                    displayType: 'folder' as const
-                }));
-            items = [...allFolders, ...rootNotes];
-        } else {
-            items = notes
-                .filter((n) => n.folderId === currentFolderId && n.workspaceId === activeWorkspaceId)
-                .map((n) => ({ ...n, displayType: 'note' as const }));
-        }
-        displayList = items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    }
-
-    $: currentFolder = folders.find((f) => f.id === currentFolderId);
-    $: currentNote = notes.find((n) => n.id === selectedNoteId) ?? null;
-    
-    // Sanitized content for contenteditable to prevent XSS
-    $: sanitizedNoteContent = currentNote && currentNote.type === 'text' && browser && DOMPurify
-        ? DOMPurify.sanitize(currentNote.contentHTML || '')
-        : (currentNote?.contentHTML || '');
-    
-    // Update editor content only when note changes (not during typing)
-    // Use selectedNoteId instead of currentNote to avoid cycle
-    // Also check if panel was just restored (editor might be empty after being removed from DOM)
-    $: if (editorDiv && selectedNoteId && (selectedNoteId !== previousNoteId || (editorDiv.innerHTML === '' && !isNotesMinimized))) {
-        // Find note using selectedNoteId to avoid depending on currentNote
-        const note = notes.find((n) => n.id === selectedNoteId);
-        if (note && note.type === 'text') {
-            // If content is missing, try to load it from database
-            const noteWithMeta = note as any;
-            if ((!note.contentHTML || note.contentHTML === '') && !noteWithMeta._contentLoaded) {
-                const noteId = note.id;
-                db.getNoteContent(noteId).then(rawContent => {
-                    if (rawContent && editorDiv && selectedNoteId === noteId) {
-                        const sanitized = (browser && DOMPurify) 
-                            ? DOMPurify.sanitize(rawContent)
-                            : rawContent;
-                        // Update notes array using selectedNoteId to avoid cycle
-                        const noteIndex = notes.findIndex((n) => n.id === noteId);
-                        if (noteIndex !== -1) {
-                            notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
-                            const updatedNoteWithMeta = notes[noteIndex] as any;
-                            updatedNoteWithMeta._contentLoaded = true;
-                            notes = [...notes];
-                        }
-                        // Update editor only if it's empty or different
-                        if (editorDiv && (editorDiv.innerHTML === '' || editorDiv.innerHTML !== sanitized)) {
-                            editorDiv.innerHTML = sanitized;
-                        }
-                    }
-                }).catch(e => {
-                    console.error('Failed to load note content:', e);
-                });
-                // Don't update editor yet - wait for content to load
-            } else if (note.contentHTML) {
-                // Note has content - update editor if needed
-                const sanitized = browser && DOMPurify
-                    ? DOMPurify.sanitize(note.contentHTML)
-                    : note.contentHTML;
-                
-                // Only update if:
-                // 1. Editor is empty and note has content (including when panel is restored), OR
-                // 2. Editor content is different from note content AND user switched notes
-                // Don't clear editor if it has content but note.contentHTML is empty (user might be typing)
-                // Also don't update if editor has content and we're on the same note (user might be typing)
-                if (editorDiv.innerHTML === '' && sanitized) {
-                    // Editor is empty, note has content - update it (this handles panel restoration)
-                    editorDiv.innerHTML = sanitized;
-                } else if (editorDiv.innerHTML !== sanitized && sanitized && previousNoteId !== selectedNoteId) {
-                    // User switched notes - update editor
-                    editorDiv.innerHTML = sanitized;
-                }
-                // If editor has content and we're on the same note, don't update (user is typing)
-            }
-            // If editor has content but note.contentHTML is empty, don't clear it (user might be typing)
-        }
-        previousNoteId = selectedNoteId;
-    } else if (!selectedNoteId) {
-        previousNoteId = null;
-    }
-    
-    // Parse current note's spreadsheet JSON the first time it's needed.
-    // Cache the parsed object back onto the note so we don't re-parse on every update,
-    // which was causing the first edit after reload to be overwritten.
-    $: parsedCurrentNote = currentNote ? (() => {
-        if (currentNote.type === 'spreadsheet') {
-            const noteWithRaw = currentNote as any;
-            // If _spreadsheetJson is a JSON string and we don't yet have a parsed spreadsheet object
-            if (typeof noteWithRaw._spreadsheetJson === 'string' && !currentNote.spreadsheet) {
-                try {
-                    const parsed = JSON.parse(noteWithRaw._spreadsheetJson);
-                    // Cache the parsed spreadsheet on the current note so future updates
-                    // operate on the same object instead of re-parsing from the original JSON.
-                    noteWithRaw.spreadsheet = parsed;
-                    // Optionally replace _spreadsheetJson with the parsed object so we don't reparse
-                    noteWithRaw._spreadsheetJson = parsed;
-                    return { ...currentNote, spreadsheet: parsed };
-                } catch (e) {
-                    console.error('Failed to parse spreadsheet JSON:', e);
-                    return currentNote;
-                }
-            }
-        }
-        return currentNote;
-    })() : null;
-
-    async function loadSpreadsheetComponent() {
-        if (isSpreadsheetLoaded) return;
-        try {
-            const module = await import('$lib/components/Spreadsheet.svelte');
-            SpreadsheetComponent = module.default;
-            isSpreadsheetLoaded = true;
-        } catch (e) {
-            console.error('Failed to load Spreadsheet component:', e);
-        }
-    }
-
-    async function selectNote(id: string) {
-        if (selectedNoteId === id) return;
-        
-        // Save current note before switching
-        if (currentNote && currentNote.type === 'text' && editorDiv) {
-            // Update currentNote with latest content from editor before saving
-            currentNote.contentHTML = editorDiv.innerHTML;
-            saveNoteHistory(currentNote.id, editorDiv.innerHTML);
-            // Flush the update to ensure it's saved
-            await debouncedUpdateNote.flush();
-        } else {
-            // For non-text notes or when editorDiv is not available, just flush
-            await debouncedUpdateNote.flush();
-        }
-        
-        // Find the note we're switching to
-        const note = notes.find((n) => n.id === id);
-        if (note) {
-            const noteWithMeta = note as any;
-            let contentUpdated = false;
-            
-            // Load content BEFORE switching to avoid clearing the editor
-            if (note.type === 'text') {
-                // If content is empty and not yet loaded, load from database
-                if ((!note.contentHTML || note.contentHTML === '') && !noteWithMeta._contentLoaded) {
-                    try {
-                        const rawContent = await db.getNoteContent(id);
-                        // Sanitize content when loading from database
-                        if (rawContent) {
-                            note.contentHTML = (browser && DOMPurify) 
-                                ? DOMPurify.sanitize(rawContent)
-                                : rawContent;
-                        } else {
-                            note.contentHTML = '';
-                        }
-                        noteWithMeta._contentLoaded = true;
-                        contentUpdated = true;
-                    } catch (e) {
-                        console.error('Failed to load note content:', e);
-                        note.contentHTML = '';
-                        noteWithMeta._contentLoaded = true;
-                        contentUpdated = true;
-                    }
-                } else {
-                    // Content exists, mark as loaded
-                    noteWithMeta._contentLoaded = true;
-                }
-                
-                // Initialize note history if needed
-                if (note.contentHTML && !noteHistory.has(id)) {
-                    saveNoteHistory(id, note.contentHTML);
-                }
-            }
-            
-            // Update notes array if content was loaded (triggers reactivity)
-            // Always update notes array to ensure reactivity works, even if content wasn't just loaded
-            // This ensures currentNote gets the updated note object with content
-            notes = [...notes];
-            
-            // Load spreadsheet component if needed (defer to avoid blocking)
-            if (note.type === 'spreadsheet') {
-                setTimeout(async () => {
-                    await loadSpreadsheetComponent();
-                }, 0);
-            }
-        }
-        
-        // Now update UI - content is already loaded and notes array is updated
-        // Set selectedNoteId AFTER notes array is updated so currentNote gets the correct note
-        selectedSheetCell = null;
-        sheetSelection = null;
-        selectedNoteId = id;
-        
-        // Explicitly update editor div after a brief delay to ensure reactivity has processed
-        // This is a fallback in case the reactive statement doesn't fire immediately
-        if (note && note.type === 'text' && editorDiv) {
-            setTimeout(() => {
-                const updatedNote = notes.find((n) => n.id === id);
-                if (updatedNote && updatedNote.type === 'text' && editorDiv) {
-                    const sanitized = (browser && DOMPurify) 
-                        ? DOMPurify.sanitize(updatedNote.contentHTML || '')
-                        : (updatedNote.contentHTML || '');
-                    if (editorDiv.innerHTML !== sanitized) {
-                        editorDiv.innerHTML = sanitized;
-                    }
-                }
-            }, 0);
-        }
-        
-        // Save setting asynchronously
-        setTimeout(async () => {
-            try {
-                await db.putSetting({
-                    key: `selectedNoteId:${activeWorkspaceId}`,
-                    value: id
-                });
-            } catch (e) {
-                console.error('Failed to save selected note:', e);
-            }
-        }, 0);
-    }
-
-    async function addNote(type: 'text' | 'spreadsheet' = 'text') {
-        try {
-            if (type === 'spreadsheet') {
-                await loadSpreadsheetComponent();
-            }
-            const notesInCurrentView = displayList.filter((item) => item.displayType === 'note');
-            const n: Note = {
-                id: generateUUID(),
-                title: type === 'spreadsheet' ? 'Untitled Sheet' : 'Untitled Note',
-                contentHTML: '',
-                updatedAt: Date.now(),
-                workspaceId: activeWorkspaceId,
-                folderId: currentFolderId,
-                order: notesInCurrentView.length,
-                type: type,
-                spreadsheet: type === 'spreadsheet' ? createEmptySpreadsheet() : undefined
-            };
-            await db.putNote(n);
-            // Reload the note from database to ensure it has _spreadsheetJson set correctly for sync
-            const reloadedNotes = await db.getNotesByWorkspaceId(activeWorkspaceId);
-            const reloadedNote = reloadedNotes.find(note => note.id === n.id);
-            if (reloadedNote) {
-                // Replace the note in the array with the reloaded version from DB
-                const noteIndex = notes.findIndex(note => note.id === n.id);
-                if (noteIndex !== -1) {
-                    notes[noteIndex] = reloadedNote;
-                } else {
-                    notes = [...notes, reloadedNote];
-                }
-                notes = [...notes]; // Trigger reactivity
-            } else {
-                notes = [...notes, n];
-            }
-            await selectNote(n.id);
-            await syncIfLoggedIn();
-        } catch (error) {
-            console.error('Failed to add note:', error);
-            alert('Failed to create note. Please try again.');
-        }
-    }
-
-    function createEmptySpreadsheet(rows = 50, cols = 20) {
-        const data: SpreadsheetCell[][] = Array.from({ length: rows }, () =>
-            Array.from({ length: cols }, () => ({ value: '' }))
-        );
-        const colWidths: Record<number, number> = {};
-        for (let i = 0; i < cols; i++) colWidths[i] = 100;
-        const rowHeights: Record<number, number> = {};
-        for (let i = 0; i < rows; i++) rowHeights[i] = 25;
-        return { data, colWidths, rowHeights };
-    }
-
-    async function addFolder() {
-        const name = prompt('Enter new folder name:', 'New Folder');
-        if (!name?.trim()) return;
-
-        try {
-            const f: Folder = {
-                id: generateUUID(),
-                name: name.trim(),
-                workspaceId: activeWorkspaceId,
-                order: displayList.length
-            };
-            await db.putFolder(f);
-            folders = [...folders, f];
-            await syncIfLoggedIn();
-        } catch (error) {
-            console.error('Failed to add folder:', error);
-            alert('Failed to create folder. Please try again.');
-        }
-    }
-
-    async function renameFolder(id: string, newName: string) {
-        const folder = folders.find((f) => f.id === id);
-        if (folder && newName.trim()) {
-            folder.name = newName.trim();
-            await db.putFolder(folder);
-            folders = [...folders];
-        }
-        editingFolderId = null;
-        isEditingHeaderName = false;
-    }
-
-    async function renameNote(id: string, newName: string) {
-        const note = notes.find((n) => n.id === id);
-        if (note && newName.trim()) {
-            note.title = newName.trim();
-            note.updatedAt = Date.now();
-            await db.putNote(note);
-            notes = [...notes];
-            await syncIfLoggedIn();
-        }
-        editingNoteId = null;
-    }
-
-    async function deleteFolder(folderId: string) {
-        const folder = folders.find((f) => f.id === folderId);
-        if (!folder) return;
-        const confirmed = await showDeleteDialog(`Delete "${folder.name}"?\n\nAll notes inside will be permanently deleted.`);
-        if (!confirmed) {
-            return;
-        }
-
-        const notesToDelete = notes.filter((n) => n.folderId === folderId);
-        const deletePromises = notesToDelete.map((note) => db.deleteNote(note.id));
-        await Promise.all(deletePromises);
-        await db.deleteFolder(folderId);
-
-        const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
-        notes = notes.filter((n) => !deletedNoteIds.has(n.id));
-        folders = folders.filter((f) => f.id !== folderId);
-
-        if (currentFolderId === folderId) await goBack();
-        // Sync deletions to Supabase
-        await syncIfLoggedIn();
-    }
-
-    async function deleteNote(id: string) {
-        const note = notes.find((n) => n.id === id);
-        if (!note) return;
-        
-        // Save current note content before deleting if it's the selected note
-        if (selectedNoteId === id && currentNote && currentNote.type === 'text' && editorDiv) {
-            currentNote.contentHTML = editorDiv.innerHTML;
-            saveNoteHistory(currentNote.id, editorDiv.innerHTML);
-            await debouncedUpdateNote.flush();
-        }
-        
-        const noteType = note.type === 'spreadsheet' ? 'spreadsheet' : 'note';
-        const noteTitle = note.title || 'Untitled';
-        
-        const confirmed = await showDeleteDialog(`Are you sure you want to delete "${noteTitle}"?\n\nThis ${noteType} will be permanently deleted and cannot be recovered.`);
-        if (!confirmed) {
-            return;
-        }
-        
-        await db.deleteNote(id);
-        notes = notes.filter((n) => n.id !== id);
-        if (selectedNoteId === id) {
-            const nextNote = displayList.find(
-                (item) => item.displayType === 'note' && item.id !== id
-            );
-            await selectNote(nextNote?.id ?? '');
-        }
-        // Sync deletion to Supabase
-        await syncIfLoggedIn();
-    }
-
-    function triggerNoteUpdate() {
-        if (!currentNote) return;
-        notes = [...notes];
-    }
-
-    function saveNoteHistory(noteId: string, content: string) {
-        if (!noteHistory.has(noteId)) {
-            noteHistory.set(noteId, []);
-            noteHistoryIndex.set(noteId, -1);
-        }
-        const history = noteHistory.get(noteId)!;
-        const index = noteHistoryIndex.get(noteId)!;
-        
-        history.splice(index + 1);
-        history.push({ content, timestamp: Date.now() });
-        let newIndex = history.length - 1;
-        
-        if (history.length > MAX_NOTE_HISTORY) {
-            history.shift();
-            newIndex--;
-        }
-        noteHistoryIndex.set(noteId, newIndex);
-    }
-
-    function undoNote(noteId: string) {
-        if (!noteHistory.has(noteId)) return false;
-        const history = noteHistory.get(noteId)!;
-        const index = noteHistoryIndex.get(noteId)!;
-        
-        if (index > 0) {
-            noteHistoryIndex.set(noteId, index - 1);
-            const previousState = history[index - 1];
-            if (previousState && currentNote && currentNote.id === noteId) {
-                // Sanitize content before setting
-                const sanitized = (browser && DOMPurify) 
-                    ? DOMPurify.sanitize(previousState.content)
-                    : previousState.content;
-                currentNote.contentHTML = sanitized;
-                if (editorDiv) {
-                    editorDiv.innerHTML = sanitized;
-                }
-                debouncedUpdateNote(currentNote);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function redoNote(noteId: string) {
-        if (!noteHistory.has(noteId)) return false;
-        const history = noteHistory.get(noteId)!;
-        const index = noteHistoryIndex.get(noteId)!;
-        
-        if (index < history.length - 1) {
-            noteHistoryIndex.set(noteId, index + 1);
-            const nextState = history[index + 1];
-            if (nextState && currentNote && currentNote.id === noteId) {
-                // Sanitize content before setting
-                const sanitized = (browser && DOMPurify) 
-                    ? DOMPurify.sanitize(nextState.content)
-                    : nextState.content;
-                currentNote.contentHTML = sanitized;
-                if (editorDiv) {
-                    editorDiv.innerHTML = sanitized;
-                }
-                debouncedUpdateNote(currentNote);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    const debouncedSaveNoteHistory = debounce((noteId: string, content: string) => {
-        saveNoteHistory(noteId, content);
-    }, 300);
-
-    async function updateNote(note: Note) {
-        // If this is the currently selected text note, get the latest content from the editor
-        let contentHTML = note.contentHTML;
-        if (note.type === 'text' && selectedNoteId === note.id && editorDiv) {
-            // Use the editor's current content as the source of truth
-            contentHTML = editorDiv.innerHTML;
-        }
-        
-        // If this is the currently selected spreadsheet note, get the latest spreadsheet data
-        let spreadsheet = note.spreadsheet;
-        // Only use parsedCurrentNote.spreadsheet if the note parameter doesn't already have spreadsheet data
-        // This allows us to pass in the latest spreadsheet data directly from the component
-        if (note.type === 'spreadsheet' && selectedNoteId === note.id) {
-            // If spreadsheet is already provided in the note parameter, use it (it's the latest from component)
-            // Otherwise, fall back to parsedCurrentNote.spreadsheet
-            if (!spreadsheet && parsedCurrentNote && parsedCurrentNote.spreadsheet) {
-                spreadsheet = parsedCurrentNote.spreadsheet;
-            }
-            // If we still don't have spreadsheet data, log a warning
-            if (!spreadsheet) {
-                console.warn(`[updateNote] No spreadsheet data found for spreadsheet note ${note.id}`);
-            } else {
-                console.log(`[updateNote] Saving spreadsheet note ${note.id} with data:`, spreadsheet);
-            }
-        }
-        
-        const noteToSave = { 
-            ...note, 
-            contentHTML: contentHTML,
-            spreadsheet: spreadsheet,
-            updatedAt: Date.now() 
-        };
-        
-        if (browser && DOMPurify && noteToSave.type === 'text') {
-            noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
-        }
-        
-        console.log(`[updateNote] Saving note ${noteToSave.id} (type: ${noteToSave.type}) to database with updatedAt: ${noteToSave.updatedAt}`);
-        await db.putNote(noteToSave);
-        console.log(`[updateNote] Successfully saved note ${noteToSave.id} to database`);
-        
-        // For spreadsheet notes, reload from database to ensure _spreadsheetJson is set correctly
-        // But preserve the updatedAt timestamp we just set
-        if (noteToSave.type === 'spreadsheet') {
-            try {
-                const reloadedNotes = await db.getNotesByWorkspaceId(noteToSave.workspaceId);
-                const reloadedNote = reloadedNotes.find(n => n.id === noteToSave.id);
-                if (reloadedNote) {
-                    console.log(`[updateNote] Reloaded note ${reloadedNote.id} from database with updatedAt: ${reloadedNote.updatedAt}`);
-                    // Preserve the updatedAt we just set (it should be the same, but ensure it is)
-                    const noteToUpdate = {
-                        ...reloadedNote,
-                        updatedAt: noteToSave.updatedAt, // Use the timestamp we just saved
-                        spreadsheet: noteToSave.spreadsheet // Also preserve the spreadsheet we just saved
-                    };
-                    const index = notes.findIndex((n) => n.id === noteToSave.id);
-                    if (index !== -1) {
-                        notes[index] = noteToUpdate;
-                        notes = [...notes];
-                        console.log(`[updateNote] Updated note in array with updatedAt: ${noteToUpdate.updatedAt}`);
-                    }
-                } else {
-                    console.warn(`[updateNote] Could not find reloaded note ${noteToSave.id} in database`);
-                }
-            } catch (e) {
-                console.warn('Failed to reload note from database after save:', e);
-                // Fall back to updating with the saved note
-                const index = notes.findIndex((n) => n.id === noteToSave.id);
-                if (index !== -1) {
-                    notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
-                    notes = [...notes];
-                }
-            }
-        } else {
-            // Update the note in the array, preserving contentHTML and spreadsheet
-            const index = notes.findIndex((n) => n.id === noteToSave.id);
-            if (index !== -1) {
-                // Preserve the contentHTML and spreadsheet when updating the notes array
-                notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
-                notes = [...notes];
-            }
-        }
-        
-        // Sync is debounced separately to ensure it happens reliably even if note updates are batched
-        debouncedSyncIfLoggedIn();
-    }
-
-    const debouncedUpdateNote = debounce(updateNote, 400);
-    
-    // Separate debounced sync function that fires more frequently than note updates
-    // This ensures sync happens even if note updates are batched
-    const debouncedSyncIfLoggedIn = debounce(syncIfLoggedIn, 1000);
-
-    async function openFolder(folderId: string) {
-        debouncedUpdateNote.flush();
-        currentFolderId = folderId;
-        selectedNoteId = '';
-    }
-
-    async function goBack() {
-        debouncedUpdateNote.flush();
-        currentFolderId = null;
-        selectedNoteId = '';
-    }
-
-    function handleDragStart(ev: DragEvent, item: DisplayItem) {
-        if (!ev.dataTransfer) return;
-
-        console.log('Drag started:', item.displayType, item);
-        isDragging = true;
-        draggedItemType = item.displayType;
-        ev.dataTransfer.effectAllowed = 'move';
-        ev.dataTransfer.dropEffect = 'move';
-        const itemData = JSON.stringify(item);
-        ev.dataTransfer.setData('application/json', itemData);
-        ev.dataTransfer.setData('text/plain', item.id);
-
-        const dragImage = document.createElement('div');
-        dragImage.textContent =
-            item.displayType === 'folder' ? `${(item as Folder).name}` : (item as Note).title;
-        dragImage.style.cssText = `
-      position: absolute;
-      left: -9999px;
-      top: -9999px;
-      padding: 12px 10px;
-      background: var(--panel-bg);
-      border: 1px solid var(--accent-red);
-      border-radius: 4px;
-      width: 160px;
-      font-size: 14px;
-      color: var(--text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    `;
-        document.body.appendChild(dragImage);
-
-        ev.dataTransfer.setDragImage(dragImage, 80, 20);
-        requestAnimationFrame(() => {
-            setTimeout(() => {
-                if (document.body.contains(dragImage)) {
-                    document.body.removeChild(dragImage);
-                }
-            }, 0);
-        });
-    }
-
-    async function handleDropOnFolder(ev: DragEvent, targetFolder: Folder) {
-        ev.preventDefault();
-        dragOverFolderId = null;
-        const data = ev.dataTransfer?.getData('application/json');
-        if (!data) {
-            isDragging = false;
-            draggedItemType = null;
-            return;
-        }
-        const draggedItem = JSON.parse(data) as DisplayItem;
-        if (
-            draggedItem.displayType === 'note' &&
-            (draggedItem as Note).folderId !== targetFolder.id
-        ) {
-            const noteToMove = notes.find((n) => n.id === draggedItem.id);
-            if (noteToMove) {
-                noteToMove.folderId = targetFolder.id;
-                noteToMove.updatedAt = Date.now();
-                noteToMove.order = notes.filter((n) => n.folderId === targetFolder.id).length;
-                await db.putNote(noteToMove);
-                notes = [...notes];
-            }
-        }
-        isDragging = false;
-        draggedItemType = null;
-    }
-
-    async function handleDropOnRoot(ev: DragEvent) {
-        ev.preventDefault();
-        dragOverRoot = false;
-        const data = ev.dataTransfer?.getData('application/json');
-        if (!data) {
-            isDragging = false;
-            draggedItemType = null;
-            return;
-        }
-        const draggedItem = JSON.parse(data) as DisplayItem;
-        if (draggedItem.displayType === 'note' && (draggedItem as Note).folderId !== null) {
-            const noteToMove = notes.find((n) => n.id === draggedItem.id);
-            if (noteToMove) {
-                noteToMove.folderId = null;
-                noteToMove.updatedAt = Date.now();
-                noteToMove.order = displayList.length;
-                await db.putNote(noteToMove);
-                notes = [...notes];
-            }
-        }
-        isDragging = false;
-        draggedItemType = null;
-    }
-
-    async function handleReorderDrop(ev: DragEvent, targetIndex: number) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        dropIndex = null;
-        console.log('Reorder drop triggered at index:', targetIndex);
-
-        let data = ev.dataTransfer?.getData('application/json');
-        if (!data) {
-            const textData = ev.dataTransfer?.getData('text/plain');
-            if (textData) {
-                const item = displayList.find((i) => i.id === textData);
-                if (item) {
-                    data = JSON.stringify(item);
-                }
-            }
-        }
-
-        if (!data) {
-            console.warn('No drag data found for reorder');
-            isDragging = false;
-            draggedItemType = null;
-            return;
-        }
-
-        let draggedItem: DisplayItem;
-        try {
-            draggedItem = JSON.parse(data) as DisplayItem;
-        } catch (err) {
-            console.error('Failed to parse drag data:', err);
-            isDragging = false;
-            draggedItemType = null;
-            return;
-        }
-
-        const currentViewList = [...displayList];
-        const draggedIndex = currentViewList.findIndex((item) => item.id === draggedItem.id);
-
-        if (draggedIndex === -1 || draggedIndex === targetIndex) {
-            isDragging = false;
-            draggedItemType = null;
-            return;
-        }
-        const [movedItem] = currentViewList.splice(draggedIndex, 1);
-        currentViewList.splice(targetIndex, 0, movedItem);
-
-        const updates = currentViewList.map((item, index) => {
-            if (item.displayType === 'folder') {
-                const folder = item as Folder & { displayType: 'folder' };
-                const originalFolder = folders.find(f => f.id === folder.id);
-                if (!originalFolder) {
-                    console.error('Original folder not found:', folder.id);
-                    console.error('Available folders:', folders.map(f => ({ id: f.id, name: f.name, workspaceId: f.workspaceId })));
-                    throw new Error(`Folder ${folder.id} not found`);
-                }
-                const workspaceId = (originalFolder as any).workspaceId || (originalFolder as any).workspace_id;
-                if (!workspaceId) {
-                    console.error('Original folder missing workspaceId:', originalFolder);
-                    console.error('Available folders:', folders.map(f => ({ id: f.id, name: f.name, workspaceId: (f as any).workspaceId || (f as any).workspace_id })));
-                    throw new Error(`Folder ${originalFolder.id} is missing workspaceId in original data`);
-                }
-                const updatedFolder: Folder = {
-                    id: originalFolder.id,
-                    name: originalFolder.name,
-                    workspaceId: workspaceId,
-                    order: index
-                };
-                console.log('Created folder update:', updatedFolder);
-                return { 
-                    ...updatedFolder,
-                    displayType: 'folder' as const
-                } as Folder & { displayType: 'folder' };
-            } else {
-                const note = item as Note & { displayType: 'note' };
-                const originalNote = notes.find(n => n.id === note.id);
-                if (!originalNote) {
-                    console.error('Original note not found:', note.id);
-                    throw new Error(`Note ${note.id} not found`);
-                }
-                if (!originalNote.workspaceId) {
-                    console.error('Original note missing workspaceId:', originalNote);
-                    throw new Error(`Note ${originalNote.id} is missing workspaceId in original data`);
-                }
-                const updatedNote: Note = {
-                    ...originalNote,
-                    order: index
-                };
-                console.log('Created note update:', { id: updatedNote.id, title: updatedNote.title, workspaceId: updatedNote.workspaceId, order: updatedNote.order });
-                return { 
-                    ...updatedNote,
-                    displayType: 'note' as const
-                } as Note & { displayType: 'note' };
-            }
-        });
-        console.log('About to save updates. Count:', updates.length);
-        console.log('Updates breakdown:', {
-            folders: updates.filter(i => i.displayType === 'folder').length,
-            notes: updates.filter(i => i.displayType === 'note').length
-        });
-        
-        const promises = updates.map(async (item) => {
-            if (item.displayType === 'folder') {
-                const folder = item as Folder;
-                if (!folder.workspaceId) {
-                    console.error('Folder missing workspaceId:', folder);
-                    console.error('Full folder object:', JSON.stringify(folder, null, 2));
-                    throw new Error(`Folder ${folder.id} is missing workspaceId`);
-                }
-                console.log('Saving folder:', { id: folder.id, name: folder.name, workspaceId: folder.workspaceId, order: folder.order });
-                try {
-                    await db.putFolder(folder);
-                    console.log('Successfully saved folder:', folder.id);
-                } catch (error) {
-                    console.error('Error saving folder:', folder, error);
-                    throw error;
-                }
-            } else {
-                const note = item as Note;
-                if (!note.workspaceId) {
-                    console.error('Note missing workspaceId:', note);
-                    throw new Error(`Note ${note.id} is missing workspaceId`);
-                }
-                console.log('Saving note:', { id: note.id, title: note.title, workspaceId: note.workspaceId, order: note.order });
-                try {
-                    await db.putNote(note);
-                    console.log('Successfully saved note:', note.id);
-                } catch (error) {
-                    console.error('Error saving note:', note, error);
-                    throw error;
-                }
-            }
-        });
-        await Promise.all(promises);
-        const updatedNotes = updates.filter(
-            (i): i is Note & { displayType: 'note' } => i.displayType === 'note'
-        );
-        const updatedFolders = updates.filter(
-            (i): i is Folder & { displayType: 'folder' } => i.displayType === 'folder'
-        );
-        
-        if (currentFolderId === null) {
-            folders = updatedFolders.map(f => ({ ...f }));
-            notes = notes.map((n) => {
-                const updatedNote = updatedNotes.find((un) => un.id === n.id);
-                return updatedNote && n.folderId === null 
-                    ? { ...n, order: updatedNote.order } 
-                    : { ...n };
-            });
-        } else {
-            notes = notes.map((n) => {
-                const updatedNote = updatedNotes.find((un) => un.id === n.id);
-                return updatedNote && n.folderId === currentFolderId
-                    ? { ...n, order: updatedNote.order }
-                    : { ...n };
-            });
-        }
-
-        notes = [...notes];
-        folders = [...folders];
-        console.log('State updated - folders:', folders.length, 'notes:', notes.length);
-        console.log('Updated folders:', folders.map(f => ({ id: f.id, name: f.name, order: f.order })));
-        console.log('Updated notes (root):', notes.filter(n => n.folderId === null).map(n => ({ id: n.id, title: n.title, order: n.order })));
-        isDragging = false;
-        draggedItemType = null;
-    }
 
     let calendarEvents: CalendarEvent[] = [];
     let isCalendarLoaded = false;
@@ -1742,12 +613,7 @@
         userEmail = user?.email || null;
         
         // Clear UI state and reload workspace data
-        notes = [];
-        folders = [];
         calendarEvents = [];
-        kanban = [];
-        selectedNoteId = '';
-        currentFolderId = null;
         
         // Reload workspaces and set active workspace
         let loadedWorkspaces = await db.getAllWorkspaces();
@@ -1766,8 +632,6 @@
             activeWorkspaceId = defaultWorkspace.id;
         }
         
-        // Reset kanban loaded flag to force reload after sync
-        isKanbanLoaded = false;
         await loadActiveWorkspaceData();
         
         // Set up periodic sync after login
@@ -1788,10 +652,7 @@
                 userId: user.id,
                 email: user.email,
                 workspaces: workspaces,
-                folders: folders,
-                notes: notes,
                 calendarEvents: calendarEvents,
-                kanban: kanban,
                 activeWorkspaceId: activeWorkspaceId,
                 timestamp: Date.now()
             };
@@ -2346,284 +1207,6 @@
         });
     }
 
-    let kanban: Column[] = [];
-    let isKanbanLoaded = false;
-    let editingColumnId: string | null = null;
-    let editingTaskId: string | null = null;
-    let draggedTaskInfo: { colId: string; taskId: string } | null = null;
-    let kanbanDropTarget: { colId: string; taskIndex: number } | null = null;
-    let isDraggingTask = false;
-    const debouncedPersistKanban = debounce(async () => {
-        if (!activeWorkspaceId) {
-            console.log('[kanban] Skipping save - no active workspace');
-            return;
-        }
-        // Only save if kanban exists and has at least one column
-        // Empty kanban arrays shouldn't overwrite existing data
-        if (!kanban || kanban.length === 0) {
-            console.log('[kanban] Skipping save - kanban is empty');
-            return;
-        }
-        try {
-            console.log(`[kanban] Saving kanban for workspace ${activeWorkspaceId}:`, kanban.length, 'columns', kanban);
-            await db.putKanban({
-                workspaceId: activeWorkspaceId,
-                columns: kanban
-            });
-            console.log('[kanban] Saved kanban data to local DB');
-            await syncIfLoggedIn();
-            console.log('[kanban] Synced kanban to Supabase');
-        } catch (error) {
-            console.error('[kanban] Failed to save kanban:', error);
-        }
-    }, 400);
-    
-    $: if (browser && activeWorkspaceId && kanban) {
-        debouncedPersistKanban();
-    }
-
-    function addColumn() {
-        kanban = [
-            ...kanban,
-            {
-                id: generateUUID(),
-                title: 'New Column',
-                tasks: [],
-                isCollapsed: false
-            }
-        ];
-    }
-
-    function renameColumn(colId: string, title: string) {
-        const col = kanban.find((c) => c.id === colId);
-        if (col && title.trim()) {
-            col.title = title.trim();
-            kanban = [...kanban];
-        }
-        editingColumnId = null;
-    }
-
-    async function deleteColumn(colId: string) {
-        const col = kanban.find((c) => c.id === colId);
-        if (!col) return;
-        
-        const taskCount = col.tasks.length;
-        const taskWarning = taskCount > 0 
-            ? `\n\nThis will also permanently delete ${taskCount} task${taskCount === 1 ? '' : 's'} in this column.`
-            : '';
-        
-        const confirmed = await showDeleteDialog(`Are you sure you want to delete the column "${col.title}"?${taskWarning}\n\nThis action cannot be undone.`);
-        if (!confirmed) {
-            return;
-        }
-        
-        kanban = kanban.filter((c) => c.id !== colId);
-    }
-
-    function addTask(col: Column, text: string) {
-        if (!text.trim()) return;
-        col.tasks.push({ id: generateUUID(), text: text.trim() });
-        kanban = [...kanban];
-    }
-
-    function renameTask(colId: string, taskId: string, text: string) {
-        const col = kanban.find((c) => c.id === colId);
-        const task = col?.tasks.find((t) => t.id === taskId);
-        if (task && text.trim()) {
-            task.text = text.trim();
-            kanban = [...kanban];
-        }
-        editingTaskId = null;
-    }
-
-    async function deleteTask(col: Column, taskId: string) {
-        const task = col.tasks.find((t) => t.id === taskId);
-        if (!task) return;
-        
-        const confirmed = await showDeleteDialog(`Are you sure you want to delete the task "${task.text}"?`);
-        if (!confirmed) {
-            return;
-        }
-        
-        col.tasks = col.tasks.filter((t) => t.id !== taskId);
-        kanban = [...kanban];
-    }
-
-    function toggleColumnCollapse(colId: string) {
-        const col = kanban.find((c) => c.id === colId);
-        if (col) {
-            col.isCollapsed = !col.isCollapsed;
-            kanban = [...kanban];
-        }
-    }
-
-    function onTaskDragStart(colId: string, task: Task, ev: DragEvent) {
-        ev.stopPropagation();
-        draggedTaskInfo = { colId, taskId: task.id };
-        isDraggingTask = true;
-        if (ev.dataTransfer) {
-            ev.dataTransfer.effectAllowed = 'move';
-            ev.dataTransfer.dropEffect = 'move';
-
-            ev.dataTransfer.setData('text/plain', task.id);
-            ev.dataTransfer.setData(
-                'application/json',
-                JSON.stringify({
-                    colId,
-                    taskId: task.id,
-                    text: task.text
-                })
-            );
-
-            const dragImage = document.createElement('div');
-            dragImage.textContent = task.text;
-            dragImage.style.cssText = `
-        position: absolute;
-        left: -9999px;
-        top: -9999px;
-        padding: 6px;
-        background: var(--panel-bg);
-        border: 1px solid var(--accent-red);
-        border-radius: 10px;
-        width: 218px;
-        font-size: 14px;
-        color: var(--text);
-        overflow-wrap: break-word;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-      `;
-            document.body.appendChild(dragImage);
-
-            ev.dataTransfer.setDragImage(dragImage, 109, 15);
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    if (document.body.contains(dragImage)) {
-                        document.body.removeChild(dragImage);
-                    }
-                }, 0);
-            });
-        }
-    }
-
-    function onTaskDragOver(ev: DragEvent, targetColId: string, targetTaskIndex: number) {
-        ev.preventDefault();
-        ev.stopPropagation();
-
-        if (ev.dataTransfer) {
-            ev.dataTransfer.dropEffect = 'move';
-        }
-
-        if (draggedTaskInfo) {
-            kanbanDropTarget = {
-                colId: targetColId,
-                taskIndex: targetTaskIndex
-            };
-        }
-    }
-
-    function onColumnDragOver(ev: DragEvent, targetColId: string) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        if (ev.dataTransfer) {
-            ev.dataTransfer.dropEffect = 'move';
-        }
-
-        if (draggedTaskInfo) {
-            const col = kanban.find((c) => c.id === targetColId);
-            if (col) {
-                kanbanDropTarget = {
-                    colId: targetColId,
-                    taskIndex: col.tasks.length
-                };
-            }
-        }
-    }
-
-    function onColumnDrop(targetColId: string, ev: DragEvent, isTaskDrop = false) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        if (!draggedTaskInfo) {
-            try {
-                const jsonData = ev.dataTransfer?.getData('application/json');
-                if (jsonData) {
-                    const parsed = JSON.parse(jsonData);
-                    draggedTaskInfo = {
-                        colId: parsed.colId,
-                        taskId: parsed.taskId
-                    };
-                }
-            } catch (e) {
-                console.error('Failed to recover drag data:', e);
-                handleDragEnd();
-                return;
-            }
-        }
-
-        if (!draggedTaskInfo) {
-            handleDragEnd();
-            return;
-        }
-
-        const { colId, taskId } = draggedTaskInfo;
-
-        const fromColIndex = kanban.findIndex((c) => c.id === colId);
-        const toColIndex = kanban.findIndex((c) => c.id === targetColId);
-
-        if (fromColIndex === -1 || toColIndex === -1) {
-            handleDragEnd();
-            return;
-        }
-
-        const fromCol = kanban[fromColIndex];
-        const toCol = kanban[toColIndex];
-
-        const fromIndex = fromCol.tasks.findIndex((t) => t.id === taskId);
-        if (fromIndex < 0) {
-            handleDragEnd();
-            return;
-        }
-
-        let toIndex = toCol.tasks.length;
-        if (kanbanDropTarget?.colId === targetColId) {
-            toIndex = kanbanDropTarget.taskIndex;
-        }
-
-        if (fromCol.id === toCol.id && fromIndex < toIndex) {
-            toIndex--;
-        }
-
-        const taskToMove = { ...fromCol.tasks[fromIndex] };
-        const newKanban = kanban.map((col, idx) => {
-            if (idx === fromColIndex) {
-                const newTasks = col.tasks.filter((t) => t.id !== taskId);
-
-                if (idx === toColIndex) {
-                    newTasks.splice(toIndex, 0, taskToMove);
-                }
-
-                return { ...col, tasks: newTasks };
-            }
-
-            if (idx === toColIndex && idx !== fromColIndex) {
-                const newTasks = [...col.tasks];
-                newTasks.splice(toIndex, 0, taskToMove);
-                return { ...col, tasks: newTasks };
-            }
-
-            return col;
-        });
-        kanban = newKanban;
-        handleDragEnd();
-    }
-
-    function handleDragEnd(ev?: DragEvent) {
-        if (ev) {
-            ev.preventDefault();
-        }
-
-        draggedTaskInfo = null;
-        isDraggingTask = false;
-        kanbanDropTarget = null;
-    }
 
     async function loadCalendarEvents() {
         if (isCalendarLoaded || !browser || !activeWorkspaceId) return;
@@ -2639,76 +1222,19 @@
         }
     }
 
-    async function loadKanbanData(force = false) {
-        if ((isKanbanLoaded && !force) || !browser || !activeWorkspaceId) return;
-        try {
-            console.log(`[kanban] Loading kanban for workspace ${activeWorkspaceId}, force=${force}`);
-            const kData = await db.getKanbanByWorkspaceId(activeWorkspaceId);
-            console.log(`[kanban] Retrieved from DB:`, kData ? `found ${kData.columns?.length || 0} columns` : 'null');
-            kanban = kData ? kData.columns : [];
-            isKanbanLoaded = true;
-            console.log('[kanban] Loaded kanban data:', kanban.length, 'columns', kanban);
-        } catch (e) {
-            console.error('Failed to load kanban data:', e);
-            isKanbanLoaded = true; // Set to true even on error to prevent infinite retries
-        }
-    }
 
     async function loadActiveWorkspaceData() {
         if (!browser || !activeWorkspaceId) return;
 
-        currentFolderId = null;
         isCalendarLoaded = false;
-        isKanbanLoaded = false;
-        const [loadedFolders, loadedNotes, selectedNoteSetting] = await Promise.all([
-            db.getFoldersByWorkspaceId(activeWorkspaceId),
-            db.getNotesByWorkspaceId(activeWorkspaceId),
-            db.getSettingByKey(`selectedNoteId:${activeWorkspaceId}`)
-        ]);
-        folders = loadedFolders.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-        notes = loadedNotes;
-        const initialSelectedId =
-            loadedNotes.find((n) => n.id === selectedNoteSetting?.value)?.id ??
-            loadedNotes.find((n) => n.folderId === null)?.id ??
-            '';
-        selectedNoteId = initialSelectedId;
-
-        if (initialSelectedId) {
-            const note = loadedNotes.find((n) => n.id === initialSelectedId);
-            if (note && note.contentHTML === '') {
-                try {
-                    const rawContent = await db.getNoteContent(initialSelectedId);
-                    // Sanitize content when loading from database
-                    note.contentHTML = (browser && DOMPurify) 
-                        ? DOMPurify.sanitize(rawContent)
-                        : rawContent;
-                    const noteWithMeta = note as any;
-                    noteWithMeta._contentLoaded = true;
-                    notes = [...notes];
-                } catch (e) {
-                    console.error('Failed to load initial note content:', e);
-                }
-            }
-            if (note && note.type === 'spreadsheet') {
-                await loadSpreadsheetComponent();
-            }
-        }
-
-        // Load calendar events and kanban data in parallel
-        // Force reload kanban to ensure we get the latest data after sync
-        await Promise.all([
-            loadCalendarEvents(),
-            loadKanbanData(true) // Force reload to ensure we get synced data
-        ]);
+        // NotesPanel handles its own loading
+        // Load calendar events
+        await loadCalendarEvents();
     }
 
     onMount(() => {
         if (browser) {
             backup.startAutoBackup();
-            // Collapse notes list by default on mobile
-            if (window.innerWidth <= 768) {
-                isNoteListVisible = false;
-            }
         }
         let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -2733,6 +1259,20 @@
             };
             
             await db.init();
+            
+            // Load saved panel preferences
+            try {
+                const savedPrefs = await db.getSettingByKey('panelPreferences');
+                if (savedPrefs && savedPrefs.value) {
+                    const prefs = JSON.parse(savedPrefs.value);
+                    showNotes = prefs.showNotes ?? true;
+                    showCalendar = prefs.showCalendar ?? true;
+                    showKanban = prefs.showKanban ?? true;
+                    savePanelSelection = true;
+                }
+            } catch (e) {
+                console.warn('Failed to load panel preferences:', e);
+            }
             
             // Load Supabase modules after db init but before auth check
             await loadSupabaseModules();
@@ -2798,26 +1338,6 @@
                 
                 // Defer heavy sync operations to improve initial load
                 setTimeout(async () => {
-                    // Flush any pending debounced saves (notes, kanban) before syncing
-                    const noteUpdatePromise = debouncedUpdateNote.flush();
-                    const kanbanUpdatePromise = debouncedPersistKanban.flush();
-                    
-                    // Wait for both to complete
-                    if (noteUpdatePromise && typeof noteUpdatePromise.then === 'function') {
-                        try {
-                            await noteUpdatePromise;
-                        } catch (e) {
-                            console.warn('Note update failed on reload:', e);
-                        }
-                    }
-                    if (kanbanUpdatePromise && typeof kanbanUpdatePromise.then === 'function') {
-                        try {
-                            await kanbanUpdatePromise;
-                        } catch (e) {
-                            console.warn('Kanban update failed on reload:', e);
-                        }
-                    }
-                    
                     // Flush any pending database saves before syncing
                     await db.flushDatabaseSave();
                     
@@ -2871,8 +1391,6 @@
                         const lastActive = await db.getSettingByKey('activeWorkspaceId');
                         activeWorkspaceId =
                             workspaces.find((w) => w.id === lastActive?.value)?.id ?? workspaces[0].id;
-                        // Reset kanban loaded flag to force reload after sync
-                        isKanbanLoaded = false;
                         await loadActiveWorkspaceData();
                     }
                     
@@ -2903,7 +1421,6 @@
                 setupPeriodicSync();
             }
 
-            document.addEventListener('selectionchange', updateSelectedFontSize);
             
             // Check for OAuth callback (when user returns from Google)
             const urlParams = new URLSearchParams(window.location.search);
@@ -2990,12 +1507,7 @@
                         }
                     }
                     // Clear UI state and reload
-                    notes = [];
-                    folders = [];
                     calendarEvents = [];
-                    kanban = [];
-                    selectedNoteId = '';
-                    currentFolderId = null;
                     
                     // Reload workspaces and set active workspace
                     let loadedWorkspaces = await db.getAllWorkspaces();
@@ -3013,9 +1525,6 @@
                         workspaces = [defaultWorkspace];
                         activeWorkspaceId = defaultWorkspace.id;
                     }
-                    
-                    // Reset kanban loaded flag to force reload after sync
-                    isKanbanLoaded = false;
                     await loadActiveWorkspaceData();
                     
                     // Set up periodic sync after login
@@ -3052,12 +1561,7 @@
                         syncInterval = undefined;
                     }
                     // Clear UI state on logout
-                    notes = [];
-                    folders = [];
                     calendarEvents = [];
-                    kanban = [];
-                    selectedNoteId = '';
-                    currentFolderId = null;
                     await loadActiveWorkspaceData();
                 } else if (event === 'TOKEN_REFRESHED') {
                     // Session refreshed, continue working
@@ -3070,10 +1574,6 @@
         })();
 
         const handleBeforeUnload = () => {
-            // Flush pending note updates and sync (synchronously start them)
-            debouncedUpdateNote.flush();
-            debouncedSyncIfLoggedIn.flush();
-            debouncedPersistKanban.flush();
             // Flush database save synchronously to ensure current state is saved
             db.flushDatabaseSave().catch(e => {
                 console.warn('Failed to flush database save on unload:', e);
@@ -3092,30 +1592,7 @@
         
         const handlePageHide = async (e: PageTransitionEvent) => {
             // pagehide event allows async operations and is more reliable
-            // Flush pending note updates and sync, then wait for them
-            const noteUpdatePromise = debouncedUpdateNote.flush();
-            const syncPromise = debouncedSyncIfLoggedIn.flush();
-            debouncedPersistKanban.flush();
-            
-            // Wait for note updates to complete, then flush database save
-            if (noteUpdatePromise && typeof noteUpdatePromise.then === 'function') {
-                try {
-                    await noteUpdatePromise;
-                } catch (e) {
-                    console.warn('Note update failed on page hide:', e);
-                }
-            }
-            
-            // Wait for sync to complete
-            if (syncPromise && typeof syncPromise.then === 'function') {
-                try {
-                    await syncPromise;
-                } catch (e) {
-                    console.warn('Sync failed on page hide:', e);
-                }
-            }
-            
-            // Ensure database is saved after note updates complete
+            // Flush database save
             try {
                 await db.flushDatabaseSave();
             } catch (e) {
@@ -3145,12 +1622,8 @@
         }
 
         return () => {
-            document.removeEventListener('selectionchange', updateSelectedFontSize);
             if (timer) clearInterval(timer);
             cleanupResizeListeners();
-            debouncedUpdateNote.flush();
-            debouncedSyncIfLoggedIn.flush();
-            debouncedPersistKanban.flush();
             
             // Cleanup auth subscription
             if ((window as any).__authSubscription) {
@@ -3207,12 +1680,7 @@
                     localStorage.removeItem('neuronotes_current_user_id');
                 }
                 // Clear UI state on logout
-                notes = [];
-                folders = [];
                 calendarEvents = [];
-                kanban = [];
-                selectedNoteId = '';
-                currentFolderId = null;
                 // Reload workspace data (will load from local DB)
                 await loadActiveWorkspaceData();
             }
@@ -3305,8 +1773,9 @@
         bind:showNotes
         bind:showCalendar
         bind:showKanban
+        bind:savePanelSelection
         onClose={() => showEditPanelsModal = false}
-        onDone={() => {
+        onDone={async () => {
             if (!showNotes) {
                 isNotesMinimized = false;
             }
@@ -3315,6 +1784,32 @@
             }
             if (!showKanban) {
                 isKanbanMinimized = false;
+            }
+            
+            if (savePanelSelection) {
+                // Save panel preferences
+                try {
+                    await db.putSetting({ 
+                        key: 'panelPreferences', 
+                        value: JSON.stringify({ showNotes, showCalendar, showKanban }) 
+                    });
+                } catch (e) {
+                    console.error('Failed to save panel preferences:', e);
+                }
+            } else {
+                // Clear saved preferences and reset to defaults
+                try {
+                    const existing = await db.getSettingByKey('panelPreferences');
+                    if (existing) {
+                        await db.putSetting({ key: 'panelPreferences', value: '' });
+                    }
+                    // Reset to default (all panels visible)
+                    showNotes = true;
+                    showCalendar = true;
+                    showKanban = true;
+                } catch (e) {
+                    console.error('Failed to clear panel preferences:', e);
+                }
             }
         }}
     />
@@ -3329,616 +1824,21 @@
         class:notes-calendar={showNotes && showCalendar && !showKanban}
         class:notes-kanban={showNotes && !showCalendar && showKanban}
         class:calendar-kanban={!showNotes && showCalendar && showKanban}
-        style="--notes-width: {notesPanelWidth}%; --calendar-height: {calendarPanelHeight}%"
+        style="--notes-width: {notesPanelWidth}%; --calendar-height: {calendarPanelHeight}%; --calendar-width: {calendarPanelWidth}%"
     >
         {#if showNotes}
-        <section
-            class="panel notes-panel"
-            class:minimized={isNotesMinimized}
-            bind:clientWidth={notesPanelClientWidth}
-            style="max-width: 100%; overflow: hidden;"
-        >
-            <div class="panel-header">
-                {#if !isNotesMinimized}
-                    {#if currentFolder}
-                        <button class="small-btn" on:click={goBack} title="Go back">&larr;</button>
-                        <div
-                            class="panel-title"
-                            on:dblclick={() => (isEditingHeaderName = true)}
-                            title="Double-click to rename"
-                        >
-                            {#if isEditingHeaderName}
-                                <input
-                                    value={currentFolder.name}
-                                    use:focus
-                                    on:blur={(e) =>
-                                        renameFolder(
-                                            currentFolder.id,
-                                            (e.target as HTMLInputElement).value
-                                        )}
-                                    on:keydown={(e) => {
-                                        if (e.key === 'Enter')
-                                            (e.target as HTMLInputElement).blur();
-                                        if (e.key === 'Escape') isEditingHeaderName = false;
-                                    }}
-                                />
-                            {:else}
-                                / {currentFolder.name}
-                            {/if}
-                        </div>
-                    {:else}
-                        <div class="panel-title">Notes</div>
-                    {/if}
-                {:else}
-                    <div class="panel-title">Notes</div>
-                {/if}
-
-                <div class="spacer"></div>
-
-                {#if !isNotesMinimized}
-                    <button
-                        class="small-btn toggle-notelist-btn-header"
-                        on:click={toggleNoteList}
-                        title={isNoteListVisible ? 'Hide Note List' : 'Show Note List'}
-                    >
-                        {isNoteListVisible ? '«' : '»'}
-                    </button>
-                    <div class="notes-actions">
-                        {#if currentFolder}
-                            <button
-                                class="small-btn danger"
-                                on:click={() => deleteFolder(currentFolder.id)}
-                            >
-                                Delete Folder
-                            </button>
-                        {/if}
-                        <button class="small-btn" on:click={addFolder}>+ Folder</button>
-                        <button class="small-btn" on:click={() => addNote('spreadsheet')}>
-                            + Sheet
-                        </button>
-                        <button class="small-btn" on:click={() => addNote('text')}>+ Note</button>
-                    </div>
-                {/if}
-
-                <button
-                    class="small-btn panel-minimize-btn"
-                    on:click={toggleNotesMinimized}
-                    title={isNotesMinimized ? 'Expand' : 'Collapse'}
-                >
-                    {isNotesMinimized ? '⤢' : '⤡'}
-                </button>
-            </div>
-
-            {#if !isNotesMinimized && currentNote}
-                <div class="panel-header toolbar-container">
-                    <button
-                        class="toolbar-btn toggle-notelist-btn"
-                        on:click={toggleNoteList}
-                        title={isNoteListVisible ? 'Hide Note List' : 'Show Note List'}
-                    >
-                        {isNoteListVisible ? '«' : '»'}
-                    </button>
-                    {#if currentNote.type !== 'spreadsheet'}
-                        <div class="format-toolbar">
-                            <div class="font-size-controls" title="Change font size">
-                                <button
-                                    class="toolbar-btn"
-                                    on:click={() => modifyFontSize(-2)}
-                                    on:mousedown={(e) => e.preventDefault()}>▼</button
-                                >
-                                <div class="font-size-display">
-                                    {selectedFontSize}px
-                                </div>
-                                <button
-                                    class="toolbar-btn"
-                                    on:click={() => modifyFontSize(2)}
-                                    on:mousedown={(e) => e.preventDefault()}>▲</button
-                                >
-                            </div>
-                            <button
-                                class="toolbar-btn"
-                                on:click={() => applyFormatCommand('bold')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Bold"
-                                style="font-weight: bold;">B</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() => applyFormatCommand('italic')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Italic"
-                                style="font-style: italic;">I</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() => applyFormatCommand('insertUnorderedList')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Dotted list">●</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={insertCheckbox}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Insert checkbox">☑</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() => applyFormatCommand('justifyLeft')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Align left">◧</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() => applyFormatCommand('justifyCenter')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Align center">◫</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() => applyFormatCommand('justifyRight')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Align right">◨</button
-                            >
-                        </div>
-                    {:else}
-                        <div class="format-toolbar">
-                            <button
-                                class="toolbar-btn"
-                                on:click={() =>
-                                    spreadsheetComponentInstance.applyStyle('fontWeight', 'bold')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Bold"
-                                style="font-weight: bold;">B</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() =>
-                                    spreadsheetComponentInstance.applyStyle('fontStyle', 'italic')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Italic"
-                                style="font-style: italic;">I</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() =>
-                                    spreadsheetComponentInstance.applyStyle('textAlign', 'left')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Align left">◧</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() =>
-                                    spreadsheetComponentInstance.applyStyle('textAlign', 'center')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Align center">◫</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                on:click={() =>
-                                    spreadsheetComponentInstance.applyStyle('textAlign', 'right')}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Align right">◨</button
-                            >
-                            <button
-                                class="toolbar-btn"
-                                disabled={!canMergeOrUnmerge}
-                                on:click={() => spreadsheetComponentInstance.toggleMerge()}
-                                on:mousedown={(e) => e.preventDefault()}
-                                title="Merge/Unmerge Cells">⧉</button
-                            >
-                        </div>
-                    {/if}
-                </div>
-            {/if}
-
-            {#if !isNotesMinimized}
-                <div
-                    class="notes"
-                    style="grid-template-columns: {isNoteListVisible ? '180px' : '0'} 1fr;"
-                >
-                    <aside
-                        class="note-list"
-                        on:dragleave={() => {
-                            dropIndex = null;
-                        }}
-                    >
-                        {#if currentFolder}
-                            <div
-                                class="back-to-root-item"
-                                class:drag-over={dragOverRoot}
-                                on:dragover={(e) => {
-                                    e.preventDefault();
-                                    dragOverRoot = true;
-                                }}
-                                on:dragleave={() => (dragOverRoot = false)}
-                                on:drop|preventDefault={handleDropOnRoot}
-                            >
-                                ...
-                            </div>
-                        {/if}
-
-                        {#each displayList as item, i (item.id)}
-                            {#if item.displayType === 'folder'}
-                                <button
-                                    class="folder-item"
-                                    class:drag-over={dragOverFolderId === item.id}
-                                    draggable="true"
-                                    on:click={() => {
-                                        if (!isDragging && editingFolderId !== item.id) {
-                                            openFolder(item.id);
-                                        }
-                                    }}
-                                    on:dragstart={(e) => {
-                                        e.stopPropagation();
-                                        handleDragStart(e, item);
-                                    }}
-                                    on:dragover|preventDefault|stopPropagation={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        if (e.dataTransfer) {
-                                            e.dataTransfer.dropEffect = 'move';
-                                        }
-                                        dropIndex = i;
-                                        if (draggedItemType === 'note') {
-                                            dragOverFolderId = item.id;
-                                        } else {
-                                            dragOverFolderId = null;
-                                        }
-                                    }}
-                                    on:dragleave={() => {
-                                        dragOverFolderId = null;
-                                        dropIndex = null;
-                                    }}
-                                    on:dragend={() => {
-                                        isDragging = false;
-                                        draggedItemType = null;
-                                        dragOverFolderId = null;
-                                        dropIndex = null;
-                                    }}
-                                    on:drop|preventDefault|stopPropagation={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        const data = e.dataTransfer?.getData('application/json');
-                                        if (data) {
-                                            try {
-                                                const parsed = JSON.parse(data);
-                                                if (parsed.displayType === 'note') {
-                                                    handleDropOnFolder(e, item);
-                                                } else {
-                                                    handleReorderDrop(e, i);
-                                                }
-                                            } catch (err) {
-                                                handleReorderDrop(e, i);
-                                            }
-                                        } else {
-                                            handleReorderDrop(e, i);
-                                        }
-                                    }}
-                                >
-                                    {#if dropIndex === i}
-                                        <div class="drop-indicator"></div>
-                                    {/if}
-                                    {#if editingFolderId === item.id}
-                                        <input
-                                            value={(item as Folder).name}
-                                            use:focus
-                                            on:blur={(e) =>
-                                                renameFolder(
-                                                    item.id,
-                                                    (e.target as HTMLInputElement).value
-                                                )}
-                                            on:keydown={(e) => {
-                                                if (e.key === 'Enter')
-                                                    (e.target as HTMLInputElement).blur();
-                                            }}
-                                        />
-                                    {:else}
-                                        <div
-                                            class="name"
-                                            on:dblclick|stopPropagation={() =>
-                                                (editingFolderId = item.id)}
-                                        >
-                                            <span class="folder-icon">{@html FolderIcon}</span> {(item as Folder).name}
-                                        </div>
-                                    {/if}
-                                </button>
-                            {:else}
-                                <div
-                                    class="note-item {selectedNoteId === item.id ? 'active' : ''}"
-                                    on:click={() => selectNote(item.id)}
-                                    draggable="true"
-                                    on:dragstart={(e) => {
-                                        e.stopPropagation();
-                                        handleDragStart(e, item);
-                                    }}
-                                    on:dragover|preventDefault|stopPropagation={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        if (e.dataTransfer) {
-                                            e.dataTransfer.dropEffect = 'move';
-                                        }
-                                        dropIndex = i;
-                                    }}
-                                    on:dragleave={() => {
-                                        dropIndex = null;
-                                    }}
-                                    on:dragend={() => {
-                                        isDragging = false;
-                                        draggedItemType = null;
-                                        dropIndex = null;
-                                    }}
-                                    on:drop|preventDefault|stopPropagation={(e) =>
-                                        handleReorderDrop(e, i)}
-                                >
-                                    {#if dropIndex === i}
-                                        <div class="drop-indicator"></div>
-                                    {/if}
-                                    {#if editingNoteId === item.id}
-                                        <input
-                                            value={(item as Note).title}
-                                            use:focus
-                                            on:blur={(e) =>
-                                                renameNote(
-                                                    item.id,
-                                                    (e.target as HTMLInputElement).value
-                                                )}
-                                            on:keydown={(e) => {
-                                                if (e.key === 'Enter')
-                                                    (e.target as HTMLInputElement).blur();
-                                            }}
-                                        />
-                                    {:else}
-                                        <div
-                                            class="title"
-                                            on:dblclick|stopPropagation={() =>
-                                                (editingNoteId = item.id)}
-                                        >
-                                            {(item as Note).title || 'Untitled'}
-                                        </div>
-                                    {/if}
-                                    <button
-                                        class="small-btn danger"
-                                        on:click|stopPropagation={() => deleteNote(item.id)}
-                                        title="Delete note"
-                                    >
-                                        Delete
-                                    </button>
-                                </div>
-                            {/if}
-                        {/each}
-                    </aside>
-
-                    <div class="note-editor">
-                        {#if currentNote}
-                            {#key currentNote.id}
-                                {#if parsedCurrentNote && parsedCurrentNote.type === 'spreadsheet' && parsedCurrentNote.spreadsheet}
-                                    <div class="spreadsheet-wrapper">
-                                        {#if SpreadsheetComponent}
-                                            <svelte:component
-                                                this={SpreadsheetComponent}
-                                            bind:this={spreadsheetComponentInstance}
-                                            bind:spreadsheetData={parsedCurrentNote.spreadsheet}
-                                            bind:selectedCell={selectedSheetCell}
-                                            bind:selection={sheetSelection}
-                                            on:update={() => {
-                                                // When spreadsheet component updates, get the latest data from parsedCurrentNote
-                                                // The bind:spreadsheetData={parsedCurrentNote.spreadsheet} updates parsedCurrentNote.spreadsheet
-                                                if (currentNote && currentNote.type === 'spreadsheet') {
-                                                    // Get the latest spreadsheet data from parsedCurrentNote (updated via bind)
-                                                    const latestSpreadsheet = parsedCurrentNote?.spreadsheet;
-                                                    
-                                                    if (latestSpreadsheet) {
-                                                        console.log('[spreadsheet update] Saving spreadsheet data for note', currentNote.id);
-                                                        
-                                                        // Update the note in the array immediately so UI reflects changes
-                                                        const index = notes.findIndex((n) => n.id === currentNote.id);
-                                                        if (index !== -1) {
-                                                            // Also update the note's _spreadsheetJson to keep it in sync
-                                                            const noteWithRaw = notes[index] as any;
-                                                            noteWithRaw.spreadsheet = latestSpreadsheet;
-                                                            noteWithRaw._spreadsheetJson = latestSpreadsheet;
-                                                            notes[index] = {
-                                                                ...notes[index],
-                                                                spreadsheet: latestSpreadsheet,
-                                                                updatedAt: Date.now()
-                                                            };
-                                                            notes = [...notes];
-                                                        }
-                                                        
-                                                        // Create note object with latest spreadsheet data for saving
-                                                        const noteWithLatestData = {
-                                                            ...currentNote,
-                                                            spreadsheet: latestSpreadsheet
-                                                        };
-                                                        
-                                                        // Use debouncedUpdateNote which will handle saving, reloading, and syncing
-                                                        debouncedUpdateNote(noteWithLatestData);
-                                                    } else {
-                                                        console.warn('[spreadsheet update] No spreadsheet data found in parsedCurrentNote for note', currentNote.id, 'parsedCurrentNote:', parsedCurrentNote);
-                                                    }
-                                                } else {
-                                                    if (!currentNote) console.warn('[spreadsheet update] No currentNote');
-                                                    if (currentNote && currentNote.type !== 'spreadsheet') console.warn('[spreadsheet update] Note is not a spreadsheet:', currentNote.type);
-                                                }
-                                                triggerNoteUpdate();
-                                            }}
-                                        />
-                                        {:else}
-                                            <div style="padding: 20px; text-align: center; color: var(--text-muted);">
-                                                Loading spreadsheet...
-                                            </div>
-                                        {/if}
-                                    </div>
-                                {:else}
-                                    <div class="note-content">
-                                        <div
-                                            class="contenteditable"
-                                            contenteditable="true"
-                                            bind:this={editorDiv}
-                                            on:input={(e) => {
-                                                if (currentNote && editorDiv) {
-                                                    // Update currentNote.contentHTML from editor
-                                                    currentNote.contentHTML = editorDiv.innerHTML;
-                                                    debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
-                                                    debouncedUpdateNote(currentNote);
-                                                }
-                                            }}
-                                            on:paste={handlePlainTextPaste}
-                                            on:keydown={(e) => {
-                                                if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-                                                    e.preventDefault();
-                                                    if (currentNote && undoNote(currentNote.id)) {
-                                                        return;
-                                                    }
-                                                    document.execCommand('undo');
-                                                } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-                                                    e.preventDefault();
-                                                    if (currentNote && redoNote(currentNote.id)) {
-                                                        return;
-                                                    }
-                                                    document.execCommand('redo');
-                                                } else if (e.key === 'Enter') {
-                                                    // Check if current line has a checkbox
-                                                    const selection = window.getSelection();
-                                                    if (selection && selection.rangeCount > 0) {
-                                                        const range = selection.getRangeAt(0);
-                                                        const container = range.commonAncestorContainer;
-                                                        
-                                                        // Find the current line/block element
-                                                        let lineElement = container.nodeType === Node.TEXT_NODE 
-                                                            ? container.parentElement 
-                                                            : container as Element;
-                                                        
-                                                        // Walk up to find the block element (div, p, or the editor itself)
-                                                        while (lineElement && lineElement !== editorDiv && 
-                                                               lineElement.nodeName !== 'DIV' && 
-                                                               lineElement.nodeName !== 'P' &&
-                                                               lineElement.nodeName !== 'BR') {
-                                                            lineElement = lineElement.parentElement;
-                                                        }
-                                                        
-                                                        // Check if this line contains a checkbox
-                                                        let hasCheckbox = false;
-                                                        
-                                                        if (lineElement) {
-                                                            hasCheckbox = lineElement.querySelector('.note-checkbox') !== null;
-                                                        }
-                                                        
-                                                        // Also check if we're right after a checkbox
-                                                        const node = range.startContainer;
-                                                        const offset = range.startOffset;
-                                                        
-                                                        // Check if we're immediately after a checkbox
-                                                        if (node.nodeType === Node.TEXT_NODE && offset === 0) {
-                                                            const prevSibling = node.previousSibling;
-                                                            if (prevSibling && prevSibling.nodeName === 'INPUT' && 
-                                                                (prevSibling as HTMLInputElement).type === 'checkbox') {
-                                                                hasCheckbox = true;
-                                                            }
-                                                        } else if (node.nodeType === Node.TEXT_NODE) {
-                                                            // Check previous siblings
-                                                            let checkNode = node.previousSibling;
-                                                            while (checkNode) {
-                                                                if (checkNode.nodeName === 'INPUT' && 
-                                                                    (checkNode as HTMLInputElement).type === 'checkbox') {
-                                                                    hasCheckbox = true;
-                                                                    break;
-                                                                }
-                                                                if (checkNode.nodeName === 'BR') {
-                                                                    break;
-                                                                }
-                                                                checkNode = checkNode.previousSibling;
-                                                            }
-                                                        }
-                                                        
-                                                        // Also check the current container and its parents for checkboxes
-                                                        if (!hasCheckbox) {
-                                                            let checkElement: Node | null = container;
-                                                            while (checkElement && checkElement !== editorDiv) {
-                                                                if (checkElement.nodeType === Node.ELEMENT_NODE) {
-                                                                    const el = checkElement as Element;
-                                                                    if (el.querySelector && el.querySelector('.note-checkbox')) {
-                                                                        hasCheckbox = true;
-                                                                        break;
-                                                                    }
-                                                                }
-                                                                checkElement = checkElement.parentNode;
-                                                            }
-                                                        }
-                                                        
-                                                        if (hasCheckbox) {
-                                                            e.preventDefault();
-                                                            
-                                                            // Insert a line break
-                                                            const br = document.createElement('br');
-                                                            range.insertNode(br);
-                                                            
-                                                            // Create a new checkbox
-                                                            const checkbox = document.createElement('input');
-                                                            checkbox.type = 'checkbox';
-                                                            checkbox.className = 'note-checkbox';
-                                                            checkbox.style.marginRight = '6px';
-                                                            checkbox.style.verticalAlign = 'middle';
-                                                            checkbox.style.cursor = 'pointer';
-                                                            
-                                                            checkbox.addEventListener('change', () => {
-                                                                if (currentNote) {
-                                                                    debouncedUpdateNote(currentNote);
-                                                                }
-                                                            });
-                                                            
-                                                            // Insert checkbox after the line break
-                                                            range.setStartAfter(br);
-                                                            range.setEndAfter(br);
-                                                            range.insertNode(checkbox);
-                                                            
-                                                            // Insert space after checkbox
-                                                            const space = document.createTextNode(' ');
-                                                            range.setStartAfter(checkbox);
-                                                            range.setEndAfter(checkbox);
-                                                            range.insertNode(space);
-                                                            
-                                                            // Position cursor after the space
-                                                            range.setStartAfter(space);
-                                                            range.setEndAfter(space);
-                                                            range.collapse(true);
-                                                            
-                                                            selection.removeAllRanges();
-                                                            selection.addRange(range);
-                                                            
-                                                            // Trigger input event to save
-                                                            if (currentNote && editorDiv) {
-                                                                currentNote.contentHTML = editorDiv.innerHTML;
-                                                                debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
-                                                                debouncedUpdateNote(currentNote);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }}
-                                        ></div>
-                                    </div>
-                                {/if}
-                            {/key}
-                        {:else}
-                            <div style="padding:16px; color: var(--text-muted);">
-                                {#if currentFolder}
-                                    Select a note from the list or create a new one.
-                                {:else if displayList.length === 0}
-                                    Create a note or folder to get started.
-                                {:else}
-                                    Select a note to view its content.
-                                {/if}
-                            </div>
-                        {/if}
-                    </div>
-                </div>
-            {/if}
-        </section>
+        <NotesPanel
+            isMinimized={isNotesMinimized}
+            {activeWorkspaceId}
+            onToggleMinimized={toggleNotesMinimized}
+            onSyncIfLoggedIn={syncIfLoggedIn}
+            onLoadActiveWorkspaceData={loadActiveWorkspaceData}
+            bind:notesPanelClientWidth
+        />
         {/if}
 
-        {#if showNotes && (showCalendar || showKanban)}
-        <div class="resizer-wrapper vertical" on:mousedown={startVerticalResize} title="Resize">
+        {#if showNotes && showCalendar && showKanban}
+        <div class="resizer-wrapper vertical" class:hidden={isNotesMinimized} on:mousedown={startVerticalResize} title="Resize">
             <div class="panel-resizer-pill">
                 <div class="dot"></div>
                 <div class="dot"></div>
@@ -3947,419 +1847,7 @@
         </div>
         {/if}
 
-        {#if !showNotes && showCalendar && showKanban}
-            {#if showCalendar}
-            <div class="panel calendar-panel" class:minimized={isCalendarMinimized}>
-                <div class="panel-header">
-                    <div class="panel-title today-header">
-                        <span class="date">{todayDateString}</span>
-                        <span class="time">{todayTimeString}</span>
-                    </div>
-                    <div class="spacer"></div>
-                    {#if browser && !isCalendarMinimized}
-                        <div class="calendar-controls">
-                            <button 
-                                class="small-btn" 
-                                class:active={useCommonCalendar}
-                                on:click={toggleCalendarMode}
-                                title={useCommonCalendar ? 'Common calendar (all workspaces)' : 'Workspace-specific calendar'}
-                            >
-                                {@html useCommonCalendar ? GlobeIcon : FolderIcon}
-                            </button>
-                            <button class="small-btn" on:click={prevWeek}>&larr; <span class="btn-text">Prev</span></button>
-                            <button
-                                class="small-btn"
-                                on:click={() => (weekStart = startOfWeek(today, 1))}
-                            >
-                                Today
-                            </button>
-                            <button class="small-btn" on:click={nextWeek}><span class="btn-text">Next</span> &rarr;</button>
-                            <button
-                                class="small-btn"
-                                class:active={startWithCurrentDay}
-                                on:click={() => (startWithCurrentDay = !startWithCurrentDay)}
-                                title={startWithCurrentDay ? 'Start week with Monday' : 'Start week with current day'}
-                            >
-                                {startWithCurrentDay ? 'Mon' : 'Today'}
-                            </button>
-                        </div>
-                    {/if}
-                    <button
-                        class="small-btn panel-minimize-btn"
-                        on:click={toggleCalendarMinimized}
-                        title={isCalendarMinimized ? 'Expand' : 'Collapse'}
-                    >
-                        {isCalendarMinimized ? '⤢' : '⤡'}
-                    </button>
-                </div>
-
-                {#if browser && !isCalendarMinimized}
-                    <div class="calendar-grid">
-                        {#each weekDays as d (ymd(d))}
-                            <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
-                                <div class="date">{dmy(d)}</div>
-                                <div class="day-name">{DAY_NAMES[d.getDay()]}</div>
-                                {#each eventsByDay[ymd(d)] || [] as ev (ev.id + ymd(d))}
-                                    <div 
-                                        class="event" 
-                                        class:event-no-time={!ev.time}
-                                        title={ev.title}
-                                        style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
-                                        on:dblclick={() => startEditingEvent(ev, ymd(d))}
-                                    >
-                                        {#if editingEventId === ev.id && editingEventDate === ymd(d)}
-                                            <div class="event-details event-editing">
-                                                <input
-                                                    type="text"
-                                                    class="event-edit-time"
-                                                    bind:value={editingEventTime}
-                                                    placeholder="HH:MM"
-                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
-                                                    on:keydown={(e) => {
-                                                        if (e.key === 'Enter') {
-                                                            e.preventDefault();
-                                                            saveEditedEvent();
-                                                        }
-                                                        if (e.key === 'Escape') {
-                                                            e.preventDefault();
-                                                            cancelEditingEvent();
-                                                        }
-                                                    }}
-                                                    on:focus={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
-                                                    }}
-                                                    on:blur={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = 'none';
-                                                    }}
-                                                />
-                                                <input
-                                                    type="text"
-                                                    class="event-edit-title"
-                                                    bind:value={editingEventTitle}
-                                                    placeholder="Event title"
-                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
-                                                    on:keydown={(e) => {
-                                                        if (e.key === 'Enter') {
-                                                            e.preventDefault();
-                                                            saveEditedEvent();
-                                                        }
-                                                        if (e.key === 'Escape') {
-                                                            e.preventDefault();
-                                                            cancelEditingEvent();
-                                                        }
-                                                    }}
-                                                    on:focus={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
-                                                    }}
-                                                    on:blur={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = 'none';
-                                                    }}
-                                                />
-                                            </div>
-                                        {:else}
-                                            <div class="event-details">
-                                                {#if ev.time}
-                                                    <div 
-                                                        class="time"
-                                                        style="color: {ev.color || 'var(--accent-purple)'};"
-                                                    >
-                                                        {ev.time}
-                                                    </div>
-                                                {/if}
-                                                <div class="title">{ev.title}</div>
-                                            </div>
-                                            <button
-                                                class="delete-event-btn"
-                                                on:click={() => deleteEvent(ev, ymd(d))}
-                                                title="Delete event"
-                                            >
-                                                ×
-                                            </button>
-                                        {/if}
-                                    </div>
-                                {/each}
-                            </div>
-                        {/each}
-                    </div>
-
-                    <div class="calendar-add">
-                        <input 
-                            type="text" 
-                            bind:value={newEventDate} 
-                            placeholder={dmy(today).replace(/-/g, '/')}
-                            aria-label="Event date"
-                            pattern="\d{2}/\d{2}/\d{4}"
-                        />
-                        <input 
-                            type="text" 
-                            bind:value={newEventTime} 
-                            placeholder="HH:MM"
-                            aria-label="Event time"
-                            pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
-                        />
-                        <input
-                            type="text"
-                            bind:value={newEventTitle}
-                            placeholder="Title"
-                            aria-label="Event title"
-                            on:keydown={(e) => {
-                                if (e.key === 'Enter' && !showRepeatOptions) addEvent();
-                            }}
-                        />
-                        <button
-                            type="button"
-                            class="color-cycle-btn"
-                            style="background-color: {newEventColor};"
-                            on:click={cycleEventColor}
-                            aria-label="Event color"
-                            title="Click to cycle through colors"
-                        ></button>
-                        <button 
-                            class="small-btn" 
-                            class:active={showRepeatOptions}
-                            on:click={() => showRepeatOptions = !showRepeatOptions}
-                            title="Repeat options"
-                        >
-                            {@html RepeatIcon}
-                        </button>
-                        <button class="small-btn" on:click={addEvent}>Add</button>
-                    </div>
-
-                    {#if showRepeatOptions}
-                        <div class="repeat-options">
-                            <div class="repeat-option-row">
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="none" />
-                                    No repeat
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="daily" />
-                                    Daily
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="weekly" />
-                                    Weekly
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="monthly" />
-                                    Monthly
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="yearly" />
-                                    Yearly
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="custom" />
-                                    Custom days
-                                </label>
-                            </div>
-                            {#if newEventRepeat === 'custom'}
-                                <div class="custom-days">
-                                    {#each ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as day, i}
-                                        <label class="day-checkbox">
-                                            <input type="checkbox" bind:checked={newEventCustomDays[i]} />
-                                            {day}
-                                        </label>
-                                    {/each}
-                                </div>
-                            {/if}
-                        </div>
-                    {/if}
-                {:else if !isCalendarMinimized}
-                    <div style="padding:16px; color: var(--text-muted);">Loading…</div>
-                {/if}
-            </div>
-            {/if}
-
-            {#if showCalendar && showKanban}
-            <div
-                class="resizer-wrapper horizontal"
-                on:mousedown={startHorizontalResize}
-                title="Resize"
-            >
-                <div class="panel-resizer-pill">
-                    <div class="dot"></div>
-                    <div class="dot"></div>
-                    <div class="dot"></div>
-                </div>
-            </div>
-            {/if}
-
-            {#if showKanban}
-            <div class="panel kanban-panel" class:minimized={isKanbanMinimized}>
-                <div class="panel-header">
-                    <div class="panel-title">Kanban</div>
-                    <div class="spacer" />
-                    <div class="kanban-header-actions">
-                        {#if !isKanbanMinimized}
-                            <button class="small-btn" on:click={addColumn}>+ Column</button>
-                        {/if}
-                        <button
-                            class="small-btn panel-minimize-btn"
-                            on:click={toggleKanbanMinimized}
-                            title={isKanbanMinimized ? 'Expand' : 'Collapse'}
-                        >
-                            {isKanbanMinimized ? '⤢' : '⤡'}
-                        </button>
-                    </div>
-                </div>
-
-                {#if !isKanbanMinimized}
-                    <div class="kanban-board">
-                        {#each kanban as col (col.id)}
-                            <div
-                                class="kanban-col"
-                                class:collapsed={col.isCollapsed}
-                                on:dragover|preventDefault={(e) => onColumnDragOver(e, col.id)}
-                                on:drop={(e) => onColumnDrop(col.id, e, false)}
-                            >
-                                <div class="kanban-col-header">
-                                    <button
-                                        class="small-btn kanban-col-collapse-btn"
-                                        on:click={() => toggleColumnCollapse(col.id)}
-                                        title={col.isCollapsed ? 'Expand' : 'Collapse'}
-                                    >
-                                        {col.isCollapsed ? '⤢' : '⤡'}
-                                    </button>
-
-                                    {#if editingColumnId === col.id}
-                                        <input
-                                            value={col.title}
-                                            use:focus
-                                            on:blur={(e) =>
-                                                renameColumn(
-                                                    col.id,
-                                                    (e.target as HTMLInputElement).value
-                                                )}
-                                            on:keydown={(e) => {
-                                                if (e.key === 'Enter')
-                                                    (e.target as HTMLInputElement).blur();
-                                                if (e.key === 'Escape') editingColumnId = null;
-                                            }}
-                                        />
-                                    {:else}
-                                        <div
-                                            class="kanban-col-title-text"
-                                            on:dblclick={() => (editingColumnId = col.id)}
-                                            title="Double-click to rename"
-                                        >
-                                            {col.title}
-                                        </div>
-                                    {/if}
-
-                                    {#if !col.isCollapsed}
-                                        <button
-                                            class="small-btn danger"
-                                            on:click={() => deleteColumn(col.id)}
-                                            title="Delete column"
-                                        >
-                                            Delete
-                                        </button>
-                                    {/if}
-                                </div>
-
-                                {#if !col.isCollapsed}
-                                    <div class="kanban-tasks">
-                                        {#each col.tasks as t, i (t.id)}
-                                            {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === i}
-                                                <div class="drop-indicator"></div>
-                                            {/if}
-                                            <div
-                                                class="kanban-task"
-                                                class:dragging={isDraggingTask &&
-                                                    draggedTaskInfo?.taskId === t.id}
-                                                draggable="true"
-                                                on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
-                                                on:dragend={(e) => handleDragEnd(e)}
-                                                on:dragover|preventDefault|stopPropagation={(e) =>
-                                                    onTaskDragOver(e, col.id, i)}
-                                                on:drop|preventDefault|stopPropagation={(e) =>
-                                                    onColumnDrop(col.id, e, true)}
-                                            >
-                                                {#if editingTaskId === t.id}
-                                                    <input
-                                                        value={t.text}
-                                                        use:focus
-                                                        on:blur={(e) =>
-                                                            renameTask(
-                                                                col.id,
-                                                                t.id,
-                                                                (e.target as HTMLInputElement).value
-                                                            )}
-                                                        on:keydown={(e) => {
-                                                            if (e.key === 'Enter')
-                                                                (
-                                                                    e.target as HTMLInputElement
-                                                                ).blur();
-                                                            if (e.key === 'Escape')
-                                                                editingTaskId = null;
-                                                        }}
-                                                    />
-                                                {:else}
-                                                    <div
-                                                        class="kanban-task-text"
-                                                        on:dblclick={() => (editingTaskId = t.id)}
-                                                        title="Double-click to rename"
-                                                    >
-                                                        {t.text}
-                                                    </div>
-                                                {/if}
-                                                <button
-                                                    class="small-btn danger"
-                                                    on:click={() => deleteTask(col, t.id)}
-                                                    title="Delete task"
-                                                >
-                                                    ×
-                                                </button>
-                                            </div>
-                                        {/each}
-                                        {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === col.tasks.length}
-                                            <div class="drop-indicator"></div>
-                                        {/if}
-                                    </div>
-
-                                    <div class="kanban-actions">
-                                        <input
-                                            type="text"
-                                            placeholder="New task..."
-                                            on:keydown={(e) => {
-                                                const target = e.target as HTMLInputElement;
-                                                if (e.key === 'Enter' && target.value.trim()) {
-                                                    addTask(col, target.value);
-                                                    target.value = '';
-                                                }
-                                            }}
-                                        />
-                                        <button
-                                            class="small-btn"
-                                            on:click={(e) => {
-                                                const input = (e.currentTarget as HTMLElement)
-                                                    .previousElementSibling as HTMLInputElement;
-                                                if (input.value.trim()) {
-                                                    addTask(col, input.value);
-                                                    input.value = '';
-                                                }
-                                            }}
-                                        >
-                                            Add
-                                        </button>
-                                    </div>
-                                {/if}
-                            </div>
-                        {/each}
-                    </div>
-                {/if}
-            </div>
-            {/if}
-        {:else if showCalendar || showKanban}
+        {#if showCalendar || showKanban}
         <section
             class="right"
             class:calendar-minimized={isCalendarMinimized}
@@ -4367,246 +1855,19 @@
             class:single-panel={(showCalendar && !showKanban) || (!showCalendar && showKanban)}
         >
             {#if showCalendar}
-            <div class="panel calendar-panel" class:minimized={isCalendarMinimized}>
-                <div class="panel-header">
-                    <div class="panel-title today-header">
-                        <span class="date">{todayDateString}</span>
-                        <span class="time">{todayTimeString}</span>
-                    </div>
-                    <div class="spacer"></div>
-                    {#if browser && !isCalendarMinimized}
-                        <div class="calendar-controls">
-                            <button 
-                                class="small-btn" 
-                                class:active={useCommonCalendar}
-                                on:click={toggleCalendarMode}
-                                title={useCommonCalendar ? 'Common calendar (all workspaces)' : 'Workspace-specific calendar'}
-                            >
-                                {@html useCommonCalendar ? GlobeIcon : FolderIcon}
-                            </button>
-                            <button class="small-btn" on:click={prevWeek}>&larr; <span class="btn-text">Prev</span></button>
-                            <button
-                                class="small-btn"
-                                on:click={goToToday}
-                            >
-                                Today
-                            </button>
-                            <button class="small-btn" on:click={nextWeek}><span class="btn-text">Next</span> &rarr;</button>
-                            <button
-                                class="small-btn"
-                                class:active={startWithCurrentDay}
-                                on:click={() => {
-                                    startWithCurrentDay = !startWithCurrentDay;
-                                    if (startWithCurrentDay) {
-                                        currentDayViewDate = new Date(today);
-                                    } else {
-                                        weekStart = startOfWeek(today, 1);
-                                    }
-                                }}
-                                title={startWithCurrentDay ? 'Start week with Monday' : 'Start week with current day'}
-                            >
-                                {startWithCurrentDay ? 'Mon' : 'Today'}
-                            </button>
-                        </div>
-                    {/if}
-                    <button
-                        class="small-btn panel-minimize-btn"
-                        on:click={toggleCalendarMinimized}
-                        title={isCalendarMinimized ? 'Expand' : 'Collapse'}
-                    >
-                        {isCalendarMinimized ? '⤢' : '⤡'}
-                    </button>
-                </div>
-
-                {#if browser && !isCalendarMinimized}
-                    <div class="calendar-grid">
-                        {#each weekDays as d (ymd(d))}
-                            <div class="calendar-cell" class:today={ymd(d) === ymd(today)}>
-                                <div class="date">{dmy(d)}</div>
-                                <div class="day-name">{DAY_NAMES[d.getDay()]}</div>
-                                {#each eventsByDay[ymd(d)] || [] as ev (ev.id + ymd(d))}
-                                    <div 
-                                        class="event" 
-                                        class:event-no-time={!ev.time}
-                                        title={ev.title}
-                                        style="background: {ev.color ? hexToRgba(ev.color, 0.2) : 'rgba(140, 122, 230, 0.2)'}; border-color: {ev.color || 'var(--accent-purple)'};"
-                                        on:dblclick={() => startEditingEvent(ev, ymd(d))}
-                                    >
-                                        {#if editingEventId === ev.id && editingEventDate === ymd(d)}
-                                            <div class="event-details event-editing">
-                                                <input
-                                                    type="text"
-                                                    class="event-edit-time"
-                                                    bind:value={editingEventTime}
-                                                    placeholder="HH:MM"
-                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
-                                                    on:keydown={(e) => {
-                                                        if (e.key === 'Enter') {
-                                                            e.preventDefault();
-                                                            saveEditedEvent();
-                                                        }
-                                                        if (e.key === 'Escape') {
-                                                            e.preventDefault();
-                                                            cancelEditingEvent();
-                                                        }
-                                                    }}
-                                                    on:focus={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
-                                                    }}
-                                                    on:blur={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = 'none';
-                                                    }}
-                                                />
-                                                <input
-                                                    type="text"
-                                                    class="event-edit-title"
-                                                    bind:value={editingEventTitle}
-                                                    placeholder="Event title"
-                                                    style="border-color: {ev.color || 'var(--accent-purple)'};"
-                                                    on:keydown={(e) => {
-                                                        if (e.key === 'Enter') {
-                                                            e.preventDefault();
-                                                            saveEditedEvent();
-                                                        }
-                                                        if (e.key === 'Escape') {
-                                                            e.preventDefault();
-                                                            cancelEditingEvent();
-                                                        }
-                                                    }}
-                                                    on:focus={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${color}`;
-                                                    }}
-                                                    on:blur={(e) => {
-                                                        const color = ev.color || 'var(--accent-purple)';
-                                                        e.currentTarget.style.borderColor = color;
-                                                        e.currentTarget.style.boxShadow = 'none';
-                                                    }}
-                                                />
-                                            </div>
-                                        {:else}
-                                            <div class="event-details">
-                                                {#if ev.time}
-                                                    <div 
-                                                        class="time"
-                                                        style="color: {ev.color || 'var(--accent-purple)'};"
-                                                    >
-                                                        {ev.time}
-                                                    </div>
-                                                {/if}
-                                                <div class="title">{ev.title}</div>
-                                            </div>
-                                            <button
-                                                class="delete-event-btn"
-                                                on:click={() => deleteEvent(ev, ymd(d))}
-                                                title="Delete event"
-                                            >
-                                                ×
-                                            </button>
-                                        {/if}
-                                    </div>
-                                {/each}
-                            </div>
-                        {/each}
-                    </div>
-
-                    <div class="calendar-add">
-                        <input 
-                            type="text" 
-                            bind:value={newEventDate} 
-                            placeholder={dmy(today).replace(/-/g, '/')}
-                            aria-label="Event date"
-                            pattern="\d{2}/\d{2}/\d{4}"
-                        />
-                        <input 
-                            type="text" 
-                            bind:value={newEventTime} 
-                            placeholder="HH:MM"
-                            aria-label="Event time"
-                            pattern="([0-1]?[0-9]|2[0-3]):[0-5][0-9]"
-                        />
-                        <input
-                            type="text"
-                            bind:value={newEventTitle}
-                            placeholder="Title"
-                            aria-label="Event title"
-                            on:keydown={(e) => {
-                                if (e.key === 'Enter' && !showRepeatOptions) addEvent();
-                            }}
-                        />
-                        <button
-                            type="button"
-                            class="color-cycle-btn"
-                            style="background-color: {newEventColor};"
-                            on:click={cycleEventColor}
-                            aria-label="Event color"
-                            title="Click to cycle through colors"
-                        ></button>
-                        <button 
-                            class="small-btn" 
-                            class:active={showRepeatOptions}
-                            on:click={() => showRepeatOptions = !showRepeatOptions}
-                            title="Repeat options"
-                        >
-                            {@html RepeatIcon}
-                        </button>
-                        <button class="small-btn" on:click={addEvent}>Add</button>
-                    </div>
-
-                    {#if showRepeatOptions}
-                        <div class="repeat-options">
-                            <div class="repeat-option-row">
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="none" />
-                                    No repeat
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="daily" />
-                                    Daily
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="weekly" />
-                                    Weekly
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="monthly" />
-                                    Monthly
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="yearly" />
-                                    Yearly
-                                </label>
-                                <label>
-                                    <input type="radio" bind:group={newEventRepeat} value="custom" />
-                                    Custom days
-                                </label>
-                            </div>
-                            {#if newEventRepeat === 'custom'}
-                                <div class="custom-days">
-                                    {#each ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as day, i}
-                                        <label class="day-checkbox">
-                                            <input type="checkbox" bind:checked={newEventCustomDays[i]} />
-                                            {day}
-                                        </label>
-                                    {/each}
-                                </div>
-                            {/if}
-                        </div>
-                    {/if}
-                {:else if !isCalendarMinimized}
-                    <div style="padding:16px; color: var(--text-muted);">Loading…</div>
-                {/if}
-            </div>
+            <CalendarPanel
+                isMinimized={isCalendarMinimized}
+                {activeWorkspaceId}
+                onToggleMinimized={toggleCalendarMinimized}
+                onSyncIfLoggedIn={syncIfLoggedIn}
+                onLoadActiveWorkspaceData={loadActiveWorkspaceData}
+            />
             {/if}
 
-            {#if showCalendar && showKanban}
+            {#if showCalendar && showKanban && showNotes}
             <div
                 class="resizer-wrapper horizontal"
+                class:hidden={isCalendarMinimized || isKanbanMinimized}
                 on:mousedown={startHorizontalResize}
                 title="Resize"
             >
@@ -4619,170 +1880,13 @@
             {/if}
 
             {#if showKanban}
-            <div class="panel kanban-panel" class:minimized={isKanbanMinimized}>
-                <div class="panel-header">
-                    <div class="panel-title">Kanban</div>
-                    <div class="spacer" />
-                    <div class="kanban-header-actions">
-                        {#if !isKanbanMinimized}
-                            <button class="small-btn" on:click={addColumn}>+ Column</button>
-                        {/if}
-                        <button
-                            class="small-btn panel-minimize-btn"
-                            on:click={toggleKanbanMinimized}
-                            title={isKanbanMinimized ? 'Expand' : 'Collapse'}
-                        >
-                            {isKanbanMinimized ? '⤢' : '⤡'}
-                        </button>
-                    </div>
-                </div>
-
-                {#if !isKanbanMinimized}
-                    <div class="kanban-board">
-                        {#each kanban as col (col.id)}
-                            <div
-                                class="kanban-col"
-                                class:collapsed={col.isCollapsed}
-                                on:dragover|preventDefault={(e) => onColumnDragOver(e, col.id)}
-                                on:drop={(e) => onColumnDrop(col.id, e, false)}
-                            >
-                                <div class="kanban-col-header">
-                                    <button
-                                        class="small-btn kanban-col-collapse-btn"
-                                        on:click={() => toggleColumnCollapse(col.id)}
-                                        title={col.isCollapsed ? 'Expand' : 'Collapse'}
-                                    >
-                                        {col.isCollapsed ? '⤢' : '⤡'}
-                                    </button>
-
-                                    {#if editingColumnId === col.id}
-                                        <input
-                                            value={col.title}
-                                            use:focus
-                                            on:blur={(e) =>
-                                                renameColumn(
-                                                    col.id,
-                                                    (e.target as HTMLInputElement).value
-                                                )}
-                                            on:keydown={(e) => {
-                                                if (e.key === 'Enter')
-                                                    (e.target as HTMLInputElement).blur();
-                                                if (e.key === 'Escape') editingColumnId = null;
-                                            }}
+            <KanbanPanel
+                isMinimized={isKanbanMinimized}
+                {activeWorkspaceId}
+                onToggleMinimized={toggleKanbanMinimized}
+                onSyncIfLoggedIn={syncIfLoggedIn}
+                onLoadActiveWorkspaceData={loadActiveWorkspaceData}
                                         />
-                                    {:else}
-                                        <div
-                                            class="kanban-col-title-text"
-                                            on:dblclick={() => (editingColumnId = col.id)}
-                                            title="Double-click to rename"
-                                        >
-                                            {col.title}
-                                        </div>
-                                    {/if}
-
-                                    {#if !col.isCollapsed}
-                                        <button
-                                            class="small-btn danger"
-                                            on:click={() => deleteColumn(col.id)}
-                                            title="Delete column"
-                                        >
-                                            Delete
-                                        </button>
-                                    {/if}
-                                </div>
-
-                                {#if !col.isCollapsed}
-                                    <div class="kanban-tasks">
-                                        {#each col.tasks as t, i (t.id)}
-                                            {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === i}
-                                                <div class="drop-indicator"></div>
-                                            {/if}
-                                            <div
-                                                class="kanban-task"
-                                                class:dragging={isDraggingTask &&
-                                                    draggedTaskInfo?.taskId === t.id}
-                                                draggable="true"
-                                                on:dragstart={(e) => onTaskDragStart(col.id, t, e)}
-                                                on:dragend={(e) => handleDragEnd(e)}
-                                                on:dragover|preventDefault|stopPropagation={(e) =>
-                                                    onTaskDragOver(e, col.id, i)}
-                                                on:drop|preventDefault|stopPropagation={(e) =>
-                                                    onColumnDrop(col.id, e, true)}
-                                            >
-                                                {#if editingTaskId === t.id}
-                                                    <input
-                                                        value={t.text}
-                                                        use:focus
-                                                        on:blur={(e) =>
-                                                            renameTask(
-                                                                col.id,
-                                                                t.id,
-                                                                (e.target as HTMLInputElement).value
-                                                            )}
-                                                        on:keydown={(e) => {
-                                                            if (e.key === 'Enter')
-                                                                (
-                                                                    e.target as HTMLInputElement
-                                                                ).blur();
-                                                            if (e.key === 'Escape')
-                                                                editingTaskId = null;
-                                                        }}
-                                                    />
-                                                {:else}
-                                                    <div
-                                                        class="kanban-task-text"
-                                                        on:dblclick={() => (editingTaskId = t.id)}
-                                                        title="Double-click to rename"
-                                                    >
-                                                        {t.text}
-                                                    </div>
-                                                {/if}
-                                                <button
-                                                    class="small-btn danger"
-                                                    on:click={() => deleteTask(col, t.id)}
-                                                    title="Delete task"
-                                                >
-                                                    ×
-                                                </button>
-                                            </div>
-                                        {/each}
-                                        {#if kanbanDropTarget?.colId === col.id && kanbanDropTarget?.taskIndex === col.tasks.length}
-                                            <div class="drop-indicator"></div>
-                                        {/if}
-                                    </div>
-
-                                    <div class="kanban-actions">
-                                        <input
-                                            type="text"
-                                            placeholder="New task..."
-                                            on:keydown={(e) => {
-                                                const target = e.target as HTMLInputElement;
-                                                if (e.key === 'Enter' && target.value.trim()) {
-                                                    addTask(col, target.value);
-                                                    target.value = '';
-                                                }
-                                            }}
-                                        />
-                                        <button
-                                            class="small-btn"
-                                            on:click={(e) => {
-                                                const input = (e.currentTarget as HTMLElement)
-                                                    .previousElementSibling as HTMLInputElement;
-                                                if (input.value.trim()) {
-                                                    addTask(col, input.value);
-                                                    input.value = '';
-                                                }
-                                            }}
-                                        >
-                                            Add
-                                        </button>
-                                    </div>
-                                {/if}
-                            </div>
-                        {/each}
-                    </div>
-                {/if}
-            </div>
             {/if}
         </section>
         {/if}
@@ -5283,23 +2387,43 @@
     
     .main.notes-calendar,
     .main.notes-kanban {
-        grid-template-columns: var(--notes-width, 50%) 24px 1fr;
+        grid-template-columns: var(--notes-width, 50%) 1fr;
+        gap: 24px;
     }
     
     .main.calendar-kanban {
-        grid-template-rows: var(--calendar-height, 50%) 24px 1fr;
         grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
     }
     
     .main.calendar-kanban > .resizer-wrapper.horizontal {
-        grid-row: 2;
-        overflow: visible;
+        display: none;
     }
     
     .main.calendar-kanban .right {
-        display: grid;
-        grid-template-columns: 1fr 24px 1fr;
-        grid-template-rows: 1fr;
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        grid-template-rows: 1fr !important;
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        gap: 24px;
+    }
+    
+    .main.calendar-kanban .right .panel {
+        min-width: 0;
+        min-height: 0;
+    }
+    
+    .main.calendar-kanban .right .calendar-panel {
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+    }
+    
+    .main.calendar-kanban .right .kanban-panel {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
     }
     
     .right.calendar-kanban-only {
@@ -5565,6 +2689,12 @@
     
     .right.single-panel .resizer-wrapper.horizontal {
         display: none !important;
+    }
+    
+    .main.notes-calendar .right,
+    .main.notes-kanban .right {
+        grid-column: 2;
+        min-width: 0;
     }
     .right.calendar-minimized {
         grid-template-rows: min-content 24px 1fr;
@@ -6426,6 +3556,12 @@
         height: 100%;
         min-width: 24px;
     }
+    .resizer-wrapper.vertical.hidden {
+        visibility: hidden;
+        pointer-events: none;
+        min-width: 0;
+        width: 0;
+    }
     .resizer-wrapper.horizontal {
         cursor: row-resize;
         width: 100%;
@@ -6437,6 +3573,12 @@
         -webkit-user-select: none;
         -moz-user-select: none;
         -ms-user-select: none;
+    }
+    .resizer-wrapper.horizontal.hidden {
+        visibility: hidden;
+        pointer-events: none;
+        min-height: 0;
+        height: 0;
     }
     .panel-resizer-pill {
         background: var(--panel-bg-darker);

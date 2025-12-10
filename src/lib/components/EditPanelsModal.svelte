@@ -3,6 +3,7 @@
     export let showNotes = true;
     export let showCalendar = true;
     export let showKanban = true;
+    export let savePanelSelection = false;
 
     // Callbacks
     export let onClose: () => void;
@@ -73,6 +74,17 @@
                 {#if !showNotes && !showCalendar && !showKanban}
                     <p style="margin-top: 16px; color: var(--accent-red); font-size: 14px;">At least one panel must be visible.</p>
                 {/if}
+                <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border);">
+                    <label 
+                        style="display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 12px; border-radius: 8px; border: 1px solid var(--border); transition: background 0.2s;" 
+                        on:mouseenter={(e) => e.currentTarget.style.background = 'var(--panel-bg-darker)'}
+                        on:mouseleave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                        <input type="checkbox" bind:checked={savePanelSelection} style="width: 18px; height: 18px; cursor: pointer;" />
+                        <span style="font-weight: 500;">Save panel selection</span>
+                    </label>
+                    <p style="margin-top: 8px; margin-left: 30px; color: var(--text-secondary); font-size: 12px;">When unchecked, panel selection will reset to default after reload.</p>
+                </div>
             </div>
             <div class="backup-modal-footer">
                 <button 
