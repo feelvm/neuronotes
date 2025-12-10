@@ -269,9 +269,8 @@
             notes = [...notes];
             
             if (note.type === 'spreadsheet') {
-                setTimeout(async () => {
-                    await loadSpreadsheetComponent();
-                }, 0);
+                await tick();
+                await loadSpreadsheetComponent();
             }
         }
         
@@ -293,16 +292,15 @@
             });
         }
         
-        setTimeout(async () => {
-            try {
-                await db.putSetting({
-                    key: `selectedNoteId:${activeWorkspaceId}`,
-                    value: id
-                });
-            } catch (e) {
-                console.error('Failed to save selected note:', e);
-            }
-        }, 0);
+        await tick();
+        try {
+            await db.putSetting({
+                key: `selectedNoteId:${activeWorkspaceId}`,
+                value: id
+            });
+        } catch (e) {
+            console.error('Failed to save selected note:', e);
+        }
     }
 
     async function addNote(type: 'text' | 'spreadsheet' = 'text') {
@@ -377,8 +375,9 @@
 
     async function renameFolder(id: string, newName: string) {
         const folder = folders.find((f) => f.id === id);
-        if (folder && newName.trim()) {
-            folder.name = newName.trim();
+        const trimmed = newName.trim();
+        if (folder && trimmed && trimmed !== folder.name) {
+            folder.name = trimmed;
             await db.putFolder(folder);
             folders = [...folders];
         }
@@ -388,8 +387,9 @@
 
     async function renameNote(id: string, newName: string) {
         const note = notes.find((n) => n.id === id);
-        if (note && newName.trim()) {
-            note.title = newName.trim();
+        const trimmed = newName.trim();
+        if (note && trimmed && trimmed !== note.title) {
+            note.title = trimmed;
             note.updatedAt = Date.now();
             await db.putNote(note);
             notes = [...notes];
@@ -412,8 +412,14 @@
         await db.deleteFolder(folderId);
 
         const deletedNoteIds = new Set(notesToDelete.map((n) => n.id));
-        notes = notes.filter((n) => !deletedNoteIds.has(n.id));
-        folders = folders.filter((f) => f.id !== folderId);
+        const newNotes = notes.filter((n) => !deletedNoteIds.has(n.id));
+        const newFolders = folders.filter((f) => f.id !== folderId);
+        if (newNotes.length !== notes.length) {
+            notes = newNotes;
+        }
+        if (newFolders.length !== folders.length) {
+            folders = newFolders;
+        }
 
         if (currentFolderId === folderId) await goBack();
         await onSyncIfLoggedIn();
@@ -563,8 +569,9 @@
                     };
                     const index = notes.findIndex((n) => n.id === noteToSave.id);
                     if (index !== -1) {
-                        notes[index] = noteToUpdate;
-                        notes = [...notes];
+                        const nextNotes = [...notes];
+                        nextNotes[index] = noteToUpdate;
+                        notes = nextNotes;
                     }
                 } else {
                     console.warn(`[updateNote] Could not find reloaded note ${noteToSave.id} in database`);
@@ -573,15 +580,17 @@
                 console.warn('Failed to reload note from database after save:', e);
                 const index = notes.findIndex((n) => n.id === noteToSave.id);
                 if (index !== -1) {
-                    notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
-                    notes = [...notes];
+                    const nextNotes = [...notes];
+                    nextNotes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
+                    notes = nextNotes;
                 }
             }
         } else {
             const index = notes.findIndex((n) => n.id === noteToSave.id);
             if (index !== -1) {
-                notes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
-                notes = [...notes];
+                const nextNotes = [...notes];
+                nextNotes[index] = { ...noteToSave, contentHTML: noteToSave.contentHTML, spreadsheet: noteToSave.spreadsheet };
+                notes = nextNotes;
             }
         }
         
@@ -641,11 +650,11 @@
 
         ev.dataTransfer.setDragImage(dragImage, 80, 20);
         requestAnimationFrame(() => {
-            setTimeout(() => {
+            requestAnimationFrame(() => {
                 if (document.body.contains(dragImage)) {
                     document.body.removeChild(dragImage);
                 }
-            }, 0);
+            });
         });
     }
 
@@ -663,13 +672,16 @@
             draggedItem.displayType === 'note' &&
             (draggedItem as Note).folderId !== targetFolder.id
         ) {
-            const noteToMove = notes.find((n) => n.id === draggedItem.id);
-            if (noteToMove) {
+            const noteToMoveIndex = notes.findIndex((n) => n.id === draggedItem.id);
+            if (noteToMoveIndex !== -1) {
+                const noteToMove = { ...notes[noteToMoveIndex] };
                 noteToMove.folderId = targetFolder.id;
                 noteToMove.updatedAt = Date.now();
                 noteToMove.order = notes.filter((n) => n.folderId === targetFolder.id).length;
                 await db.putNote(noteToMove);
-                notes = [...notes];
+                const nextNotes = [...notes];
+                nextNotes[noteToMoveIndex] = noteToMove;
+                notes = nextNotes;
             }
         }
         isDragging = false;
@@ -687,13 +699,16 @@
         }
         const draggedItem = JSON.parse(data) as DisplayItem;
         if (draggedItem.displayType === 'note' && (draggedItem as Note).folderId !== null) {
-            const noteToMove = notes.find((n) => n.id === draggedItem.id);
-            if (noteToMove) {
+            const noteToMoveIndex = notes.findIndex((n) => n.id === draggedItem.id);
+            if (noteToMoveIndex !== -1) {
+                const noteToMove = { ...notes[noteToMoveIndex] };
                 noteToMove.folderId = null;
                 noteToMove.updatedAt = Date.now();
                 noteToMove.order = displayList.length;
                 await db.putNote(noteToMove);
-                notes = [...notes];
+                const nextNotes = [...notes];
+                nextNotes[noteToMoveIndex] = noteToMove;
+                notes = nextNotes;
             }
         }
         isDragging = false;

@@ -2,6 +2,14 @@ import { supabase, isSupabaseConfigured } from './client';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from '../db_types';
 import * as db from '../db';
 
+// Efficient deep clone with structuredClone fallback
+function deepClone<T>(obj: T): T {
+	if (typeof structuredClone !== 'undefined') {
+		return structuredClone(obj);
+	}
+	return JSON.parse(JSON.stringify(obj));
+}
+
 // Re-export supabase for migrations
 export { supabase };
 
@@ -333,7 +341,7 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         // For kanban, we don't have a local updatedAt timestamp, so we'll always push
         // but we could skip if remote was updated very recently (within last second)
         // For now, we'll push to ensure sync works, but in the future we could add updatedAt to Kanban type
-        const columnsToSave = JSON.parse(JSON.stringify(kanbanData.columns));
+        const columnsToSave = deepClone(kanbanData.columns);
         const { error: upsertError } = await supabase
           .from('kanban')
           .upsert({

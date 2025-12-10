@@ -277,15 +277,17 @@
         return `${yearNum}-${monthNum.toString().padStart(2, '0')}-${dayNum.toString().padStart(2, '0')}`;
     }
 
+    let eventTitleInputRef: HTMLInputElement | null = null;
+    let eventTimeInputRef: HTMLInputElement | null = null;
+
     function startEditingEvent(event: CalendarEvent, dateKey: string) {
         editingEventId = event.id;
         editingEventDate = dateKey;
         editingEventTitle = event.title;
         editingEventTime = event.time || '';
-        setTimeout(() => {
-            const titleInput = document.querySelector('.event-edit-title') as HTMLInputElement;
-            if (titleInput) titleInput.focus();
-        }, 10);
+        tick().then(() => {
+            eventTitleInputRef?.focus();
+        });
     }
 
     function cancelEditingEvent() {
@@ -710,6 +712,7 @@
                             {#if editingEventId === ev.id && editingEventDate === ymd(d)}
                                 <div class="event-details event-editing">
                                     <input
+                                        bind:this={eventTimeInputRef}
                                         type="text"
                                         class="event-edit-time"
                                         bind:value={editingEventTime}
@@ -737,8 +740,8 @@
                                             // Close editing when clicking elsewhere (with delay to allow switching between inputs)
                                             setTimeout(() => {
                                                 const activeElement = document.activeElement;
-                                                const titleInput = document.querySelector('.event-edit-title') as HTMLElement;
-                                                const timeInput = document.querySelector('.event-edit-time') as HTMLElement;
+                                                const titleInput = eventTitleInputRef as HTMLElement;
+                                                const timeInput = eventTimeInputRef as HTMLElement;
                                                 // Only close if neither input is focused
                                                 if (activeElement !== titleInput && activeElement !== timeInput) {
                                                     saveEditedEvent();
@@ -747,6 +750,7 @@
                                         }}
                                     />
                                     <input
+                                        bind:this={eventTitleInputRef}
                                         type="text"
                                         class="event-edit-title"
                                         bind:value={editingEventTitle}
@@ -774,8 +778,8 @@
                                             // Close editing when clicking elsewhere (with delay to allow switching between inputs)
                                             setTimeout(() => {
                                                 const activeElement = document.activeElement;
-                                                const titleInput = document.querySelector('.event-edit-title') as HTMLElement;
-                                                const timeInput = document.querySelector('.event-edit-time') as HTMLElement;
+                                                const titleInput = eventTitleInputRef as HTMLElement;
+                                                const timeInput = eventTimeInputRef as HTMLElement;
                                                 // Only close if neither input is focused
                                                 if (activeElement !== titleInput && activeElement !== timeInput) {
                                                     saveEditedEvent();

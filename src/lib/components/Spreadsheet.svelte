@@ -55,17 +55,43 @@
 	let formulaDependencies: Map<string, Set<string>> = new Map(); // formula cell key -> set of referenced cell keys
 	let needsFormulaCacheRebuild = true;
 	let clipboardMode: "cut" | "copy" | null = null;
+	
+	// Cache for position calculations
+	let cachedRowPositions: number[] = [];
+	let cachedColPositions: number[] = [];
+	let cachedRowCount = 0;
+	let cachedColCount = 0;
+	let cachedRowHeights: Record<number, number> = {};
+	let cachedColWidths: Record<number, number> = {};
+
+	type CellChange = {
+		row: number;
+		col: number;
+		oldValue: SpreadsheetCell;
+		newValue: SpreadsheetCell;
+	};
 
 	type SpreadsheetHistoryEntry = {
-		data: SpreadsheetData;
+		// Use incremental snapshots: store full state only every N entries, otherwise store deltas
+		data?: SpreadsheetData; // Full snapshot (only for checkpoints)
+		changes?: CellChange[]; // Incremental changes (delta)
 		timestamp: number;
 	};
 
 	let history: SpreadsheetHistoryEntry[] = [];
 	let historyIndex = -1;
 	const MAX_HISTORY = 50;
+	const CHECKPOINT_INTERVAL = 10; // Create full snapshot every 10 entries
 	let lastSavedCellValue: string | null = null;
 	let hasSavedHistoryForCurrentEdit = false;
+	let lastHistorySnapshot: SpreadsheetData | null = null; // Cache of last full snapshot
+	
+	// Initialize lastHistorySnapshot on mount
+	onMount(() => {
+		if (spreadsheetData?.data) {
+			lastHistorySnapshot = deepClone(spreadsheetData);
+		}
+	});
 
 	/** Memoized calculation of the current multi-cell selection area. */
 	$: selectionArea = (() => {
@@ -86,23 +112,63 @@
 
 	/** Pre-calculates the vertical position of each row for performant overlay rendering. */
 	$: rowPositions = (() => {
+		const rowCount = spreadsheetData.data.length;
+		const rowHeights = spreadsheetData.rowHeights || {};
+		
+		// Check if we need to recalculate
+		const needsRecalc = 
+			rowCount !== cachedRowCount ||
+			JSON.stringify(rowHeights) !== JSON.stringify(cachedRowHeights);
+		
+		if (!needsRecalc && cachedRowPositions.length > 0) {
+			return cachedRowPositions;
+		}
+		
+		// Recalculate
 		const positions = [0];
 		let currentPos = 0;
-		for (let i = 0; i < spreadsheetData.data.length; i++) {
-			currentPos += (spreadsheetData.rowHeights[i] || MIN_HEIGHT) + 1; // +1 for border
+		for (let i = 0; i < rowCount; i++) {
+			currentPos += (rowHeights[i] || MIN_HEIGHT) + 1; // +1 for border
 			positions.push(currentPos);
 		}
+		
+		// Update cache
+		cachedRowPositions = positions;
+		cachedRowCount = rowCount;
+		cachedRowHeights = { ...rowHeights };
+		
 		return positions;
 	})();
 
 	/** Pre-calculates the horizontal position of each column for performant overlay rendering. */
 	$: colPositions = (() => {
+		if (!spreadsheetData.data[0]) return [0];
+		
+		const colCount = spreadsheetData.data[0].length;
+		const colWidths = spreadsheetData.colWidths || {};
+		
+		// Check if we need to recalculate
+		const needsRecalc = 
+			colCount !== cachedColCount ||
+			JSON.stringify(colWidths) !== JSON.stringify(cachedColWidths);
+		
+		if (!needsRecalc && cachedColPositions.length > 0) {
+			return cachedColPositions;
+		}
+		
+		// Recalculate
 		const positions = [0];
 		let currentPos = 0;
-		for (let i = 0; i < spreadsheetData.data[0].length; i++) {
-			currentPos += (spreadsheetData.colWidths[i] || 100) + 1; // +1 for border
+		for (let i = 0; i < colCount; i++) {
+			currentPos += (colWidths[i] || 100) + 1; // +1 for border
 			positions.push(currentPos);
 		}
+		
+		// Update cache
+		cachedColPositions = positions;
+		cachedColCount = colCount;
+		cachedColWidths = { ...colWidths };
+		
 		return positions;
 	})();
 
@@ -315,24 +381,176 @@
 		dispatch("update");
 	}, 300);
 
+	// Track the last saved state to prevent duplicate saves
+	let lastSavedStateHash: string | null = null;
+	
+	// Debounced history save for rapid typing - saves after user stops typing
+	const debouncedSaveHistory = debounce(() => {
+		// Create a simple hash of the current state to detect if it changed
+		if (spreadsheetData?.data) {
+			const currentHash = JSON.stringify(spreadsheetData.data);
+			// Only save if the state actually changed
+			if (currentHash !== lastSavedStateHash) {
+				saveHistory();
+				lastSavedStateHash = currentHash;
+			}
+		}
+	}, 500);
+
 	function saveHistory() {
 		if (!spreadsheetData?.data) return;
-		const snapshot = deepClone(spreadsheetData);
+		
+		// Update the hash of the saved state
+		lastSavedStateHash = JSON.stringify(spreadsheetData.data);
+		
 		history = history.slice(0, historyIndex + 1);
-		history.push({ data: snapshot, timestamp: Date.now() });
+		
+		// Determine if we should create a checkpoint (full snapshot)
+		const shouldCreateCheckpoint = 
+			history.length === 0 || 
+			history.length % CHECKPOINT_INTERVAL === 0 ||
+			!lastHistorySnapshot;
+		
+		if (shouldCreateCheckpoint) {
+			// Create full snapshot
+			const snapshot = deepClone(spreadsheetData);
+			lastHistorySnapshot = snapshot;
+			history.push({ data: snapshot, timestamp: Date.now() });
+		} else {
+			// Create incremental snapshot (delta)
+			// Find the last checkpoint and calculate changes
+			let baseSnapshot: SpreadsheetData | null = lastHistorySnapshot;
+			let baseIndex = history.length - 1;
+			
+			// Find the last checkpoint
+			while (baseIndex >= 0 && !history[baseIndex].data) {
+				baseIndex--;
+			}
+			
+			if (baseIndex >= 0 && history[baseIndex].data) {
+				baseSnapshot = history[baseIndex].data || null;
+			}
+			
+			if (baseSnapshot && baseSnapshot.data) {
+				// Calculate changes since last checkpoint
+				const changes: CellChange[] = [];
+				const baseData = baseSnapshot.data;
+				const currentData = spreadsheetData.data;
+				
+				// Compare all cells (for simplicity, we compare the entire grid)
+				// In a more optimized version, we'd track which cells changed
+				for (let r = 0; r < currentData.length; r++) {
+					for (let c = 0; c < currentData[0].length; c++) {
+						const oldCell = baseData[r]?.[c];
+						const newCell = currentData[r][c];
+						
+						// Simple comparison - in production, use deep equality check
+						if (JSON.stringify(oldCell) !== JSON.stringify(newCell)) {
+							changes.push({
+								row: r,
+								col: c,
+								oldValue: oldCell ? deepClone(oldCell) : { value: "", computedValue: "" },
+								newValue: deepClone(newCell)
+							});
+						}
+					}
+				}
+				
+				// Only save if there are changes
+				if (changes.length > 0) {
+					history.push({ changes, timestamp: Date.now() });
+				} else {
+					// No changes, don't add to history
+					return;
+				}
+			} else {
+				// Fallback: create full snapshot if we can't find a base
+				const snapshot = deepClone(spreadsheetData);
+				lastHistorySnapshot = snapshot;
+				history.push({ data: snapshot, timestamp: Date.now() });
+			}
+		}
+		
 		historyIndex = history.length - 1;
 		if (history.length > MAX_HISTORY) {
 			history.shift();
 			historyIndex--;
+			// Rebuild checkpoint cache if needed
+			if (history.length > 0 && !history[0].data) {
+				lastHistorySnapshot = null;
+			}
 		}
 	}
 
+	function restoreFromHistory(entry: SpreadsheetHistoryEntry): SpreadsheetData | null {
+		if (entry.data) {
+			// Full snapshot - use directly
+			return deepClone(entry.data);
+		} else if (entry.changes) {
+			// Incremental snapshot - need to find base and apply changes
+			// Find the most recent checkpoint before this entry
+			const entryIndex = history.indexOf(entry);
+			let baseIndex = entryIndex - 1;
+			while (baseIndex >= 0 && !history[baseIndex].data) {
+				baseIndex--;
+			}
+			
+			if (baseIndex >= 0 && history[baseIndex].data) {
+				const baseSnapshot = history[baseIndex].data;
+				if (baseSnapshot) {
+					const base = deepClone(baseSnapshot);
+					// Apply all changes from checkpoint to target entry
+					for (let i = baseIndex + 1; i <= entryIndex; i++) {
+						if (history[i]?.changes) {
+							for (const change of history[i].changes!) {
+								if (!base.data[change.row]) {
+									base.data[change.row] = [];
+								}
+								base.data[change.row][change.col] = deepClone(change.newValue);
+							}
+						}
+					}
+					return base;
+				}
+			}
+		}
+		return null;
+	}
+
 	function undo() {
-		if (historyIndex > 0 && history.length > 0) {
-			historyIndex--;
-			const previousState = history[historyIndex];
-			if (previousState && previousState.data) {
-				const restored = deepClone(previousState.data);
+		// Ensure any pending history saves are flushed before undo
+		// This saves the current state if it's different from the last entry
+		const beforeFlushLength = history.length;
+		debouncedSaveHistory.flush();
+		const afterFlushLength = history.length;
+		
+		// If a new entry was added, historyIndex was updated by saveHistory to point to it
+		// We need to go back one to get to the previous state
+		// If no new entry was added, the current state already matches the last entry
+		if (afterFlushLength > beforeFlushLength) {
+			// New entry was added, we're now at that entry (historyIndex points to it)
+			// Go back one to get to the previous state
+			if (historyIndex > 0) {
+				historyIndex--;
+			}
+		} else if (historyIndex >= 0) {
+			// No new entry, but we still need to go back one from current position
+			if (historyIndex > 0) {
+				historyIndex--;
+			} else {
+				// We're at index 0, can't go back further
+				return;
+			}
+		} else {
+			// No history, can't undo
+			return;
+		}
+		
+		// Restore the state at the new historyIndex
+		const previousState = history[historyIndex];
+		if (previousState) {
+			const restored = restoreFromHistory(previousState);
+			if (restored) {
 				spreadsheetData = {
 					...spreadsheetData,
 					data: restored.data,
@@ -342,25 +560,31 @@
 				needsFormulaCacheRebuild = true;
 				recalculateSheet();
 				dispatch("update");
+				// Reset the flag so next edit will save immediately
+				hasSavedHistoryForCurrentEdit = false;
 			}
 		}
 	}
 
 	function redo() {
+		// Ensure any pending history saves are flushed before redo
+		debouncedSaveHistory.flush();
 		if (historyIndex < history.length - 1 && history.length > 0) {
 			historyIndex++;
 			const nextState = history[historyIndex];
-			if (nextState && nextState.data) {
-				const restored = deepClone(nextState.data);
-				spreadsheetData = {
-					...spreadsheetData,
-					data: restored.data,
-					colWidths: restored.colWidths || {},
-					rowHeights: restored.rowHeights || {}
-				};
-				needsFormulaCacheRebuild = true;
-				recalculateSheet();
-				dispatch("update");
+			if (nextState) {
+				const restored = restoreFromHistory(nextState);
+				if (restored) {
+					spreadsheetData = {
+						...spreadsheetData,
+						data: restored.data,
+						colWidths: restored.colWidths || {},
+						rowHeights: restored.rowHeights || {}
+					};
+					needsFormulaCacheRebuild = true;
+					recalculateSheet();
+					dispatch("update");
+				}
 			}
 		}
 	}
@@ -900,12 +1124,16 @@
 		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
 			e.preventDefault();
 			e.stopPropagation();
+			// Flush pending debounced saves so undo works immediately
+			debouncedSaveHistory.flush();
 			undo();
 			return;
 		}
 		if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
 			e.preventDefault();
 			e.stopPropagation();
+			// Flush pending debounced saves so redo works immediately
+			debouncedSaveHistory.flush();
 			redo();
 			return;
 		}
@@ -990,6 +1218,9 @@
 		editingCell = { row: rowIndex, col: colIndex };
 		
 		if (cellChanged) {
+			// Flush any pending debounced saves before switching cells
+			debouncedSaveHistory.flush();
+			// Save the state before switching to new cell (establishes baseline for new cell)
 			hasSavedHistoryForCurrentEdit = false;
 			saveHistory();
 			hasSavedHistoryForCurrentEdit = true;
@@ -1105,11 +1336,27 @@
 									const oldValue = typeof cell.value === "string" ? cell.value : "";
 									const wasDeletion = newValue.length < oldValue.length;
 									
-									// Save history on first change or before deletion
-									if (!hasSavedHistoryForCurrentEdit || wasDeletion) {
+									// Save history strategy:
+									// - First change: save immediately to establish baseline (before typing starts)
+									// - Deletions: save immediately (important for undo)
+									// - Subsequent typing: use debounced save (only one pending at a time)
+									if (!hasSavedHistoryForCurrentEdit) {
+										// First change - save the state BEFORE this edit
+										// This establishes the baseline we can undo to
 										saveHistory();
-										// Reset flag after deletion so next change can save history
-										hasSavedHistoryForCurrentEdit = !wasDeletion;
+										hasSavedHistoryForCurrentEdit = true;
+									}
+									
+									// For deletions, save immediately (important for undo)
+									// For typing, use debounced save
+									if (wasDeletion) {
+										// Cancel any pending debounced save and save immediately
+										debouncedSaveHistory.flush();
+										saveHistory();
+										hasSavedHistoryForCurrentEdit = false; // Reset so next change saves baseline
+									} else {
+										// Continue typing - use debounced save (will save after user stops typing)
+										debouncedSaveHistory();
 									}
 									
 									const wasFormula = typeof cell.value === "string" && cell.value.startsWith("=");
@@ -1130,9 +1377,9 @@
 								}}
 								on:blur={(e) => {
 									const newValue = (e.target as HTMLInputElement).value;
-									if (lastSavedCellValue !== null && newValue !== lastSavedCellValue && hasSavedHistoryForCurrentEdit) {
-										saveHistory();
-									}
+									// Flush any pending debounced saves - this will save the final state
+									debouncedSaveHistory.flush();
+									// Don't save again here - the flush already saved if needed
 									lastSavedCellValue = null;
 									hasSavedHistoryForCurrentEdit = false;
 									editingCell = null;

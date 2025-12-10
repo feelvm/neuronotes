@@ -266,14 +266,13 @@
         activeWorkspaceId = id;
 
         // Defer database operations to avoid blocking the main thread
-        setTimeout(async () => {
-            try {
-                await db.putSetting({ key: 'activeWorkspaceId', value: id });
-                await loadActiveWorkspaceData();
-            } catch (error) {
-                console.error('Failed to switch workspace:', error);
-            }
-        }, 0);
+        await tick();
+        try {
+            await db.putSetting({ key: 'activeWorkspaceId', value: id });
+            await loadActiveWorkspaceData();
+        } catch (error) {
+            console.error('Failed to switch workspace:', error);
+        }
     }
 
     async function addWorkspace() {
@@ -895,11 +894,11 @@
         editingEventDate = dateKey;
         editingEventTitle = event.title;
         editingEventTime = event.time || '';
-        // Auto-focus the title input after a brief delay to ensure DOM is updated
-        setTimeout(() => {
+        // Auto-focus the title input after DOM update
+        tick().then(() => {
             const titleInput = document.querySelector('.event-edit-title') as HTMLInputElement;
             if (titleInput) titleInput.focus();
-        }, 10);
+        });
     }
 
     function cancelEditingEvent() {
@@ -1333,7 +1332,7 @@
                 currentUserId = sessionUserId;
                 
                 // Defer heavy sync operations to improve initial load
-                setTimeout(async () => {
+                tick().then(async () => {
                     // Flush any pending database saves before syncing
                     await db.flushDatabaseSave();
                     
