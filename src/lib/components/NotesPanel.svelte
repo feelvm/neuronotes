@@ -41,6 +41,7 @@
     let draggedItemType: 'folder' | 'note' | null = null;
     let isDragging = false;
     let isNoteListVisible = true;
+    let isMobileView = false;
     let editorDiv: HTMLElement;
     let previousNoteId: string | null = null;
     let selectedFontSize = 14;
@@ -1144,10 +1145,15 @@
                 console.warn('Failed to load DOMPurify:', err);
             });
             
-            // Collapse notes list by default on mobile
-            if (window.innerWidth <= 768) {
-                isNoteListVisible = false;
-            }
+            const updateMobileVisibility = () => {
+                const nowMobile = window.innerWidth <= 768;
+                if (nowMobile && !isMobileView) {
+                    isNoteListVisible = false;
+                }
+                isMobileView = nowMobile;
+            };
+            updateMobileVisibility();
+            window.addEventListener('resize', updateMobileVisibility);
 
             // Listen for selection changes to update formatting state
             const handleSelectionChange = () => {
@@ -1160,6 +1166,7 @@
             // Store cleanup function
             (window as any).__notesPanelSelectionCleanup = () => {
                 document.removeEventListener('selectionchange', handleSelectionChange);
+                window.removeEventListener('resize', updateMobileVisibility);
             };
         }
     });

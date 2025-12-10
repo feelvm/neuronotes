@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import * as backup from '$lib/backup';
@@ -3014,6 +3014,9 @@
         max-height: 100%;
         align-items: flex-start;
         scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-x;
+        overscroll-behavior-x: contain;
     }
     .kanban-col {
         width: 240px;
@@ -3393,6 +3396,7 @@
         .notes {
             grid-template-columns: 1fr;
             grid-template-rows: auto minmax(0, 1fr);
+            height: 100%;
         }
         .note-list {
             border-right: none;
@@ -3419,13 +3423,33 @@
             flex-shrink: 0;
         }
         .notes-panel {
-            flex: 1;
-            min-height: 300px;
-            height: auto;
+            flex: 0 0 420px;
+            height: 420px;
+            max-height: calc(100vh - 140px);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .notes-panel .notes {
+            height: 100%;
         }
         .notes-panel.minimized {
             min-height: 0;
             flex: 0 0 auto;
+            height: auto;
+        }
+        .kanban-panel {
+            flex: 0 0 520px;
+            height: 520px;
+            max-height: calc(100vh - 100px);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .kanban-panel .kanban-board {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
         }
         .calendar-grid {
             grid-template-columns: 1fr;

@@ -24,6 +24,34 @@
     export let onShowBackupModal: () => void;
     export let onShowEditPanelsModal: () => void;
 
+    import { onMount } from 'svelte';
+
+    let isTouchDevice = false;
+    let isMobileViewport = false;
+    let workspaceTabsEl: HTMLElement | null = null;
+    onMount(() => {
+        if (typeof window !== 'undefined') {
+            const mq = window.matchMedia('(pointer: coarse)');
+            const setFlags = () => {
+                isTouchDevice = mq.matches;
+                isMobileViewport = window.innerWidth <= 900;
+            };
+            setFlags();
+            const onResize = () => setFlags();
+            window.addEventListener('resize', onResize);
+            return () => window.removeEventListener('resize', onResize);
+        }
+    });
+
+    function handleWorkspaceWheel(event: WheelEvent) {
+        if (!workspaceTabsEl) return;
+        // Convert vertical wheel scrolling into horizontal scrolling while hovering tabs
+        if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+            event.preventDefault();
+            workspaceTabsEl.scrollBy({ left: event.deltaY, behavior: 'auto' });
+        }
+    }
+
     // Settings dropdown positioning
     function settingsDropdown(node: HTMLElement) {
         function updatePosition() {
@@ -74,58 +102,67 @@
 </script>
 
 <div class="nav">
-    <div class="brand">NEURONOTES</div>
+    <div class="brand">
+        <span class="brand-full">NEURONOTES</span>
+        <span class="brand-short">NN</span>
+    </div>
 
-    <div class="workspace-tabs">
-        {#each workspaces as ws, i (ws.id)}
-            <div
-                class="workspace-tab"
-                class:active={ws.id === activeWorkspaceId}
-                class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
-                draggable="true"
-                on:dragstart={(e) => onWorkspaceDragStart(e, ws.id)}
-                on:dragover|preventDefault
-                on:drop={(e) => onWorkspaceDrop(e, i)}
-                on:dragend={onWorkspaceDragEnd}
-                on:click={() => onSwitchWorkspace(ws.id)}
-            >
-                {#if editingWorkspaceId === ws.id}
-                    <input
-                        value={ws.name}
-                        use:focus
-                        on:blur={(e) =>
-                            onRenameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
-                        on:keydown={(e) => {
-                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                            if (e.key === 'Escape') onSetEditingWorkspaceId(null);
-                        }}
-                    />
-                {:else}
-                    <div
-                        class="workspace-name"
-                        on:dblclick={() => onSetEditingWorkspaceId(ws.id)}
-                        title="Double-click to rename"
-                    >
-                        {ws.name}
-                    </div>
-                {/if}
-                <button
-                    class="delete-ws-btn"
-                    title="Delete Workspace"
-                    on:click|stopPropagation={() => onDeleteWorkspace(ws.id)}
+    <div class="workspace-row">
+        <div
+            class="workspace-tabs"
+            bind:this={workspaceTabsEl}
+            on:wheel={handleWorkspaceWheel}
+        >
+            {#each workspaces as ws, i (ws.id)}
+                <div
+                    class="workspace-tab"
+                    class:active={ws.id === activeWorkspaceId}
+                    class:drag-over={draggedWorkspaceId && draggedWorkspaceId !== ws.id}
+                    draggable={false}
+                    on:dragstart={(e) => onWorkspaceDragStart(e, ws.id)}
+                    on:dragover|preventDefault
+                    on:drop={(e) => onWorkspaceDrop(e, i)}
+                    on:dragend={onWorkspaceDragEnd}
+                    on:click={() => onSwitchWorkspace(ws.id)}
                 >
-                    ×
-                </button>
-            </div>
-        {/each}
-        <button class="add-workspace-btn" on:click={onAddWorkspace} title="New Workspace">
-            +
-        </button>
+                    {#if editingWorkspaceId === ws.id}
+                        <input
+                            value={ws.name}
+                            use:focus
+                            on:blur={(e) =>
+                                onRenameWorkspace(ws.id, (e.target as HTMLInputElement).value)}
+                            on:keydown={(e) => {
+                                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                if (e.key === 'Escape') onSetEditingWorkspaceId(null);
+                            }}
+                        />
+                    {:else}
+                        <div
+                            class="workspace-name"
+                            on:dblclick={() => onSetEditingWorkspaceId(ws.id)}
+                            title="Double-click to rename"
+                        >
+                            {ws.name}
+                        </div>
+                    {/if}
+                    <button
+                        class="delete-ws-btn"
+                        title="Delete Workspace"
+                        on:click|stopPropagation={() => onDeleteWorkspace(ws.id)}
+                    >
+                        ×
+                    </button>
+                </div>
+            {/each}
+            <button class="add-workspace-btn" on:click={onAddWorkspace} title="New Workspace">
+                +
+            </button>
+        </div>
     </div>
 
     <div class="spacer"></div>
-    
-    <div class="nav-buttons-group">
+
+    <div class="nav-actions">
         <div class="auth-container">
             <button 
                 class="auth-btn"
@@ -135,7 +172,7 @@
                 {displayText}
             </button>
         </div>
-    
+
         <div class="settings-container">
             <button 
                 class="settings-btn"
@@ -198,10 +235,20 @@
         font-weight: 700;
         flex-shrink: 0;
     }
+    .brand-short {
+        display: none;
+    }
 
     .spacer {
         flex: 1;
         min-width: 24px;
+    }
+
+    .nav-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
     }
 
     .nav-right-placeholder {
@@ -209,11 +256,14 @@
         flex-shrink: 0;
     }
 
-    .nav-buttons-group {
+    .workspace-row {
         display: flex;
         align-items: center;
         gap: 12px;
-        flex-shrink: 0;
+        flex: 1;
+        min-width: 0;
+        touch-action: pan-x;
+        overscroll-behavior-x: contain;
     }
 
     .auth-container {
@@ -315,9 +365,19 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        flex: 1 1 0%;
+        min-width: 0;
+        max-width: 100%;
         overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
         scrollbar-width: none;
         -ms-overflow-style: none;
+        -webkit-overflow-scrolling: touch;
+        padding-right: 12px;
+        overscroll-behavior-x: contain;
+        touch-action: pan-x;
+        padding-left: 4px;
     }
 
     .workspace-tabs::-webkit-scrollbar {
@@ -414,15 +474,25 @@
     @media (max-width: 768px) {
         .nav {
             flex-wrap: wrap;
+            row-gap: 8px;
+        }
+        .brand-full {
+            display: none;
+        }
+        .brand-short {
+            display: inline;
+        }
+        .workspace-row {
+            flex: 1;
         }
         .nav-right-placeholder {
             display: none;
         }
-        .auth-container {
+        .spacer {
             display: none;
         }
-        .settings-container {
-            margin-left: auto;
+        .auth-container {
+            display: none;
         }
         .workspace-tabs {
             overflow-x: auto;
