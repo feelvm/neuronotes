@@ -1610,6 +1610,44 @@
             }
         };
     });
+
+    function confirmLogout(): Promise<boolean> {
+        return showDeleteDialog('Are you sure you want to log out?', 'Log out');
+    }
+
+    async function handleLogout() {
+        const confirmed = await confirmLogout();
+        if (!confirmed) {
+            return;
+        }
+
+        await ensureSupabaseLoaded();
+        // Sync current account data to Supabase before logout
+        if (isLoggedIn) {
+            try {
+                await db.flushDatabaseSave();
+                await sync.pushToSupabase();
+            } catch (error) {
+                console.error('[logout] Failed to sync before logout:', error);
+            }
+        }
+        // Save current account data to localStorage before logout
+        await saveAccountDataToLocalStorage();
+        
+        const result = await auth.signOut();
+        if (result.success) {
+            isLoggedIn = false;
+            currentUserId = null;
+            // Clear stored user ID
+            if (browser) {
+                localStorage.removeItem('neuronotes_current_user_id');
+            }
+            // Clear UI state on logout
+            calendarEvents = [];
+            // Reload workspace data (will load from local DB)
+            await loadActiveWorkspaceData();
+        }
+    }
 </script>
 
 <div class="app">
@@ -1630,34 +1668,7 @@
         onWorkspaceDragEnd={handleWorkspaceDragEnd}
         onSetEditingWorkspaceId={(id) => editingWorkspaceId = id}
         onShowLoginModal={() => showLoginModal = true}
-        onLogout={async () => {
-            await ensureSupabaseLoaded();
-            // Sync current account data to Supabase before logout
-            if (isLoggedIn) {
-                try {
-                    await db.flushDatabaseSave();
-                    await sync.pushToSupabase();
-                } catch (error) {
-                    console.error('[logout] Failed to sync before logout:', error);
-                }
-            }
-            // Save current account data to localStorage before logout
-            await saveAccountDataToLocalStorage();
-            
-            const result = await auth.signOut();
-            if (result.success) {
-                isLoggedIn = false;
-                currentUserId = null;
-                // Clear stored user ID
-                if (browser) {
-                    localStorage.removeItem('neuronotes_current_user_id');
-                }
-                // Clear UI state on logout
-                calendarEvents = [];
-                // Reload workspace data (will load from local DB)
-                await loadActiveWorkspaceData();
-            }
-        }}
+        onLogout={handleLogout}
         onToggleSettingsDropdown={() => showSettingsDropdown = !showSettingsDropdown}
         onShowBackupModal={() => showBackupModal = true}
         onShowEditPanelsModal={() => showEditPanelsModal = true}
