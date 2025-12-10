@@ -220,7 +220,6 @@
                 try {
                     await ensureSupabaseLoaded();
                     await sync.pushToSupabase();
-                    console.log('Restored data synced to Supabase');
                 } catch (syncError) {
                     console.warn('Failed to sync restored data to Supabase:', syncError);
                     // Don't throw - restore was successful, sync can happen later

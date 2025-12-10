@@ -226,33 +226,25 @@ export async function getAllByIndex<T>(
 export async function clearAllLocalData(): Promise<void> {
   await ensureClient();
   
-  console.log('[db] Starting to clear all local data...');
-  
   // Get all workspaces first
   const workspaces = await getAllWorkspaces();
-  console.log(`[db] Found ${workspaces.length} workspaces to clear`);
   
   // Delete all data for each workspace
   for (const workspace of workspaces) {
-    console.log(`[db] Clearing workspace: ${workspace.id}`);
-    
     // Delete folders
     const folders = await getFoldersByWorkspaceId(workspace.id);
-    console.log(`[db] Deleting ${folders.length} folders`);
     for (const folder of folders) {
       await deleteFolder(folder.id);
     }
     
     // Delete notes
     const notes = await getNotesByWorkspaceId(workspace.id);
-    console.log(`[db] Deleting ${notes.length} notes`);
     for (const note of notes) {
       await deleteNote(note.id);
     }
     
     // Delete calendar events
     const events = await getCalendarEventsByWorkspaceId(workspace.id);
-    console.log(`[db] Deleting ${events.length} calendar events`);
     for (const event of events) {
       await deleteCalendarEvent(event.id);
     }
@@ -279,8 +271,6 @@ export async function clearAllLocalData(): Promise<void> {
       await browserDb.remove('settings', setting.key);
     }
   }
-  
-  console.log('[db] Cleared all local data');
 }
 
 export async function verifyDatabaseStatus() {
@@ -309,7 +299,6 @@ export async function verifyDatabaseStatus() {
   const settings = await browserDb.getAll('settings');
   stats.stats.settings = settings.length;
   
-  console.log('[db] Database Status:', stats);
   return stats;
 }
 

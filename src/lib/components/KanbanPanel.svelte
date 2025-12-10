@@ -30,24 +30,19 @@
 
     const debouncedPersistKanban = debounce(async () => {
         if (!activeWorkspaceId) {
-            console.log('[kanban] Skipping save - no active workspace');
             return;
         }
         // Only save if kanban exists and has at least one column
         // Empty kanban arrays shouldn't overwrite existing data
         if (!kanban || kanban.length === 0) {
-            console.log('[kanban] Skipping save - kanban is empty');
             return;
         }
         try {
-            console.log(`[kanban] Saving kanban for workspace ${activeWorkspaceId}:`, kanban.length, 'columns', kanban);
             await db.putKanban({
                 workspaceId: activeWorkspaceId,
                 columns: kanban
             });
-            console.log('[kanban] Saved kanban data to local DB');
             await onSyncIfLoggedIn();
-            console.log('[kanban] Synced kanban to Supabase');
         } catch (error) {
             console.error('[kanban] Failed to save kanban:', error);
         }
@@ -303,12 +298,9 @@
     async function loadKanbanData(force = false) {
         if ((isKanbanLoaded && !force) || !browser || !activeWorkspaceId) return;
         try {
-            console.log(`[kanban] Loading kanban for workspace ${activeWorkspaceId}, force=${force}`);
             const kData = await db.getKanbanByWorkspaceId(activeWorkspaceId);
-            console.log(`[kanban] Retrieved from DB:`, kData ? `found ${kData.columns?.length || 0} columns` : 'null');
             kanban = kData ? kData.columns : [];
             isKanbanLoaded = true;
-            console.log('[kanban] Loaded kanban data:', kanban.length, 'columns', kanban);
         } catch (e) {
             console.error('Failed to load kanban data:', e);
             isKanbanLoaded = true; // Set to true even on error to prevent infinite retries

@@ -100,42 +100,48 @@
     let isVerticalResizing = false;
     let isHorizontalResizing = false;
     let notesPanelClientWidth = 0;
+    
+    // Refs for resize handlers to avoid DOM queries
+    let mainEl: HTMLElement;
+    let rightEl: HTMLElement;
 
-    $: minimizedCount =
-        (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
-
-    $: if (isNotesMinimized) {
-        notesPanelWidth = 6;
-    } else if (notesPanelWidth < 7) {
-        notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
-    }
-
-    $: if (isCalendarMinimized) {
-        calendarPanelHeight = 6;
-    } else if (isKanbanMinimized) {
-        calendarPanelHeight = 94;
-    } else if (calendarPanelHeight < 7 || calendarPanelHeight > 93) {
-        calendarPanelHeight =
-            lastCalendarHeight > 7 && lastCalendarHeight < 93 ? lastCalendarHeight : 50;
+    // Consolidated reactive statement for panel sizing to prevent cascading updates
+    $: {
+        const minimizedCount = (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
+        
+        // Handle notes panel width
+        if (isNotesMinimized) {
+            notesPanelWidth = 6;
+        } else if (minimizedCount === 2 && !isNotesMinimized) {
+            notesPanelWidth = 94;
+        } else if (minimizedCount < 2 && notesPanelWidth > 90) {
+            notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
+        } else if (notesPanelWidth < 7) {
+            notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
+        }
+        
+        // Handle calendar panel height
+        if (isCalendarMinimized) {
+            calendarPanelHeight = 6;
+        } else if (isKanbanMinimized) {
+            calendarPanelHeight = 94;
+        } else if (minimizedCount === 2) {
+            if (!isCalendarMinimized) {
+                calendarPanelHeight = 94;
+            } else if (!isKanbanMinimized) {
+                calendarPanelHeight = 6;
+            }
+        } else if (minimizedCount < 2 && !isCalendarMinimized && !isKanbanMinimized) {
+            if (calendarPanelHeight > 90) {
+                calendarPanelHeight = lastCalendarHeight > 7 && lastCalendarHeight < 93 ? lastCalendarHeight : 50;
+            } else if (calendarPanelHeight < 7 || calendarPanelHeight > 93) {
+                calendarPanelHeight = lastCalendarHeight > 7 && lastCalendarHeight < 93 ? lastCalendarHeight : 50;
+            }
+        }
     }
 
     $: if (browser && !isCalendarMinimized && !isCalendarLoaded) {
         loadCalendarEvents();
-    }
-
-
-    $: if (minimizedCount === 2) {
-        if (!isNotesMinimized) notesPanelWidth = 94;
-        else if (!isCalendarMinimized) calendarPanelHeight = 94;
-        else if (!isKanbanMinimized) calendarPanelHeight = 6;
-    } else if (minimizedCount < 2) {
-        if (!isNotesMinimized && notesPanelWidth > 90) {
-            notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
-        }
-        if (!isCalendarMinimized && !isKanbanMinimized && calendarPanelHeight > 90) {
-            calendarPanelHeight =
-                lastCalendarHeight > 7 && lastCalendarHeight < 93 ? lastCalendarHeight : 50;
-        }
     }
 
     function toggleNotesMinimized() {
@@ -164,14 +170,12 @@
         e.preventDefault();
         if (!showNotes && showCalendar && showKanban) {
             // Resizing calendar and kanban when side by side
-            const rightEl = document.querySelector('.right');
             if (!rightEl) return;
             const rightRect = rightEl.getBoundingClientRect();
             const newWidth = ((e.clientX - rightRect.left) / rightRect.width) * 100;
             calendarPanelWidth = Math.max(6, Math.min(94, newWidth));
         } else {
             // Resizing notes panel
-            const mainEl = document.querySelector('.main');
             if (!mainEl) return;
             const mainRect = mainEl.getBoundingClientRect();
             const newWidth = ((e.clientX - mainRect.left) / mainRect.width) * 100;
@@ -195,11 +199,7 @@
         if (!isHorizontalResizing) return;
         e.preventDefault();
         // When notes are hidden, panels are in .main; when notes are shown, they're in .right
-        let containerEl = document.querySelector('.right');
-        if (!containerEl) {
-            // When notes are hidden, use .main.calendar-kanban or .main
-            containerEl = document.querySelector('.main.calendar-kanban') || document.querySelector('.main');
-        }
+        const containerEl = rightEl || mainEl;
         if (!containerEl) return;
         const containerRect = containerEl.getBoundingClientRect();
         const newHeight = ((e.clientY - containerRect.top) / containerRect.height) * 100;
@@ -219,9 +219,18 @@
     }
     
     function cleanupResizeListeners() {
+        // Defensive cleanup - remove all possible resize listeners
         window.removeEventListener('mousemove', doVerticalResize);
         window.removeEventListener('mousemove', doHorizontalResize);
         window.removeEventListener('mouseup', stopResize);
+        // Reset state to prevent handlers from running after cleanup
+        isVerticalResizing = false;
+        isHorizontalResizing = false;
+        // Restore body styles in case cleanup happens during active resize
+        if (document.body) {
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        }
     }
 
     const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -569,8 +578,6 @@
                 const result = await sync.pushToSupabase();
                 if (!result.success) {
                     console.error('Sync push failed:', result.error);
-                } else {
-                    console.log('Sync push successful');
                 }
             } catch (error) {
                 console.error('Sync failed:', error);
@@ -665,7 +672,6 @@
             // Save to localStorage with user ID as key
             const storageKey = `neuronotes_account_${user.id}`;
             localStorage.setItem(storageKey, JSON.stringify(accountData));
-            console.log('[auth] Saved account data to localStorage before logout');
         } catch (error) {
             console.error('[auth] Failed to save account data to localStorage:', error);
         }
@@ -693,21 +699,18 @@
             await db.init();
 
             if (data.workspaces && data.workspaces.length > 0) {
-                console.log('Importing workspaces:', data.workspaces.length);
                 for (const workspace of data.workspaces) {
                     await db.putWorkspace(workspace);
                 }
             }
 
             if (data.folders && data.folders.length > 0) {
-                console.log('Importing folders:', data.folders.length);
                 for (const folder of data.folders) {
                     await db.putFolder(folder);
                 }
             }
 
             if (data.notes && data.notes.length > 0) {
-                console.log('Importing notes:', data.notes.length);
                 for (const note of data.notes) {
                     // Ensure imported notes have their content properly marked
                     // This prevents putNote from trying to preserve existing content
@@ -716,9 +719,6 @@
                     noteWithMeta._contentLoaded = true;
                     
                     // Debug: log note content info
-                    if (import.meta.env.DEV) {
-                        console.log(`[import] Note ${note.id} (${note.type}): contentHTML length=${note.contentHTML?.length || 0}, has content=${!!note.contentHTML}`);
-                    }
                     
                     // For spreadsheets, ensure _spreadsheetJson is set if spreadsheet data exists
                     if (note.type === 'spreadsheet' && note.spreadsheet && !noteWithMeta._spreadsheetJson) {
@@ -739,27 +739,23 @@
             }
 
             if (data.calendarEvents && data.calendarEvents.length > 0) {
-                console.log('Importing calendar events:', data.calendarEvents.length);
                 for (const event of data.calendarEvents) {
                     await db.putCalendarEvent(event);
                 }
             }
 
             if (data.kanban && data.kanban.length > 0) {
-                console.log('Importing kanban boards:', data.kanban.length);
                 for (const kanban of data.kanban) {
                     await db.putKanban(kanban);
                 }
             }
 
             if (data.settings && data.settings.length > 0) {
-                console.log('Importing settings:', data.settings.length);
                 for (const setting of data.settings) {
                     await db.putSetting(setting);
                 }
             }
 
-            console.log('Import completed successfully');
             
             // Reload UI state from database after import
             // This ensures the UI reflects the imported data
@@ -806,7 +802,6 @@
                 try {
                     await ensureSupabaseLoaded();
                     await sync.pushToSupabase();
-                    console.log('Imported data synced to Supabase');
                 } catch (syncError) {
                     console.warn('Failed to sync imported data to Supabase:', syncError);
                     // Don't throw - import was successful, sync can happen later
@@ -1009,7 +1004,6 @@
                 color: newEventColor
             };
             
-            console.log('Adding event:', newEvent);
             await db.putCalendarEvent(newEvent);
             calendarEvents = [...calendarEvents, newEvent];
             await syncIfLoggedIn();
@@ -1021,8 +1015,6 @@
             newEventCustomDays = [false, false, false, false, false, false, false];
             // Don't reset newEventColor - keep the selected color until page reload
             showRepeatOptions = false;
-            
-            console.log('Event added successfully');
         } catch (error) {
             console.error('Failed to add event:', error);
             alert(`Failed to create event: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -1322,7 +1314,6 @@
                 // the subscription might fire immediately and we need to skip it
                 if (sessionUserId) {
                     handledUserIdInOnMount = sessionUserId;
-                    console.log(`[onMount] Marking user ${sessionUserId} as handled in onMount`);
                 }
                 
                 isLoggedIn = true;
@@ -1348,26 +1339,20 @@
                     
                     if (isSameUser) {
                         // Same user - just sync without clearing
-                        console.log('[onMount] Same user detected, syncing without clearing...');
                         
                         // Use fullSync which does pull-then-push to ensure we get latest changes
                         // before pushing local changes. This prevents overwriting newer changes from other devices.
-                        console.log('[onMount] Performing full sync (pull then push)...');
                         try {
                             await ensureSupabaseLoaded();
                             const syncResult = await sync.fullSync();
                             if (!syncResult.success) {
                                 console.error('[onMount] Full sync failed:', syncResult.error);
-                            } else {
-                                console.log('[onMount] Full sync completed successfully');
                             }
                         } catch (error) {
                             console.warn('[onMount] Failed to sync:', error);
                         }
                     } else {
                         // Different user or first time - clear and pull
-                        console.log('[onMount] Different user or first login, clearing and syncing...');
-                        console.log(`[onMount] currentUserId: ${currentUserId}, sessionUserId: ${sessionUserId}, storedUserId: ${storedUserId}`);
                         
                         // IMPORTANT: Don't push local changes before clearing when switching users
                         // The local data belongs to a different user, we don't want to mix it
@@ -1377,15 +1362,12 @@
                         await db.clearAllLocalData();
                         
                         // Pull latest data from Supabase for the new user
-                        console.log('[onMount] Pulling data from Supabase for user:', sessionUserId);
                         const pullResult = await sync.pullFromSupabase();
                         if (!pullResult.success) {
                             console.error('[onMount] Failed to pull data:', pullResult.error);
                         } else {
-                            console.log('[onMount] Successfully pulled data from Supabase');
                             await db.flushDatabaseSave();
                             const pulledWorkspaces = await db.getAllWorkspaces();
-                            console.log(`[onMount] Pulled ${pulledWorkspaces.length} workspaces`);
                         }
                     }
                     
@@ -1442,7 +1424,6 @@
             const { data: { subscription } } = onAuthStateChange(async (event, session) => {
                 // Capture previousUserId before it changes
                 const previousUserId = currentUserId;
-                console.log('Auth state changed:', event, session?.user?.email, 'handledUserIdInOnMount:', handledUserIdInOnMount, 'previousUserId:', previousUserId);
                 
                 if (event === 'SIGNED_IN' && session) {
                     const newUserId = session.user.id;
@@ -1452,7 +1433,6 @@
                     // This prevents duplicate clearing/pulling when Google OAuth redirects back
                     // and both onMount and this handler try to process the same login
                     if (handledUserIdInOnMount === newUserId) {
-                        console.log(`[auth-state-change] Skipping - onMount already handled session for user ${newUserId}`);
                         // Still update the state variables
                         isLoggedIn = true;
                         currentUserId = newUserId;
@@ -1466,13 +1446,11 @@
                     // If switching to a different user, we need to sync their data
                     // If same user and already handled initial session, skip (to avoid duplicate clearing)
                     if (hasHandledInitialSession && !isSwitchingUsers) {
-                        console.log('[auth-state-change] Skipping - already handled initial session for same user');
                         return;
                     }
                     
                     // If switching users, reset the flags so we handle the new user's session
                     if (isSwitchingUsers) {
-                        console.log(`[auth-state-change] Switching from user ${previousUserId} to ${newUserId} - will sync new user's data`);
                         hasHandledInitialSession = false;
                         handledUserIdInOnMount = null; // Reset so we can handle the new user
                     }
@@ -1490,22 +1468,18 @@
                     // Flush any pending database saves before clearing
                     await db.flushDatabaseSave();
                     // Clear all local data before pulling new user's data
-                    console.log('Clearing local data for new user...');
                     await db.clearAllLocalData();
                     // IMPORTANT: After clearing local data, we should ONLY pull from Supabase, not push
                     // Using fullSync() would push the empty local state and delete everything from Supabase!
-                    console.log('Pulling data from Supabase for user:', newUserId);
                     const pullResult = await sync.pullFromSupabase();
                     if (!pullResult.success) {
                         console.error('Failed to pull data from Supabase:', pullResult.error);
                         alert(`Warning: Failed to restore your data from cloud. Error: ${pullResult.error}`);
                     } else {
-                        console.log('Successfully pulled data from Supabase');
                         // Flush database to ensure all pulled data is persisted
                         await db.flushDatabaseSave();
                         // Verify data was pulled by checking workspaces
                         const pulledWorkspaces = await db.getAllWorkspaces();
-                        console.log(`Pulled ${pulledWorkspaces.length} workspaces from Supabase`);
                         if (pulledWorkspaces.length === 0) {
                             console.warn('No workspaces found in Supabase for this user - data may not exist in cloud');
                             alert('No data found in cloud for this account. If you had data before, it may have been lost. Please restore from a backup if available.');
@@ -1539,11 +1513,9 @@
                     // This ensures data is saved when user logs out via Google OAuth or other automatic logout
                     if (isLoggedIn && previousUserId) {
                         try {
-                            console.log('[SIGNED_OUT] Syncing data to Supabase before logout...');
                             await db.flushDatabaseSave();
                             await ensureSupabaseLoaded();
                             await sync.pushToSupabase();
-                            console.log('[SIGNED_OUT] Data synced successfully');
                         } catch (error) {
                             console.error('[SIGNED_OUT] Failed to sync before logout:', error);
                         }
@@ -1570,7 +1542,6 @@
                     await loadActiveWorkspaceData();
                 } else if (event === 'TOKEN_REFRESHED') {
                     // Session refreshed, continue working
-                    console.log('Session refreshed');
                 }
             });
             
@@ -1611,7 +1582,6 @@
                     await ensureSupabaseLoaded();
                     const syncResult = await sync.pushToSupabase();
                     if (syncResult.success) {
-                        console.log('Successfully synced to Supabase on page hide');
                     } else {
                         console.warn('Failed to sync to Supabase on page hide:', syncResult.error);
                     }
@@ -1668,7 +1638,6 @@
                 try {
                     await db.flushDatabaseSave();
                     await sync.pushToSupabase();
-                    console.log('[logout] Synced data to Supabase before logout');
                 } catch (error) {
                     console.error('[logout] Failed to sync before logout:', error);
                 }
@@ -1820,6 +1789,7 @@
     />
 
     <div
+        bind:this={mainEl}
         class="main"
         class:notes-maximized={notesPanelWidth > 90}
         class:blurred={showLoginModal || showSignupModal || showEditPanelsModal}
@@ -1854,6 +1824,7 @@
 
         {#if showCalendar || showKanban}
         <section
+            bind:this={rightEl}
             class="right"
             class:calendar-minimized={isCalendarMinimized}
             class:kanban-minimized={isKanbanMinimized}

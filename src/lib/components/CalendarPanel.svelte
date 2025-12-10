@@ -412,7 +412,6 @@
                 color: newEventColor
             };
             
-            console.log('Adding event:', newEvent);
             await db.putCalendarEvent(newEvent);
             calendarEvents = [...calendarEvents, newEvent];
             await onSyncIfLoggedIn();
@@ -424,7 +423,6 @@
             newEventCustomDays = [false, false, false, false, false, false, false];
             showRepeatOptions = false;
             
-            console.log('Event added successfully');
         } catch (error) {
             console.error('Failed to add event:', error);
             alert(`Failed to create event: ${error instanceof Error ? error.message : 'Unknown error'}`);

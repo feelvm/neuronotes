@@ -78,18 +78,15 @@
                 // For the new user, we need to either migrate local data or sync from Supabase
                 
                 if (needsMigrate) {
-                    console.log('Migrating local data to Supabase for new user...');
                     // Migrate BEFORE clearing - this pushes local data to Supabase
                     const migrationResult = await migrations.migrateLocalDataToSupabase();
                     if (migrationResult.success) {
-                        console.log('Migration successful:', migrationResult.migrated);
                     } else {
                         console.error('Migration failed:', migrationResult.error);
                     }
                 }
                 
                 // Now clear all local data before pulling new user's data
-                console.log('Clearing local data for new user...');
                 await db.clearAllLocalData();
                 
                 // Store new user ID
@@ -100,18 +97,15 @@
                 // IMPORTANT: After clearing local data, we should ONLY pull from Supabase, not push
                 // Using fullSync() would push the empty local state and delete everything from Supabase!
                 // So we use pullFromSupabase() instead to restore the user's data
-                console.log('Pulling data from Supabase for user:', newUserId);
                 const pullResult = await sync.pullFromSupabase();
                 if (!pullResult.success) {
                     console.error('Failed to pull data from Supabase:', pullResult.error);
                     alert(`Warning: Failed to restore your data from cloud. Error: ${pullResult.error}`);
                 } else {
-                    console.log('Successfully pulled data from Supabase');
                     // Flush database to ensure all pulled data is persisted
                     await db.flushDatabaseSave();
                     // Verify data was pulled by checking workspaces
                     const pulledWorkspaces = await db.getAllWorkspaces();
-                    console.log(`Pulled ${pulledWorkspaces.length} workspaces from Supabase`);
                     if (pulledWorkspaces.length === 0) {
                         console.warn('No workspaces found in Supabase for this user - data may not exist in cloud');
                         alert('No data found in cloud for this account. If you had data before, it may have been lost. Please restore from a backup if available.');

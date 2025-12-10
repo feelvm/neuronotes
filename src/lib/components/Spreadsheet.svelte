@@ -49,6 +49,11 @@
 		minCol: number;
 		maxCol: number;
 	} | null = null;
+
+	// Cache for formula optimization
+	let cachedFormulaCells: { row: number; col: number }[] | null = null;
+	let formulaDependencies: Map<string, Set<string>> = new Map(); // formula cell key -> set of referenced cell keys
+	let needsFormulaCacheRebuild = true;
 	let clipboardMode: "cut" | "copy" | null = null;
 
 	type SpreadsheetHistoryEntry = {
@@ -334,6 +339,7 @@
 					colWidths: restored.colWidths || {},
 					rowHeights: restored.rowHeights || {}
 				};
+				needsFormulaCacheRebuild = true;
 				recalculateSheet();
 				dispatch("update");
 			}
@@ -352,6 +358,7 @@
 					colWidths: restored.colWidths || {},
 					rowHeights: restored.rowHeights || {}
 				};
+				needsFormulaCacheRebuild = true;
 				recalculateSheet();
 				dispatch("update");
 			}
@@ -359,36 +366,172 @@
 	}
 
 	/**
-	 * Recalculates all formula cells in the sheet.
-	 * It iterates multiple times to resolve dependencies (e.g., C1=B1, B1=A1).
-	 * The loop has a fixed limit to prevent infinite loops from circular references.
+	 * Gets a unique key for a cell position
 	 */
-	function recalculateSheet() {
-		if (!spreadsheetData?.data) return;
+	function getCellKey(row: number, col: number): string {
+		return `${row},${col}`;
+	}
 
-		const formulaCells: { row: number; col: number }[] = [];
+	/**
+	 * Extracts all cell references from a formula string
+	 */
+	function extractCellReferences(formula: string): Set<string> {
+		const refs = new Set<string>();
+		// Match cell references like A1, B2, etc.
+		const cellRefPattern = /[A-Z]+\d+/gi;
+		const matches = formula.match(cellRefPattern);
+		if (matches) {
+			for (const match of matches) {
+				const coords = parseCellReference(match);
+				if (coords) {
+					refs.add(getCellKey(coords.row, coords.col));
+				}
+			}
+		}
+		// Also check for ranges in SUM/AVG functions (e.g., A1:B2)
+		const rangePattern = /([A-Z]+\d+):([A-Z]+\d+)/gi;
+		const rangeMatches = formula.matchAll(rangePattern);
+		for (const match of rangeMatches) {
+			const start = parseCellReference(match[1]);
+			const end = parseCellReference(match[2]);
+			if (start && end) {
+				const minRow = Math.min(start.row, end.row);
+				const maxRow = Math.max(start.row, end.row);
+				const minCol = Math.min(start.col, end.col);
+				const maxCol = Math.max(start.col, end.col);
+				for (let r = minRow; r <= maxRow; r++) {
+					for (let c = minCol; c <= maxCol; c++) {
+						refs.add(getCellKey(r, c));
+					}
+				}
+			}
+		}
+		return refs;
+	}
+
+	/**
+	 * Rebuilds the formula cache and dependency map
+	 */
+	function rebuildFormulaCache() {
+		if (!spreadsheetData?.data) return;
+		
+		cachedFormulaCells = [];
+		formulaDependencies.clear();
+
 		for (let r = 0; r < spreadsheetData.data.length; r++) {
 			for (let c = 0; c < spreadsheetData.data[0].length; c++) {
 				const cell = spreadsheetData.data[r][c];
 				if (typeof cell.value === "string" && cell.value.startsWith("=")) {
-					formulaCells.push({ row: r, col: c });
+					const cellKey = getCellKey(r, c);
+					cachedFormulaCells.push({ row: r, col: c });
+					formulaDependencies.set(cellKey, extractCellReferences(cell.value));
 				} else {
 					cell.computedValue = cell.value;
 				}
 			}
 		}
+		needsFormulaCacheRebuild = false;
+	}
 
+	/**
+	 * Recalculates formula cells, optimized to only recalculate affected formulas.
+	 * It iterates multiple times to resolve dependencies (e.g., C1=B1, B1=A1).
+	 * The loop has a fixed limit to prevent infinite loops from circular references.
+	 */
+	function recalculateSheet(changedCells?: Set<string>) {
+		if (!spreadsheetData?.data) return;
+
+		// Rebuild cache if needed
+		if (needsFormulaCacheRebuild || !cachedFormulaCells) {
+			rebuildFormulaCache();
+		}
+
+		if (!cachedFormulaCells) return;
+
+		// If no changed cells specified, recalculate all formulas (full recalculation)
+		// This happens on initial load, undo/redo, or when cache is rebuilt
+		if (!changedCells || changedCells.size === 0) {
+			for (let i = 0; i < 10; i++) {
+				let changed = false;
+				for (const { row, col } of cachedFormulaCells) {
+					const cell = spreadsheetData.data[row][col];
+					const newValue = evaluateFormula(cell.value, new Set());
+					if (cell.computedValue !== newValue) {
+						cell.computedValue = newValue;
+						changed = true;
+					}
+				}
+				if (!changed) break;
+			}
+			return;
+		}
+
+		// Update computedValue for non-formula cells that changed, and collect formula cells that changed
+		const changedFormulaCells = new Set<string>();
+		for (const changedCellKey of changedCells) {
+			const [rowStr, colStr] = changedCellKey.split(',');
+			const row = parseInt(rowStr, 10);
+			const col = parseInt(colStr, 10);
+			if (row >= 0 && row < spreadsheetData.data.length && 
+			    col >= 0 && col < spreadsheetData.data[0].length) {
+				const cell = spreadsheetData.data[row][col];
+				// If it's a formula, we need to recalculate it
+				if (typeof cell.value === "string" && cell.value.startsWith("=")) {
+					changedFormulaCells.add(changedCellKey);
+				} else {
+					// If it's not a formula, update computedValue to match value
+					cell.computedValue = cell.value;
+				}
+			}
+		}
+
+		// Find formulas that depend on changed cells (including the changed formula cells themselves)
+		const formulasToRecalculate = new Set<string>(changedFormulaCells);
+		for (const [formulaKey, dependencies] of formulaDependencies.entries()) {
+			for (const changedCell of changedCells) {
+				if (dependencies.has(changedCell)) {
+					formulasToRecalculate.add(formulaKey);
+					break;
+				}
+			}
+		}
+
+		// If no formulas to recalculate, we're done (but we already updated non-formula cells above)
+		if (formulasToRecalculate.size === 0) return;
+
+		// Recalculate affected formulas iteratively to handle dependencies
 		for (let i = 0; i < 10; i++) {
 			let changed = false;
-			for (const { row, col } of formulaCells) {
+			for (const formulaKey of formulasToRecalculate) {
+				const [rowStr, colStr] = formulaKey.split(',');
+				const row = parseInt(rowStr, 10);
+				const col = parseInt(colStr, 10);
 				const cell = spreadsheetData.data[row][col];
 				const newValue = evaluateFormula(cell.value, new Set());
 				if (cell.computedValue !== newValue) {
 					cell.computedValue = newValue;
 					changed = true;
+					// If this formula's value changed, add it to changed cells for next iteration
+					changedCells.add(formulaKey);
 				}
 			}
 			if (!changed) break;
+			
+			// Check if any newly changed formulas have dependencies we need to recalculate
+			const newFormulasToCheck = new Set<string>();
+			for (const [formulaKey, dependencies] of formulaDependencies.entries()) {
+				if (formulasToRecalculate.has(formulaKey)) continue; // Already recalculating
+				for (const changedCell of changedCells) {
+					if (dependencies.has(changedCell)) {
+						newFormulasToCheck.add(formulaKey);
+						break;
+					}
+				}
+			}
+			// Add newly affected formulas to the recalculation set
+			for (const key of newFormulasToCheck) {
+				formulasToRecalculate.add(key);
+			}
 		}
 	}
 
@@ -517,17 +660,14 @@
 			if (coords) {
 				const cell = spreadsheetData.data[coords.row][coords.col];
 				const value = getCellValueForCalculation(cell).toString();
-				console.log(`Replaced cell reference ${match} with value: ${value}`);
 				return value;
 			}
 			return "0";
 		});
-		console.log(`Original expression: ${expression}, Resolved: ${resolvedExpression}`);
 
 		try {
 			const validPattern = /^[\d\s()+\-*/.]+$/;
 			if (!validPattern.test(resolvedExpression)) {
-				console.log('Regex validation failed for:', resolvedExpression);
 				return "#ERROR!";
 			}
 			
@@ -536,10 +676,8 @@
 			if (typeof result === "number" && isFinite(result)) {
 				return result.toString();
 			}
-			console.log('Result is not a finite number:', result, 'Type:', typeof result);
 			return "#ERROR!";
 		} catch (e) {
-			console.log('Error evaluating expression:', resolvedExpression, 'Error:', e);
 			return "#ERROR!";
 		}
 	}
@@ -859,15 +997,22 @@
 	}
 
 	onMount(() => {
+		rebuildFormulaCache();
 		recalculateSheet();
 		saveHistory();
 	});
 
 	onDestroy(() => {
+		// Cleanup all possible event listeners to prevent memory leaks
 		window.removeEventListener("mousemove", handleMouseMove);
 		window.removeEventListener("mouseup", handleMouseUp);
 		window.removeEventListener("mouseover", handleCellMouseOver);
 		window.removeEventListener("mouseup", handleCellMouseUp);
+		
+		// Reset state to ensure handlers don't run after destruction
+		colBeingResized = null;
+		rowBeingResized = null;
+		isSelecting = false;
 
 		debouncedRecalculateAndUpdate.flush();
 	});
@@ -967,8 +1112,21 @@
 										hasSavedHistoryForCurrentEdit = !wasDeletion;
 									}
 									
+									const wasFormula = typeof cell.value === "string" && cell.value.startsWith("=");
+									const isFormula = newValue.startsWith("=");
+									
 									cell.value = newValue;
-									debouncedRecalculateAndUpdate();
+									
+									// Mark cache for rebuild if formula was added/removed
+									if (wasFormula !== isFormula) {
+										needsFormulaCacheRebuild = true;
+									}
+									
+									// Track changed cell for optimized recalculation
+									const changedCell = new Set<string>([getCellKey(rowIndex, colIndex)]);
+									recalculateSheet(changedCell);
+									spreadsheetData = spreadsheetData;
+									dispatch("update");
 								}}
 								on:blur={(e) => {
 									const newValue = (e.target as HTMLInputElement).value;

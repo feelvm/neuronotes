@@ -102,7 +102,6 @@ export async function createBackup(type: 'manual' | 'automatic' = 'manual', desc
 
     await cleanupOldBackups();
 
-    console.log(`[backup] Created ${type} backup:`, backupData.metadata.id);
     return backupData.metadata;
   } catch (error) {
     console.error('[backup] Failed to create backup:', error);
@@ -210,7 +209,6 @@ export async function saveImportedBackup(backupData: BackupData): Promise<Backup
   await saveBackup(importedBackup);
   await cleanupOldBackups();
   
-  console.log(`[backup] Saved imported backup:`, importedBackup.metadata.id);
   return importedBackup.metadata;
 }
 
@@ -317,8 +315,6 @@ async function cleanupOldBackups(): Promise<void> {
   for (const backup of toDelete) {
     await deleteBackup(backup.metadata.id);
   }
-  
-  console.log(`[backup] Cleaned up ${toDelete.length} old backups`);
 }
 
 let autoBackupInterval: number | null = null;
@@ -352,15 +348,12 @@ export function startAutoBackup(): void {
         .catch(console.error);
     }
   }, 60 * 60 * 1000);
-  
-  console.log('[backup] Automatic backup scheduling started');
 }
 
 export function stopAutoBackup(): void {
   if (autoBackupInterval) {
     clearInterval(autoBackupInterval);
     autoBackupInterval = null;
-    console.log('[backup] Automatic backup scheduling stopped');
   }
 }
 

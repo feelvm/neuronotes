@@ -22,9 +22,6 @@ const getStorageKey = () => {
   try {
     const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
     const key = isDev ? 'neuronotes_db_dev' : 'neuronotes_db';
-    if (import.meta.env.DEV) {
-      console.log(`[browser_db] Environment detection: DEV=${isDev}, using storage key: ${key}`);
-    }
     return key;
   } catch (e) {
     console.warn('[browser_db] Failed to detect environment, defaulting to production key:', e);
@@ -55,25 +52,14 @@ export async function init(): Promise<void> {
           const uint8Array = new Uint8Array(array);
           db = new SQL.Database(uint8Array);
           db.run(SCHEMA_SQL);
-          if (import.meta.env.DEV) {
-            console.log(`[browser_db] Loaded existing SQLite database from localStorage (${storageKey})`);
-            const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
-            console.log(`[browser_db] Database tables:`, tables[0]?.values?.map((row: any) => row[0]) || []);
-          }
         } catch (e) {
           console.warn('[browser_db] Failed to load saved database, creating new one:', e);
           db = new SQL.Database();
           db.run(SCHEMA_SQL);
-          if (import.meta.env.DEV) {
-            console.log(`[browser_db] Created new SQLite database after load failure (${storageKey})`);
-          }
         }
       } else {
         db = new SQL.Database();
         db.run(SCHEMA_SQL);
-        if (import.meta.env.DEV) {
-          console.log(`[browser_db] Created new SQLite database (${storageKey})`);
-        }
       }
       
       const verifyTables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
@@ -81,8 +67,6 @@ export async function init(): Promise<void> {
       if (tableNames.length === 0) {
         console.error('[browser_db] WARNING: No tables found after initialization!');
         db.run(SCHEMA_SQL);
-      } else if (import.meta.env.DEV) {
-        console.log(`[browser_db] Verified tables exist:`, tableNames);
       }
 
       const saveDb = () => {
@@ -107,10 +91,6 @@ export async function init(): Promise<void> {
         window.addEventListener('beforeunload', saveDb); // Immediate save on page unload
         // Periodic save as backup (every 10 seconds instead of 5)
         setInterval(saveDb, 10000);
-      }
-
-      if (import.meta.env.DEV) {
-        console.log('[browser_db] SQLite database initialized successfully');
       }
     } catch (error) {
       console.error('[browser_db] Failed to initialize SQLite database:', error);
@@ -305,7 +285,6 @@ export async function putNote(note: Note): Promise<void> {
       if (existingContent) {
         contentHTML = existingContent;
         if (import.meta.env.DEV) {
-          console.log(`[browser_db] Preserved existing content for note ${note.id} (${existingContent.length} chars)`);
         }
       }
     } catch (e) {

@@ -329,10 +329,10 @@
                 const noteIndex = notes.findIndex(note => note.id === n.id);
                 if (noteIndex !== -1) {
                     notes[noteIndex] = reloadedNote;
+                    notes = [...notes];
                 } else {
                     notes = [...notes, reloadedNote];
                 }
-                notes = [...notes];
             } else {
                 notes = [...notes, n];
             }
@@ -535,8 +535,6 @@
             }
             if (!spreadsheet) {
                 console.warn(`[updateNote] No spreadsheet data found for spreadsheet note ${note.id}`);
-            } else {
-                console.log(`[updateNote] Saving spreadsheet note ${note.id} with data:`, spreadsheet);
             }
         }
         
@@ -551,16 +549,13 @@
             noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
         }
         
-        console.log(`[updateNote] Saving note ${noteToSave.id} (type: ${noteToSave.type}) to database with updatedAt: ${noteToSave.updatedAt}`);
         await db.putNote(noteToSave);
-        console.log(`[updateNote] Successfully saved note ${noteToSave.id} to database`);
         
         if (noteToSave.type === 'spreadsheet') {
             try {
                 const reloadedNotes = await db.getNotesByWorkspaceId(noteToSave.workspaceId);
                 const reloadedNote = reloadedNotes.find(n => n.id === noteToSave.id);
                 if (reloadedNote) {
-                    console.log(`[updateNote] Reloaded note ${reloadedNote.id} from database with updatedAt: ${reloadedNote.updatedAt}`);
                     const noteToUpdate = {
                         ...reloadedNote,
                         updatedAt: noteToSave.updatedAt,
@@ -570,7 +565,6 @@
                     if (index !== -1) {
                         notes[index] = noteToUpdate;
                         notes = [...notes];
-                        console.log(`[updateNote] Updated note in array with updatedAt: ${noteToUpdate.updatedAt}`);
                     }
                 } else {
                     console.warn(`[updateNote] Could not find reloaded note ${noteToSave.id} in database`);
@@ -616,7 +610,6 @@
     function handleDragStart(ev: DragEvent, item: DisplayItem) {
         if (!ev.dataTransfer) return;
 
-        console.log('Drag started:', item.displayType, item);
         isDragging = true;
         draggedItemType = item.displayType;
         ev.dataTransfer.effectAllowed = 'move';
@@ -711,7 +704,6 @@
         ev.preventDefault();
         ev.stopPropagation();
         dropIndex = null;
-        console.log('Reorder drop triggered at index:', targetIndex);
 
         let data = ev.dataTransfer?.getData('application/json');
         if (!data) {
@@ -771,7 +763,6 @@
                     workspaceId: workspaceId,
                     order: index
                 };
-                console.log('Created folder update:', updatedFolder);
                 return { 
                     ...updatedFolder,
                     displayType: 'folder' as const
@@ -791,17 +782,11 @@
                     ...originalNote,
                     order: index
                 };
-                console.log('Created note update:', { id: updatedNote.id, title: updatedNote.title, workspaceId: updatedNote.workspaceId, order: updatedNote.order });
                 return { 
                     ...updatedNote,
                     displayType: 'note' as const
                 } as Note & { displayType: 'note' };
             }
-        });
-        console.log('About to save updates. Count:', updates.length);
-        console.log('Updates breakdown:', {
-            folders: updates.filter(i => i.displayType === 'folder').length,
-            notes: updates.filter(i => i.displayType === 'note').length
         });
         
         const promises = updates.map(async (item) => {
@@ -811,10 +796,8 @@
                     console.error('Folder missing workspaceId:', folder);
                     throw new Error(`Folder ${folder.id} is missing workspaceId`);
                 }
-                console.log('Saving folder:', { id: folder.id, name: folder.name, workspaceId: folder.workspaceId, order: folder.order });
                 try {
                     await db.putFolder(folder);
-                    console.log('Successfully saved folder:', folder.id);
                 } catch (error) {
                     console.error('Error saving folder:', folder, error);
                     throw error;
@@ -825,10 +808,8 @@
                     console.error('Note missing workspaceId:', note);
                     throw new Error(`Note ${note.id} is missing workspaceId`);
                 }
-                console.log('Saving note:', { id: note.id, title: note.title, workspaceId: note.workspaceId, order: note.order });
                 try {
                     await db.putNote(note);
-                    console.log('Successfully saved note:', note.id);
                 } catch (error) {
                     console.error('Error saving note:', note, error);
                     throw error;
@@ -862,7 +843,6 @@
 
         notes = [...notes];
         folders = [...folders];
-        console.log('State updated - folders:', folders.length, 'notes:', notes.length);
         isDragging = false;
         draggedItemType = null;
     }
@@ -1183,9 +1163,15 @@
     }
 
     onDestroy(() => {
+        // Cleanup selection change listener
         if (browser && (window as any).__notesPanelSelectionCleanup) {
             (window as any).__notesPanelSelectionCleanup();
             delete (window as any).__notesPanelSelectionCleanup;
+        }
+        
+        // Cleanup any debounced functions
+        if (debouncedUpdateNote) {
+            debouncedUpdateNote.flush?.();
         }
     });
 </script>
@@ -1585,7 +1571,6 @@
                                                 const latestSpreadsheet = parsedCurrentNote?.spreadsheet;
                                                 
                                                 if (latestSpreadsheet) {
-                                                    console.log('[spreadsheet update] Saving spreadsheet data for note', currentNote.id);
                                                     
                                                     const index = notes.findIndex((n) => n.id === currentNote.id);
                                                     if (index !== -1) {

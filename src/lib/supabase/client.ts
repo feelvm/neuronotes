@@ -4,15 +4,6 @@ import type { Database } from './types';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// Debug logging (only in development)
-if (import.meta.env.DEV) {
-  console.log('[supabase] Environment check:', {
-    hasUrl: !!supabaseUrl,
-    hasKey: !!supabaseAnonKey,
-    urlLength: supabaseUrl?.length || 0,
-    keyLength: supabaseAnonKey?.length || 0
-  });
-}
 
 // Only create client if environment variables are set
 // This allows the app to work without Supabase configured
@@ -31,9 +22,6 @@ if (supabaseUrl && supabaseAnonKey) {
       detectSessionInUrl: true
     }
   });
-  if (import.meta.env.DEV) {
-    console.log('[supabase] Client initialized successfully');
-  }
 } else {
   // Only show warning in dev mode to avoid console noise in production
   if (import.meta.env.DEV) {

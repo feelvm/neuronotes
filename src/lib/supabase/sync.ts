@@ -135,7 +135,6 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
     // Push notes and handle deletions
     for (const workspace of workspaces) {
       const notes = await db.getNotesByWorkspaceId(workspace.id);
-      console.log(`[sync] Pushing ${notes.length} notes for workspace ${workspace.id}`);
       const localNoteIds = new Set(notes.map(n => n.id));
       
       // Get all notes from Supabase for this workspace
@@ -179,15 +178,9 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         const isRecentEdit = (Date.now() - note.updatedAt) < 5000;
         
         if (remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt && !isRecentEdit) {
-          console.log(`[sync] Skipping push for note ${note.id} - remote version is newer (local: ${note.updatedAt}, remote: ${remoteUpdatedAt})`);
           continue;
         }
         
-        if (isRecentEdit && remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt) {
-          console.log(`[sync] Force pushing note ${note.id} (${note.type}) - local edit was recent (local: ${note.updatedAt}, remote: ${remoteUpdatedAt})`);
-        }
-        
-        console.log(`[sync] Pushing note ${note.id}: ${note.title}`);
         // Ensure we have the latest content - get it from DB if note doesn't have it
         let contentHTML = note.contentHTML;
         if (!contentHTML || contentHTML === '') {
@@ -271,7 +264,6 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
             // Don't throw - content might be in notes table instead
           }
         }
-        console.log(`[sync] Successfully pushed note ${note.id}`);
       }
     }
 
@@ -320,7 +312,6 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
     // Push kanban and handle deletions
     for (const workspace of workspaces) {
       const kanbanData = await db.getKanbanByWorkspaceId(workspace.id);
-      console.log(`[sync:push] Workspace ${workspace.id}: local kanban=${!!kanbanData}, columns=${kanbanData?.columns?.length || 0}`);
       
       // Get kanban from Supabase for this workspace
       const { data: supabaseKanban } = await supabase
@@ -343,7 +334,6 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
         // but we could skip if remote was updated very recently (within last second)
         // For now, we'll push to ensure sync works, but in the future we could add updatedAt to Kanban type
         const columnsToSave = JSON.parse(JSON.stringify(kanbanData.columns));
-        console.log(`[sync:push] Upserting kanban for workspace ${workspace.id} with ${columnsToSave.length} columns`);
         const { error: upsertError } = await supabase
           .from('kanban')
           .upsert({
@@ -354,12 +344,9 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
           });
         if (upsertError) {
           console.error(`[sync:push] Failed to upsert kanban for workspace ${workspace.id}:`, upsertError);
-        } else {
-          console.log(`[sync:push] Upserted kanban for workspace ${workspace.id}`);
         }
       } else if (supabaseKanban) {
         // Local kanban doesn't exist but Supabase has one - delete from Supabase
-        console.log(`[sync:push] Deleting Supabase kanban for workspace ${workspace.id} (no local kanban)`);
         const { error: deleteError } = await supabase
           .from('kanban')
           .delete()
@@ -367,11 +354,7 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
           .eq('user_id', userId);
         if (deleteError) {
           console.error(`[sync:push] Failed to delete Supabase kanban for workspace ${workspace.id}:`, deleteError);
-        } else {
-          console.log(`[sync:push] Deleted Supabase kanban for workspace ${workspace.id}`);
         }
-      } else {
-        console.log(`[sync:push] No kanban to sync for workspace ${workspace.id}`);
       }
     }
 
@@ -513,7 +496,6 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
           
           // Conflict resolution: only update if remote is newer or note doesn't exist locally
           if (localNote && localNote.updatedAt > remoteUpdatedAt) {
-            console.log(`[sync] Skipping note ${note.id} - local version is newer (local: ${localNote.updatedAt}, remote: ${remoteUpdatedAt})`);
             continue; // Skip this note, local version is newer
           }
           
@@ -650,27 +632,19 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
 
       // Get local kanban for this workspace
       const localKanban = await db.getKanbanByWorkspaceId(workspace.id);
-      console.log(`[sync:pull] Workspace ${workspace.id}: remote=${!!kanbanData}, local=${!!localKanban}`);
 
       // If remote kanban exists, upsert it
       // Note: For kanban, we don't have local timestamps, so we always accept remote
       // In the future, we could add updatedAt to Kanban type for better conflict resolution
       if (kanbanData) {
         const columns = kanbanData.columns as any;
-        const columnCount = Array.isArray(columns) ? columns.length : 0;
-        console.log(`[sync:pull] Remote kanban has ${columnCount} columns`);
         await db.putKanban({
           workspaceId: kanbanData.workspace_id,
           columns: columns,
         });
-        console.log(`[sync:pull] Put local kanban for workspace ${kanbanData.workspace_id}`);
       } else if (localKanban) {
         // If local kanban exists but remote doesn't, delete local
-        console.log(`[sync:pull] No remote kanban, deleting local kanban for workspace ${workspace.id}`);
         await db.deleteKanban(workspace.id);
-        console.log(`[sync:pull] Deleted local kanban for workspace ${workspace.id}`);
-      } else {
-        console.log(`[sync:pull] No kanban data for workspace ${workspace.id} (remote or local)`);
       }
     }
 
