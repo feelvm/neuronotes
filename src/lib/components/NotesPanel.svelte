@@ -8,7 +8,8 @@
         applyFormat, 
         modifyFontSize as modifyFontSizeUtil, 
         getSelectedFontSize,
-        handlePlainTextPaste
+        handlePlainTextPaste,
+        linkifyEditor
     } from '$lib/utils/textFormatting';
     import type { Note, Folder, SpreadsheetCell } from '$lib/db_types';
 
@@ -26,6 +27,18 @@
     </svg>`;
 
     let DOMPurify: any;
+    
+    // Helper function to sanitize HTML while preserving link attributes
+    function sanitizeHTML(html: string): string {
+        if (!browser || !DOMPurify) return html;
+        // Configure DOMPurify to allow target and rel on anchor tags
+        // Use KEEP_CONTENT to preserve all content
+        return DOMPurify.sanitize(html, {
+            ADD_ATTR: ['target', 'rel'],
+            ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'style'],
+            ALLOWED_TAGS: ['a', 'p', 'br', 'strong', 'em', 'u', 'span', 'div', 'ul', 'ol', 'li', 'input', 'b', 'i']
+        });
+    }
 
     // State
     let notes: Note[] = [];
@@ -69,25 +82,30 @@
     const MAX_NOTE_HISTORY = 50;
 
     // Compute displayList reactively
+    // Use separate reactive statements to avoid cycle - don't update notes inside this block
     $: {
-        let items: DisplayItem[];
-        if (currentFolderId === null) {
-            const rootNotes = notes
-                .filter((n) => n.folderId === null && n.workspaceId === activeWorkspaceId)
-                .map((n) => ({ ...n, displayType: 'note' as const }));
-            const allFolders = folders
-                .filter((f) => f.workspaceId === activeWorkspaceId)
-                .map((f) => ({
-                    ...f,
-                    displayType: 'folder' as const
-                }));
-            items = [...allFolders, ...rootNotes];
+        let items: DisplayItem[] = [];
+        if (activeWorkspaceId) {
+            if (currentFolderId === null) {
+                const rootNotes = notes
+                    .filter((n) => n.folderId === null && n.workspaceId === activeWorkspaceId)
+                    .map((n) => ({ ...n, displayType: 'note' as const }));
+                const allFolders = folders
+                    .filter((f) => f.workspaceId === activeWorkspaceId)
+                    .map((f) => ({
+                        ...f,
+                        displayType: 'folder' as const
+                    }));
+                items = [...allFolders, ...rootNotes];
+            } else {
+                items = notes
+                    .filter((n) => n.folderId === currentFolderId && n.workspaceId === activeWorkspaceId)
+                    .map((n) => ({ ...n, displayType: 'note' as const }));
+            }
+            displayList = items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         } else {
-            items = notes
-                .filter((n) => n.folderId === currentFolderId && n.workspaceId === activeWorkspaceId)
-                .map((n) => ({ ...n, displayType: 'note' as const }));
+            displayList = [];
         }
-        displayList = items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     }
 
     $: currentFolder = folders.find((f) => f.id === currentFolderId);
@@ -95,8 +113,18 @@
     
     // Sanitized content for contenteditable to prevent XSS
     $: sanitizedNoteContent = currentNote && currentNote.type === 'text' && browser && DOMPurify
-        ? DOMPurify.sanitize(currentNote.contentHTML || '')
+        ? sanitizeHTML(currentNote.contentHTML || '')
         : (currentNote?.contentHTML || '');
+    
+    // Helper function to update note content without triggering reactive cycle
+    function updateNoteContent(noteId: string, content: string) {
+        const noteIndex = notes.findIndex((n) => n.id === noteId);
+        if (noteIndex !== -1) {
+            const updatedNotes = [...notes];
+            updatedNotes[noteIndex] = { ...updatedNotes[noteIndex], contentHTML: content };
+            notes = updatedNotes;
+        }
+    }
     
     // Update editor content only when note changes (not during typing)
     $: if (editorDiv && selectedNoteId && (selectedNoteId !== previousNoteId || (editorDiv.innerHTML === '' && !isMinimized))) {
@@ -105,39 +133,79 @@
             const noteWithMeta = note as any;
             if ((!note.contentHTML || note.contentHTML === '') && !noteWithMeta._contentLoaded) {
                 const noteId = note.id;
+                // Load content asynchronously to break reactive cycle
                 db.getNoteContent(noteId).then(rawContent => {
                     if (rawContent && editorDiv && selectedNoteId === noteId) {
                         const sanitized = (browser && DOMPurify) 
-                            ? DOMPurify.sanitize(rawContent)
+                            ? sanitizeHTML(rawContent)
                             : rawContent;
+                        updateNoteContent(noteId, sanitized);
                         const noteIndex = notes.findIndex((n) => n.id === noteId);
                         if (noteIndex !== -1) {
-                            notes[noteIndex] = { ...notes[noteIndex], contentHTML: sanitized };
                             const updatedNoteWithMeta = notes[noteIndex] as any;
                             updatedNoteWithMeta._contentLoaded = true;
                             notes = [...notes];
                         }
                         if (editorDiv && (editorDiv.innerHTML === '' || editorDiv.innerHTML !== sanitized)) {
                             editorDiv.innerHTML = sanitized;
+                            // Linkify any URLs in the loaded content
+                            tick().then(() => {
+                                if (editorDiv && browser) {
+                                    try {
+                                        linkifyEditor(editorDiv);
+                                        // Update note content with linkified version
+                                        updateNoteContent(noteId, editorDiv.innerHTML);
+                                    } catch (err) {
+                                        console.warn('Linkify error on load:', err);
+                                    }
+                                }
+                                updateFormattingState();
+                            });
+                        } else {
+                            // Update formatting state after content is loaded
+                            tick().then(() => updateFormattingState());
                         }
-                        // Update formatting state after content is loaded
-                        tick().then(() => updateFormattingState());
                     }
                 }).catch(e => {
                     console.error('Failed to load note content:', e);
                 });
             } else if (note.contentHTML) {
                 const sanitized = browser && DOMPurify
-                    ? DOMPurify.sanitize(note.contentHTML)
+                    ? sanitizeHTML(note.contentHTML)
                     : note.contentHTML;
                 
                 if (editorDiv.innerHTML === '' && sanitized) {
                     editorDiv.innerHTML = sanitized;
+                    tick().then(() => {
+                        if (editorDiv && browser) {
+                            try {
+                                linkifyEditor(editorDiv);
+                                // Update note content with linkified version
+                                updateNoteContent(note.id, editorDiv.innerHTML);
+                            } catch (err) {
+                                console.warn('Linkify error:', err);
+                            }
+                        }
+                        updateFormattingState();
+                    });
                 } else if (editorDiv.innerHTML !== sanitized && sanitized && previousNoteId !== selectedNoteId) {
                     editorDiv.innerHTML = sanitized;
+                    tick().then(() => {
+                        if (editorDiv && browser) {
+                            try {
+                                linkifyEditor(editorDiv);
+                                // Update note content with linkified version
+                                updateNoteContent(note.id, editorDiv.innerHTML);
+                            } catch (err) {
+                                console.warn('Linkify error:', err);
+                            }
+                        }
+                        updateFormattingState();
+                    });
+                } else {
+                    // Update formatting state after content is set
+                    tick().then(() => updateFormattingState());
                 }
-                // Update formatting state after content is set
-                tick().then(() => updateFormattingState());
             }
         }
         previousNoteId = selectedNoteId;
@@ -283,11 +351,28 @@
             tick().then(() => {
                 const updatedNote = notes.find((n) => n.id === id);
                 if (updatedNote && updatedNote.type === 'text' && editorDiv) {
-                    const sanitized = (browser && DOMPurify) 
-                        ? DOMPurify.sanitize(updatedNote.contentHTML || '')
-                        : (updatedNote.contentHTML || '');
+                const sanitized = (browser && DOMPurify) 
+                    ? sanitizeHTML(updatedNote.contentHTML || '')
+                    : (updatedNote.contentHTML || '');
                     if (editorDiv.innerHTML !== sanitized) {
                         editorDiv.innerHTML = sanitized;
+                        tick().then(() => {
+                            if (editorDiv && browser) {
+                                try {
+                                        linkifyEditor(editorDiv);
+                                        // Update note content with linkified version - find note again to avoid cycle
+                                        const noteId = note.id;
+                                        const noteIndex = notes.findIndex((n) => n.id === noteId);
+                                        if (noteIndex !== -1) {
+                                            const updatedNotes = [...notes];
+                                            updatedNotes[noteIndex] = { ...updatedNotes[noteIndex], contentHTML: editorDiv.innerHTML };
+                                            notes = updatedNotes;
+                                        }
+                                } catch (err) {
+                                    console.warn('Linkify error:', err);
+                                }
+                            }
+                        });
                     }
                 }
             });
@@ -489,7 +574,7 @@
             const previousState = history[index - 1];
             if (previousState && currentNote && currentNote.id === noteId) {
                 const sanitized = (browser && DOMPurify) 
-                    ? DOMPurify.sanitize(previousState.content)
+                    ? sanitizeHTML(previousState.content)
                     : previousState.content;
                 currentNote.contentHTML = sanitized;
                 if (editorDiv) {
@@ -512,7 +597,7 @@
             const nextState = history[index + 1];
             if (nextState && currentNote && currentNote.id === noteId) {
                 const sanitized = (browser && DOMPurify) 
-                    ? DOMPurify.sanitize(nextState.content)
+                    ? sanitizeHTML(nextState.content)
                     : nextState.content;
                 currentNote.contentHTML = sanitized;
                 if (editorDiv) {
@@ -553,7 +638,7 @@
         };
         
         if (browser && DOMPurify && noteToSave.type === 'text') {
-            noteToSave.contentHTML = DOMPurify.sanitize(noteToSave.contentHTML);
+            noteToSave.contentHTML = sanitizeHTML(noteToSave.contentHTML);
         }
         
         await db.putNote(noteToSave);
@@ -1633,19 +1718,109 @@
                                     contenteditable="true"
                                     bind:this={editorDiv}
                                     on:input={(e) => {
-                                        if (currentNote && editorDiv) {
+                                        if (currentNote && editorDiv && browser) {
                                             currentNote.contentHTML = editorDiv.innerHTML;
                                             debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
                                             debouncedUpdateNote(currentNote);
+                                            
+                                            // Linkify URLs in the content after a short delay
+                                            // Only if the content actually changed (not from paste handler)
+                                            setTimeout(() => {
+                                                if (editorDiv && currentNote && browser) {
+                                                    try {
+                                                        linkifyEditor(editorDiv);
+                                                        // Only update if content actually changed
+                                                        if (currentNote.contentHTML !== editorDiv.innerHTML) {
+                                                            currentNote.contentHTML = editorDiv.innerHTML;
+                                                            debouncedUpdateNote(currentNote);
+                                                        }
+                                                    } catch (err) {
+                                                        console.warn('Linkify error:', err);
+                                                    }
+                                                }
+                                            }, 150);
+                                        }
+                                    }}
+                                    on:mousedown={(e) => {
+                                        // Handle link clicks to open in new tab
+                                        const target = e.target as HTMLElement;
+                                        const link = target.tagName === 'A' 
+                                            ? target as HTMLAnchorElement 
+                                            : target.closest('a') as HTMLAnchorElement;
+                                        if (link && link.href) {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            window.open(link.href, '_blank', 'noopener,noreferrer');
+                                            return false;
                                         }
                                     }}
                                     on:focus={async () => {
                                         await tick();
+                                        // Linkify any URLs when editor gains focus
+                                        if (editorDiv && browser) {
+                                            try {
+                                                linkifyEditor(editorDiv);
+                                                if (currentNote) {
+                                                    currentNote.contentHTML = editorDiv.innerHTML;
+                                                }
+                                            } catch (err) {
+                                                console.warn('Linkify error on focus:', err);
+                                            }
+                                        }
                                         updateFormattingState();
                                         updateSelectedFontSize();
                                     }}
-                                    on:paste={handlePlainTextPaste}
+                                    on:blur={() => {
+                                        // Linkify URLs when editor loses focus
+                                        if (editorDiv && currentNote && browser) {
+                                            try {
+                                                linkifyEditor(editorDiv);
+                                                currentNote.contentHTML = editorDiv.innerHTML;
+                                                debouncedUpdateNote(currentNote);
+                                            } catch (err) {
+                                                console.warn('Linkify error on blur:', err);
+                                            }
+                                        }
+                                    }}
+                                    on:paste={(e) => {
+                                        // Handle paste and then linkify
+                                        const result = handlePlainTextPaste(e);
+                                        if (result && editorDiv && currentNote && browser) {
+                                            // Linkify after paste completes
+                                            setTimeout(() => {
+                                                if (editorDiv && currentNote && browser) {
+                                                    try {
+                                                        linkifyEditor(editorDiv);
+                                                        if (currentNote.contentHTML !== editorDiv.innerHTML) {
+                                                            currentNote.contentHTML = editorDiv.innerHTML;
+                                                            debouncedUpdateNote(currentNote);
+                                                        }
+                                                    } catch (err) {
+                                                        console.warn('Linkify error after paste:', err);
+                                                    }
+                                                }
+                                            }, 50);
+                                        }
+                                    }}
                                     on:keydown={(e) => {
+                                        // Detect URLs when space or enter is pressed
+                                        if ((e.key === ' ' || e.key === 'Enter') && !e.ctrlKey && !e.metaKey && browser) {
+                                            // Small delay to allow the character to be inserted first
+                                            setTimeout(() => {
+                                                if (editorDiv && currentNote && browser) {
+                                                    try {
+                                                        linkifyEditor(editorDiv);
+                                                        if (currentNote.contentHTML !== editorDiv.innerHTML) {
+                                                            currentNote.contentHTML = editorDiv.innerHTML;
+                                                            debouncedUpdateNote(currentNote);
+                                                        }
+                                                    } catch (err) {
+                                                        console.warn('Linkify error on keydown:', err);
+                                                    }
+                                                }
+                                            }, 20);
+                                        }
+                                        
                                         // Ensure new text uses the selected font size when typing
                                         // Only do this if we're about to type a regular character
                                         if (!e.ctrlKey && !e.metaKey && e.key.length === 1 && !e.shiftKey && e.key !== 'Enter') {
@@ -2126,6 +2301,29 @@
         width: 14px;
         height: 14px;
         opacity: 0.8;
+    }
+    
+    :global(.contenteditable a.note-link),
+    :global(.contenteditable .note-link) {
+        color: #4a9eff !important;
+        text-decoration: underline !important;
+        cursor: pointer !important;
+        transition: color 0.2s;
+    }
+    
+    :global(.contenteditable a.note-link:hover),
+    :global(.contenteditable .note-link:hover) {
+        color: #6bb3ff !important;
+    }
+    
+    :global(.contenteditable a) {
+        color: #4a9eff !important;
+        text-decoration: underline !important;
+        cursor: pointer !important;
+    }
+    
+    :global(.contenteditable a:hover) {
+        color: #6bb3ff !important;
     }
 
     .spreadsheet-wrapper {
