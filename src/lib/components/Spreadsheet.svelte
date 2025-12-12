@@ -1358,6 +1358,7 @@
     position: relative;
     border-right: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
+    overflow: hidden;
   }
   .cell-wrapper.selected:not(:focus-within) {
     z-index: 2;
@@ -1378,10 +1379,10 @@
     padding: 0 4px;
     font-size: 16px;
     transform: scale(0.8125);
-    transform-origin: left center;
+    transform-origin: top left;
     font-family: var(--font-sans);
-    width: 100%;
-    height: 100%;
+    width: calc(100% / 0.8125);
+    height: calc(100% / 0.8125);
     box-sizing: border-box;
   }
   .cell:focus {
