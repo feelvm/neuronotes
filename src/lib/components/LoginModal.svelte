@@ -163,6 +163,7 @@
                         <input
                             id="login-email"
                             type="email"
+                            autocomplete="email"
                             class:invalid={isEmailInvalid}
                             bind:value={loginEmail}
                             placeholder="Enter your email"
@@ -302,7 +303,9 @@
         border: 1px solid var(--border);
         border-radius: 6px;
         color: var(--text);
-        font-size: 14px;
+        font-size: 16px;
+        transform: scale(0.875);
+        transform-origin: left center;
         transition: border-color 0.2s, background-color 0.2s;
         box-sizing: border-box;
     }

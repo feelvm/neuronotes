@@ -1376,7 +1376,9 @@
     outline: none;
     color: var(--text);
     padding: 0 4px;
-    font-size: 13px;
+    font-size: 16px;
+    transform: scale(0.8125);
+    transform-origin: left center;
     font-family: var(--font-sans);
     width: 100%;
     height: 100%;

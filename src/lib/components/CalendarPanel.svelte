@@ -1116,7 +1116,9 @@
         border: 1px solid var(--accent-purple);
         border-radius: 3px;
         padding: 2px 4px;
-        font-size: 11px;
+        font-size: 16px;
+        transform: scale(0.6875);
+        transform-origin: left center;
         color: var(--text);
         font-family: var(--font-sans);
         width: 100%;
@@ -1161,7 +1163,9 @@
         color: var(--text);
         flex-shrink: 0;
         min-width: 120px;
-        font-size: 12px;
+        font-size: 16px;
+        transform: scale(0.75);
+        transform-origin: left center;
         font-family: var(--font-sans);
         height: 32px;
         box-sizing: border-box;

@@ -711,7 +711,9 @@
         flex: 1;
         min-width: 0;
         font-family: var(--font-sans);
-        font-size: 0.9rem;
+        font-size: 1rem;
+        transform: scale(0.9);
+        transform-origin: left center;
     }
 
     .kanban-col.collapsed .kanban-col-header input {
@@ -766,7 +768,9 @@
         outline: none;
         color: var(--text);
         font-family: var(--font-sans);
-        font-size: 14px;
+        font-size: 16px;
+        transform: scale(0.875);
+        transform-origin: left center;
         padding: 4px;
     }
 
@@ -797,7 +801,9 @@
         min-width: 120px;
         flex-shrink: 0;
         font-family: var(--font-sans);
-        font-size: 12px;
+        font-size: 16px;
+        transform: scale(0.75);
+        transform-origin: left center;
     }
 
     .kanban-actions .small-btn {
