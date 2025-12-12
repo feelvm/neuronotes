@@ -5,7 +5,6 @@
     export let showKanban = true;
     export let savePanelSelection = false;
 
-    // Callbacks
     export let onClose: () => void;
     export let onDone: () => void;
 </script>

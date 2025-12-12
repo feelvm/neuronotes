@@ -15,7 +15,6 @@
     export let ensureSupabaseLoaded: () => Promise<void>;
     export let sync: typeof import('$lib/supabase/sync');
 
-    // Local state
     let backups: backup.BackupData[] = [];
     let isLoadingBackups = false;
     let backupFileInput: HTMLInputElement;
@@ -28,7 +27,6 @@
         <path d="M8 0L10.5 5.5L16 8L10.5 10.5L8 16L5.5 10.5L0 8L5.5 5.5L8 0ZM8 2.5L6.5 6.5L2.5 8L6.5 9.5L8 13.5L9.5 9.5L13.5 8L9.5 6.5L8 2.5ZM8 5L9 7.5L11.5 8L9 8.5L8 11L7 8.5L4.5 8L7 7.5L8 5Z" fill="currentColor"/>
     </svg>`;
 
-    // Load backups when modal opens
     $: if (open) {
         loadBackups();
     }
@@ -37,7 +35,6 @@
         try {
             const metadata = await backup.createBackup('manual', 'Manual backup');
             
-            // In browser, also download the backup file immediately
             if (browser) {
                 try {
                     const backupData = await backup.getBackup(metadata.id);
@@ -55,7 +52,6 @@
                     }
                 } catch (downloadError) {
                     console.warn('Failed to auto-download backup:', downloadError);
-                    // Continue even if download fails
                 }
             }
             
@@ -103,16 +99,13 @@
             const fileContent = await file.text();
             const parsedData = JSON.parse(fileContent);
 
-            // Check if this is a full BackupData structure with metadata
             const isFullBackup = parsedData.metadata && parsedData.data && parsedData.version;
             
             let backupDataToSave: backup.BackupData;
             
             if (isFullBackup) {
-                // Full backup structure - save it directly
                 backupDataToSave = parsedData as backup.BackupData;
             } else if (parsedData.data) {
-                // Has data property but no metadata - construct BackupData
                 backupDataToSave = {
                     version: '1.0',
                     backupDate: new Date().toISOString(),
@@ -126,11 +119,9 @@
                     },
                     data: parsedData.data
                 };
-                // Calculate size
                 const jsonData = JSON.stringify(backupDataToSave);
                 backupDataToSave.metadata.size = new Blob([jsonData]).size;
             } else if (parsedData.workspaces || parsedData.notes) {
-                // Just data without wrapper - construct BackupData
                 backupDataToSave = {
                     version: '1.0',
                     backupDate: new Date().toISOString(),
@@ -151,7 +142,6 @@
                         settings: parsedData.settings || []
                     }
                 };
-                // Calculate size
                 const jsonData = JSON.stringify(backupDataToSave);
                 backupDataToSave.metadata.size = new Blob([jsonData]).size;
             } else {
@@ -160,12 +150,10 @@
                 return;
             }
 
-            // Save the backup to the backup list (without applying it)
             await backup.saveImportedBackup(backupDataToSave);
             
             target.value = '';
             
-            // Reload backups list
             await loadBackups();
             
             alert('Backup imported successfully! You can now restore it from the backup management list.');
@@ -208,21 +196,15 @@
         try {
             await backup.restoreBackup(backupId);
             
-            // Call parent's onRestore callback to reload UI state
             await onRestore();
-            
-            // Close backup modal
             onClose();
             
-            // If logged in, push restored data to Supabase to sync it
-            // This ensures the restored data becomes the source of truth in the cloud
             if (isLoggedIn && sync) {
                 try {
                     await ensureSupabaseLoaded();
                     await sync.pushToSupabase();
                 } catch (syncError) {
                     console.warn('Failed to sync restored data to Supabase:', syncError);
-                    // Don't throw - restore was successful, sync can happen later
                 }
             }
             

@@ -221,52 +221,41 @@ export async function getAllByIndex<T>(
 }
 
 /**
- * Clear all local data (useful when switching users)
+ * Clears all local data (used when switching users)
  */
 export async function clearAllLocalData(): Promise<void> {
   await ensureClient();
   
-  // Get all workspaces first
   const workspaces = await getAllWorkspaces();
   
-  // Delete all data for each workspace
   for (const workspace of workspaces) {
-    // Delete folders
     const folders = await getFoldersByWorkspaceId(workspace.id);
     for (const folder of folders) {
       await deleteFolder(folder.id);
     }
     
-    // Delete notes
     const notes = await getNotesByWorkspaceId(workspace.id);
     for (const note of notes) {
       await deleteNote(note.id);
     }
     
-    // Delete calendar events
     const events = await getCalendarEventsByWorkspaceId(workspace.id);
     for (const event of events) {
       await deleteCalendarEvent(event.id);
     }
     
-    // Delete kanban
     await deleteKanban(workspace.id);
-    
-    // Delete workspace
     await deleteWorkspace(workspace.id);
   }
   
-  // Also delete all notes directly (in case some weren't associated with workspaces)
   await browserDb.execute('DELETE FROM notes');
   await browserDb.execute('DELETE FROM folders');
   await browserDb.execute('DELETE FROM calendarEvents');
   await browserDb.execute('DELETE FROM kanban');
   await browserDb.execute('DELETE FROM workspaces');
   
-  // Clear user-specific settings (keep system settings)
   const settings = await browserDb.getAll<Setting>('settings');
   for (const setting of settings) {
-    // Keep system settings, delete user-specific ones
     if (setting.key.startsWith('selectedNoteId:') || setting.key === 'activeWorkspaceId' || setting.key === 'useCommonCalendar') {
       await browserDb.remove('settings', setting.key);
     }
@@ -302,7 +291,6 @@ export async function verifyDatabaseStatus() {
   return stats;
 }
 
-// Export function to flush pending database saves (browser only)
 export async function flushDatabaseSave(): Promise<void> {
   await ensureClient();
   browserDb.flushDatabaseSave();

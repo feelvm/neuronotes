@@ -186,10 +186,9 @@ export async function getBackup(backupId: string): Promise<BackupData | null> {
 }
 
 /**
- * Save an imported backup file to the backup list without restoring it
+ * Saves an imported backup file to the backup list without restoring it
  */
 export async function saveImportedBackup(backupData: BackupData): Promise<BackupMetadata> {
-  // Generate a new ID and timestamp to avoid conflicts
   const importedBackup: BackupData = {
     ...backupData,
     metadata: {
@@ -202,7 +201,6 @@ export async function saveImportedBackup(backupData: BackupData): Promise<Backup
     }
   };
   
-  // Recalculate size
   const jsonData = JSON.stringify(importedBackup);
   importedBackup.metadata.size = new Blob([jsonData]).size;
   
@@ -245,13 +243,9 @@ async function importBackupData(data: {
 
   if (data.notes && data.notes.length > 0) {
     for (const note of data.notes) {
-      // Ensure imported notes have their content properly marked
-      // This prevents putNote from trying to preserve existing content
-      // We set _contentLoaded = true for all imported notes to use backup content (even if empty)
       const noteWithMeta = note as any;
       noteWithMeta._contentLoaded = true;
       
-      // For spreadsheets, ensure _spreadsheetJson is set if spreadsheet data exists
       if (note.type === 'spreadsheet' && note.spreadsheet && !noteWithMeta._spreadsheetJson) {
         if (typeof note.spreadsheet === 'string') {
           noteWithMeta._spreadsheetJson = note.spreadsheet;
@@ -260,7 +254,6 @@ async function importBackupData(data: {
         }
       }
       
-      // Ensure contentHTML is explicitly set (even if empty) so putNote uses it
       if (note.contentHTML === undefined) {
         note.contentHTML = '';
       }

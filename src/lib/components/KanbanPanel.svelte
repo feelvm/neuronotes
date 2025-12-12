@@ -13,7 +13,6 @@
     export let onSyncIfLoggedIn: () => Promise<void>;
     export let onLoadActiveWorkspaceData: () => Promise<void>;
 
-    // State
     let kanban: Column[] = [];
     let isKanbanLoaded = false;
     let editingColumnId: string | null = null;
@@ -22,7 +21,6 @@
     let kanbanDropTarget: { colId: string; taskIndex: number } | null = null;
     let isDraggingTask = false;
 
-    // Focus action for inputs
     function focus(node: HTMLElement) {
         node.focus();
         return { destroy() {} };
@@ -32,8 +30,6 @@
         if (!activeWorkspaceId) {
             return;
         }
-        // Only save if kanban exists and has at least one column
-        // Empty kanban arrays shouldn't overwrite existing data
         if (!kanban || kanban.length === 0) {
             return;
         }
@@ -372,12 +368,10 @@
         });
     }
 
-    // Load kanban when not minimized
     $: if (browser && !isMinimized && !isKanbanLoaded && activeWorkspaceId) {
         loadKanbanData();
     }
 
-    // Reset loaded flag when workspace changes
     $: if (activeWorkspaceId) {
         isKanbanLoaded = false;
     }

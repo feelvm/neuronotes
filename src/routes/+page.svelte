@@ -3,7 +3,6 @@
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import * as backup from '$lib/backup';
-    // Supabase imports are loaded dynamically to reduce bundle size
     let auth: typeof import('$lib/supabase/auth');
     let sync: typeof import('$lib/supabase/sync');
     let migrations: typeof import('$lib/supabase/migrations');
@@ -37,7 +36,6 @@
         Setting
     } from '$lib/db_types';
 
-    // SVG Icon Components
     const LockIcon = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M12.5 7H12V5C12 2.79 10.21 1 8 1S4 2.79 4 5V7H3.5C2.67 7 2 7.67 2 8.5V13.5C2 14.33 2.67 15 3.5 15H12.5C13.33 15 14 14.33 14 13.5V8.5C14 7.67 13.33 7 12.5 7ZM5 5C5 3.34 6.34 2 8 2S11 3.34 11 5V7H5V5ZM13 13.5C13 13.78 12.78 14 12.5 14H3.5C3.22 14 3 13.78 3 13.5V8.5C3 8.22 3.22 8 3.5 8H12.5C12.78 8 13 8.22 13 8.5V13.5Z" fill="currentColor"/>
     </svg>`;
@@ -101,15 +99,12 @@
     let isHorizontalResizing = false;
     let notesPanelClientWidth = 0;
     
-    // Refs for resize handlers to avoid DOM queries
     let mainEl: HTMLElement;
     let rightEl: HTMLElement;
 
-    // Consolidated reactive statement for panel sizing to prevent cascading updates
     $: {
         const minimizedCount = (isNotesMinimized ? 1 : 0) + (isCalendarMinimized ? 1 : 0) + (isKanbanMinimized ? 1 : 0);
         
-        // Handle notes panel width
         if (isNotesMinimized) {
             notesPanelWidth = 6;
         } else if (minimizedCount === 2 && !isNotesMinimized) {
@@ -120,7 +115,6 @@
             notesPanelWidth = lastNotesWidth > 7 ? lastNotesWidth : 50;
         }
         
-        // Handle calendar panel height
         if (isCalendarMinimized) {
             calendarPanelHeight = 6;
         } else if (isKanbanMinimized) {
@@ -160,7 +154,6 @@
         isVerticalResizing = true;
         window.addEventListener('mousemove', doVerticalResize);
         window.addEventListener('mouseup', stopResize);
-        // Also prevent default on body to avoid text selection
         document.body.style.userSelect = 'none';
         document.body.style.cursor = 'col-resize';
     }
@@ -169,13 +162,11 @@
         if (!isVerticalResizing) return;
         e.preventDefault();
         if (!showNotes && showCalendar && showKanban) {
-            // Resizing calendar and kanban when side by side
             if (!rightEl) return;
             const rightRect = rightEl.getBoundingClientRect();
             const newWidth = ((e.clientX - rightRect.left) / rightRect.width) * 100;
             calendarPanelWidth = Math.max(6, Math.min(94, newWidth));
         } else {
-            // Resizing notes panel
             if (!mainEl) return;
             const mainRect = mainEl.getBoundingClientRect();
             const newWidth = ((e.clientX - mainRect.left) / mainRect.width) * 100;
@@ -190,7 +181,6 @@
         isHorizontalResizing = true;
         window.addEventListener('mousemove', doHorizontalResize);
         window.addEventListener('mouseup', stopResize);
-        // Also prevent default on body to avoid text selection
         document.body.style.userSelect = 'none';
         document.body.style.cursor = 'row-resize';
     }
@@ -198,7 +188,6 @@
     function doHorizontalResize(e: MouseEvent) {
         if (!isHorizontalResizing) return;
         e.preventDefault();
-        // When notes are hidden, panels are in .main; when notes are shown, they're in .right
         const containerEl = rightEl || mainEl;
         if (!containerEl) return;
         const containerRect = containerEl.getBoundingClientRect();
@@ -213,20 +202,16 @@
         window.removeEventListener('mousemove', doVerticalResize);
         window.removeEventListener('mousemove', doHorizontalResize);
         window.removeEventListener('mouseup', stopResize);
-        // Restore body styles
         document.body.style.userSelect = '';
         document.body.style.cursor = '';
     }
     
     function cleanupResizeListeners() {
-        // Defensive cleanup - remove all possible resize listeners
         window.removeEventListener('mousemove', doVerticalResize);
         window.removeEventListener('mousemove', doHorizontalResize);
         window.removeEventListener('mouseup', stopResize);
-        // Reset state to prevent handlers from running after cleanup
         isVerticalResizing = false;
         isHorizontalResizing = false;
-        // Restore body styles in case cleanup happens during active resize
         if (document.body) {
             document.body.style.userSelect = '';
             document.body.style.cursor = '';
@@ -261,11 +246,9 @@
     async function switchWorkspace(id: string) {
         if (id === activeWorkspaceId) return;
 
-        // Update UI immediately for better responsiveness
         calendarEvents = [];
         activeWorkspaceId = id;
 
-        // Defer database operations to avoid blocking the main thread
         await tick();
         try {
             await db.putSetting({ key: 'activeWorkspaceId', value: id });
@@ -317,14 +300,12 @@
             return;
         }
 
-        // Batch all delete operations in parallel for better performance
         const [notesToDelete, foldersToDelete, eventsToDelete] = await Promise.all([
             db.getNotesByWorkspaceId(id),
             db.getFoldersByWorkspaceId(id),
             db.getCalendarEventsByWorkspaceId(id)
         ]);
 
-        // Delete all items in parallel
         await Promise.all([
             ...notesToDelete.map(note => db.deleteNote(note.id)),
             ...foldersToDelete.map(folder => db.deleteFolder(folder.id)),
@@ -389,10 +370,9 @@
     let currentDayViewDate = new Date(today);
     let todayDateString = 'Calendar';
     let todayTimeString = '';
-    $: weekDays = browser
+        $: weekDays = browser
         ? (() => {
               if (startWithCurrentDay) {
-                  // Generate 7 days starting from currentDayViewDate
                   const viewDate = new Date(currentDayViewDate);
                   viewDate.setHours(0, 0, 0, 0);
                   return Array.from({ length: 7 }, (_, i) => {
@@ -401,7 +381,6 @@
                       return d;
                   });
               } else {
-                  // Default: Monday-first week view
                   return Array.from({ length: 7 }, (_, i) => {
                       const d = new Date(weekStart);
                       d.setDate(d.getDate() + i);
@@ -438,11 +417,9 @@
 
         for (const dayKey in occurrences) {
             occurrences[dayKey].sort((a, b) => {
-                // Events without time go to the top
                 if (!a.time && !b.time) return 0;
                 if (!a.time) return -1;
                 if (!b.time) return 1;
-                // Events with time are sorted by time
                 return a.time.localeCompare(b.time);
             });
         }
@@ -513,7 +490,6 @@
     let newEventColor = '#8C7AE6';
     let showRepeatOptions = false;
     
-    // Event editing state
     let editingEventId: string | null = null;
     let editingEventDate: string | null = null;
     let editingEventTitle = '';
@@ -521,7 +497,6 @@
 
     function cycleEventColor() {
         const currentIndex = eventColors.indexOf(newEventColor);
-        // If current color not in array, start from first color, otherwise cycle to next
         const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % eventColors.length;
         newEventColor = eventColors[nextIndex];
     }
@@ -552,7 +527,6 @@
     let isPasswordMismatch = false;
     let isPasswordInvalid = false;
     
-    // Helper function to load Supabase modules if not already loaded
     async function ensureSupabaseLoaded() {
         if (!auth) {
             const authModule = await import('$lib/supabase/auth');
@@ -563,29 +537,22 @@
         }
     }
     
-    // Helper function to sync data to Supabase if logged in
-    // Pushes local changes to Supabase (for user actions like create/update/delete)
     async function syncIfLoggedIn() {
         if (isLoggedIn) {
             try {
-                // Flush database to ensure all writes are persisted before syncing
                 await db.flushDatabaseSave();
                 
                 await ensureSupabaseLoaded();
-                // Just push - don't pull, as that could overwrite local changes
-                // Pull happens on initial load and periodic sync
                 const result = await sync.pushToSupabase();
                 if (!result.success) {
                     console.error('Sync push failed:', result.error);
                 }
             } catch (error) {
                 console.error('Sync failed:', error);
-                // Don't block user operations if sync fails
             }
         }
     }
     
-    // Set up periodic sync to pull changes from other devices (every 30 seconds)
     let syncInterval: ReturnType<typeof setInterval> | undefined;
     const setupPeriodicSync = () => {
         if (syncInterval) {
@@ -626,13 +593,11 @@
         // Clear UI state and reload workspace data
         calendarEvents = [];
         
-        // Reload workspaces and set active workspace
         let loadedWorkspaces = await db.getAllWorkspaces();
         if (loadedWorkspaces.length > 0) {
             workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
             activeWorkspaceId = workspaces[0].id;
         } else {
-            // Create default workspace if none exist
             const defaultWorkspace: Workspace = {
                 id: generateUUID(),
                 name: 'My Workspace',
@@ -645,11 +610,9 @@
         
         await loadActiveWorkspaceData();
         
-        // Set up periodic sync after login
         setupPeriodicSync();
     }
     
-    // Save current account data to localStorage before logout
     async function saveAccountDataToLocalStorage(): Promise<void> {
         if (!browser) return;
         
@@ -658,7 +621,6 @@
             const user = await auth.getUser();
             if (!user) return;
             
-            // Get all data for the current user
             const accountData = {
                 userId: user.id,
                 email: user.email,
@@ -668,7 +630,6 @@
                 timestamp: Date.now()
             };
             
-            // Save to localStorage with user ID as key
             const storageKey = `neuronotes_account_${user.id}`;
             localStorage.setItem(storageKey, JSON.stringify(accountData));
         } catch (error) {
@@ -711,15 +672,9 @@
 
             if (data.notes && data.notes.length > 0) {
                 for (const note of data.notes) {
-                    // Ensure imported notes have their content properly marked
-                    // This prevents putNote from trying to preserve existing content
-                    // We set _contentLoaded = true for all imported notes to use backup content (even if empty)
                     const noteWithMeta = note as any;
                     noteWithMeta._contentLoaded = true;
                     
-                    // Debug: log note content info
-                    
-                    // For spreadsheets, ensure _spreadsheetJson is set if spreadsheet data exists
                     if (note.type === 'spreadsheet' && note.spreadsheet && !noteWithMeta._spreadsheetJson) {
                         if (typeof note.spreadsheet === 'string') {
                             noteWithMeta._spreadsheetJson = note.spreadsheet;
@@ -728,7 +683,6 @@
                         }
                     }
                     
-                    // Ensure contentHTML is explicitly set (even if empty) so putNote uses it
                     if (note.contentHTML === undefined) {
                         note.contentHTML = '';
                     }
@@ -756,8 +710,6 @@
             }
 
             
-            // Reload UI state from database after import
-            // This ensures the UI reflects the imported data
             const loadedWorkspaces = await db.getAllWorkspaces();
             if (loadedWorkspaces.length > 0) {
                 workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -775,10 +727,8 @@
                     activeWorkspaceId = workspaces[0].id;
                 }
                 
-                // Save the active workspace setting
                 await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
             } else {
-                // No workspaces after import - create default
                 const defaultWorkspace: Workspace = {
                     id: generateUUID(),
                     name: 'My Workspace',
@@ -790,20 +740,16 @@
                 await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
             }
             
-            // Reload active workspace data to update UI (this will update notes, folders, calendar, kanban)
             if (activeWorkspaceId) {
                 await loadActiveWorkspaceData();
             }
             
-            // If logged in, push imported data to Supabase to sync it
-            // This ensures the imported data becomes the source of truth in the cloud
             if (isLoggedIn) {
                 try {
                     await ensureSupabaseLoaded();
                     await sync.pushToSupabase();
                 } catch (syncError) {
                     console.warn('Failed to sync imported data to Supabase:', syncError);
-                    // Don't throw - import was successful, sync can happen later
                 }
             }
         } catch (error) {
@@ -845,10 +791,8 @@
     }
 
     function convertDateToISO(dateStr: string): string | null {
-        // Support multiple date formats: D/M/YYYY, D.M.YYYY, DD.MM.YYYY, D-M-YYYY, DD-MM-YYYY, DD/MM/YYYY
         const trimmed = dateStr.trim();
         
-        // Try different separators: /, ., -
         let parts: string[] | null = null;
         
         if (trimmed.includes('/')) {
@@ -863,7 +807,6 @@
         
         const [day, month, year] = parts;
         
-        // Validate year (must be 4 digits)
         if (year.length !== 4) return null;
         
         const dayNum = parseInt(day, 10);
@@ -873,18 +816,15 @@
         if (isNaN(dayNum) || isNaN(monthNum) || isNaN(yearNum)) return null;
         if (dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) return null;
         
-        // Validate date (e.g., check if day is valid for the month)
         const date = new Date(yearNum, monthNum - 1, dayNum);
         if (date.getDate() !== dayNum || date.getMonth() !== monthNum - 1 || date.getFullYear() !== yearNum) {
-            return null; // Invalid date (e.g., 31/02/2024)
+            return null;
         }
         
-        // Return in ISO format: YYYY-MM-DD
         return `${yearNum}-${monthNum.toString().padStart(2, '0')}-${dayNum.toString().padStart(2, '0')}`;
     }
 
     function convertISOToDate(isoDate: string): string {
-        // Convert YYYY-MM-DD to DD/MM/YYYY
         const [year, month, day] = isoDate.split('-');
         return `${day}/${month}/${year}`;
     }
@@ -894,7 +834,6 @@
         editingEventDate = dateKey;
         editingEventTitle = event.title;
         editingEventTime = event.time || '';
-        // Auto-focus the title input after DOM update
         tick().then(() => {
             const titleInput = document.querySelector('.event-edit-title') as HTMLInputElement;
             if (titleInput) titleInput.focus();
@@ -922,7 +861,6 @@
             return;
         }
 
-        // Validate time format if provided
         let formattedTime = editingEventTime.trim();
         if (formattedTime) {
             const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
@@ -968,14 +906,12 @@
             return;
         }
 
-        // Convert date to ISO format (supports D/M/YYYY, D.M.YYYY, DD.MM.YYYY, D-M-YYYY, DD-MM-YYYY, DD/MM/YYYY)
         const isoDate = convertDateToISO(newEventDate);
         if (!isoDate) {
             alert('Invalid date format. Please use one of these formats: D/M/YYYY, D.M.YYYY, DD.MM.YYYY, D-M-YYYY, DD-MM-YYYY, or DD/MM/YYYY.');
             return;
         }
 
-        // Validate time format (HH:MM)
         let formattedTime = newEventTime.trim();
         if (formattedTime) {
             const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
@@ -1007,12 +943,10 @@
             calendarEvents = [...calendarEvents, newEvent];
             await syncIfLoggedIn();
             
-            // Reset form
             newEventTitle = '';
             newEventTime = '';
             newEventRepeat = 'none';
             newEventCustomDays = [false, false, false, false, false, false, false];
-            // Don't reset newEventColor - keep the selected color until page reload
             showRepeatOptions = false;
         } catch (error) {
             console.error('Failed to add event:', error);
@@ -1088,7 +1022,6 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
-            // Sanitize message to prevent XSS - strip all HTML, only allow text
             const sanitizedMessage = (browser && DOMPurify) 
                 ? DOMPurify.sanitize(message, { ALLOWED_TAGS: [] })
                 : message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1160,7 +1093,6 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
-            // Sanitize message to prevent XSS - strip all HTML, only allow text
             const sanitizedMessage = (browser && DOMPurify) 
                 ? DOMPurify.sanitize(message, { ALLOWED_TAGS: [] })
                 : message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1223,8 +1155,6 @@
         if (!browser || !activeWorkspaceId) return;
 
         isCalendarLoaded = false;
-        // NotesPanel handles its own loading
-        // Load calendar events
         await loadCalendarEvents();
     }
 
@@ -1242,8 +1172,6 @@
                 console.warn('Failed to load DOMPurify:', err);
             });
             
-            // Load Supabase modules dynamically to reduce initial bundle size
-            // Only load when needed (auth check or user interaction)
             const loadSupabaseModules = async () => {
                 if (!auth) {
                     const authModule = await import('$lib/supabase/auth');
@@ -1256,7 +1184,6 @@
             
             await db.init();
             
-            // Load saved panel preferences
             try {
                 const savedPrefs = await db.getSettingByKey('panelPreferences');
                 if (savedPrefs && savedPrefs.value) {
@@ -1270,12 +1197,8 @@
                 console.warn('Failed to load panel preferences:', e);
             }
             
-            // Load Supabase modules after db init but before auth check
             await loadSupabaseModules();
             
-            // Track which user's session we've already handled in onMount
-            // This prevents the auth state change handler from duplicating the work
-            // Must be declared BEFORE we check for session and BEFORE setting up the subscription
             let handledUserIdInOnMount: string | null = null;
 
             let loadedWorkspaces = await db.getAllWorkspaces();
@@ -1298,19 +1221,12 @@
             const calendarModeSetting = await db.getSettingByKey('useCommonCalendar');
             useCommonCalendar = calendarModeSetting?.value === true;
 
-            // Check if user is already logged in
-            // IMPORTANT: We must check for session and set handledUserIdInOnMount BEFORE
-            // subscribing to auth state changes, because the subscription might fire immediately
             const session = await auth.getSession();
             if (session) {
-                // Get current user ID immediately
                 const user = await auth.getUser();
                 const sessionUserId = user?.id || null;
                 userEmail = user?.email || null;
                 
-                // CRITICAL: Mark that we're handling this user's session in onMount
-                // This must be set BEFORE subscribing to auth state changes, because
-                // the subscription might fire immediately and we need to skip it
                 if (sessionUserId) {
                     handledUserIdInOnMount = sessionUserId;
                 }
@@ -1318,29 +1234,18 @@
                 isLoggedIn = true;
                 hasHandledInitialSession = true;
                 
-                // Check if this is the same user
-                // IMPORTANT: We check currentUserId (from previous session) instead of localStorage
-                // because localStorage gets cleared on logout, but currentUserId persists until logout
-                // This way we can detect if it's the same user even after logout/login
                 const storedUserId = browser ? localStorage.getItem('neuronotes_current_user_id') : null;
                 const isSameUser = (currentUserId === sessionUserId) || (storedUserId === sessionUserId);
                 
-                // Store current user ID
                 if (browser && sessionUserId) {
                     localStorage.setItem('neuronotes_current_user_id', sessionUserId);
                 }
                 currentUserId = sessionUserId;
                 
-                // Defer heavy sync operations to improve initial load
                 tick().then(async () => {
-                    // Flush any pending database saves before syncing
                     await db.flushDatabaseSave();
                     
                     if (isSameUser) {
-                        // Same user - just sync without clearing
-                        
-                        // Use fullSync which does pull-then-push to ensure we get latest changes
-                        // before pushing local changes. This prevents overwriting newer changes from other devices.
                         try {
                             await ensureSupabaseLoaded();
                             const syncResult = await sync.fullSync();
@@ -1351,16 +1256,8 @@
                             console.warn('[onMount] Failed to sync:', error);
                         }
                     } else {
-                        // Different user or first time - clear and pull
-                        
-                        // IMPORTANT: Don't push local changes before clearing when switching users
-                        // The local data belongs to a different user, we don't want to mix it
-                        // Just clear and pull the new user's data
-                        
-                        // Clear all local data
                         await db.clearAllLocalData();
                         
-                        // Pull latest data from Supabase for the new user
                         const pullResult = await sync.pullFromSupabase();
                         if (!pullResult.success) {
                             console.error('[onMount] Failed to pull data:', pullResult.error);
@@ -1370,7 +1267,6 @@
                         }
                     }
                     
-                    // Reload workspaces after sync
                     let loadedWorkspaces = await db.getAllWorkspaces();
                     if (loadedWorkspaces.length > 0) {
                         workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -1380,11 +1276,9 @@
                         await loadActiveWorkspaceData();
                     }
                     
-                    // Set up periodic sync after initial load
                     setupPeriodicSync();
                 }, 0);
             } else {
-                // Load workspace data immediately if not logged in
                 await loadActiveWorkspaceData();
             }
 
@@ -1398,11 +1292,9 @@
 
             updateDateTimeDisplay();
             weekStart = startOfWeek(today, 1);
-            // Don't set newEventDate - let it be empty so placeholder shows
 
             timer = setInterval(updateDateTimeDisplay, 60 * 1000);
             
-            // Set up periodic sync if already logged in
             if (isLoggedIn) {
                 setupPeriodicSync();
             }
@@ -1412,27 +1304,18 @@
             const urlParams = new URLSearchParams(window.location.search);
             const code = urlParams.get('code');
             if (code) {
-                // OAuth callback detected, close login modal if open
                 showLoginModal = false;
                 showSignupModal = false;
             }
             
-            // Listen for auth state changes
-            // IMPORTANT: The subscription might fire immediately with the current session
-            // So we must ensure handledUserIdInOnMount is set BEFORE subscribing
             const { data: { subscription } } = onAuthStateChange(async (event, session) => {
-                // Capture previousUserId before it changes
                 const previousUserId = currentUserId;
                 
                 if (event === 'SIGNED_IN' && session) {
                     const newUserId = session.user.id;
                     const isSwitchingUsers = previousUserId && previousUserId !== newUserId;
                     
-                    // CRITICAL: If onMount already handled this user's session, skip this handler
-                    // This prevents duplicate clearing/pulling when Google OAuth redirects back
-                    // and both onMount and this handler try to process the same login
                     if (handledUserIdInOnMount === newUserId) {
-                        // Still update the state variables
                         isLoggedIn = true;
                         currentUserId = newUserId;
                         userEmail = session.user.email || null;
@@ -1442,16 +1325,13 @@
                         return;
                     }
                     
-                    // If switching to a different user, we need to sync their data
-                    // If same user and already handled initial session, skip (to avoid duplicate clearing)
                     if (hasHandledInitialSession && !isSwitchingUsers) {
                         return;
                     }
                     
-                    // If switching users, reset the flags so we handle the new user's session
                     if (isSwitchingUsers) {
                         hasHandledInitialSession = false;
-                        handledUserIdInOnMount = null; // Reset so we can handle the new user
+                        handledUserIdInOnMount = null;
                     }
                     
                     isLoggedIn = true;
@@ -1459,41 +1339,31 @@
                     userEmail = session.user.email || null;
                     hasHandledInitialSession = true;
                     
-                    // Store new user ID
                     if (browser && newUserId) {
                         localStorage.setItem('neuronotes_current_user_id', newUserId);
                     }
                     
-                    // Flush any pending database saves before clearing
                     await db.flushDatabaseSave();
-                    // Clear all local data before pulling new user's data
                     await db.clearAllLocalData();
-                    // IMPORTANT: After clearing local data, we should ONLY pull from Supabase, not push
-                    // Using fullSync() would push the empty local state and delete everything from Supabase!
                     const pullResult = await sync.pullFromSupabase();
                     if (!pullResult.success) {
                         console.error('Failed to pull data from Supabase:', pullResult.error);
                         alert(`Warning: Failed to restore your data from cloud. Error: ${pullResult.error}`);
                     } else {
-                        // Flush database to ensure all pulled data is persisted
                         await db.flushDatabaseSave();
-                        // Verify data was pulled by checking workspaces
                         const pulledWorkspaces = await db.getAllWorkspaces();
                         if (pulledWorkspaces.length === 0) {
                             console.warn('No workspaces found in Supabase for this user - data may not exist in cloud');
                             alert('No data found in cloud for this account. If you had data before, it may have been lost. Please restore from a backup if available.');
                         }
                     }
-                    // Clear UI state and reload
                     calendarEvents = [];
                     
-                    // Reload workspaces and set active workspace
                     let loadedWorkspaces = await db.getAllWorkspaces();
                     if (loadedWorkspaces.length > 0) {
                         workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
                         activeWorkspaceId = workspaces[0].id;
                     } else {
-                        // Create default workspace if none exist
                         const defaultWorkspace: Workspace = {
                             id: generateUUID(),
                             name: 'My Workspace',
@@ -1505,11 +1375,8 @@
                     }
                     await loadActiveWorkspaceData();
                     
-                    // Set up periodic sync after login
                     setupPeriodicSync();
                 } else if (event === 'SIGNED_OUT') {
-                    // IMPORTANT: Sync data to Supabase before clearing (if we were logged in)
-                    // This ensures data is saved when user logs out via Google OAuth or other automatic logout
                     if (isLoggedIn && previousUserId) {
                         try {
                             await db.flushDatabaseSave();
@@ -1524,36 +1391,28 @@
                     const loggedOutUserId = currentUserId;
                     currentUserId = null;
                     userEmail = null;
-                    // Reset the flags so next login will handle the session
                     hasHandledInitialSession = false;
                     handledUserIdInOnMount = null;
-                    // Clear stored user ID
                     if (browser) {
                         localStorage.removeItem('neuronotes_current_user_id');
                     }
-                    // Stop periodic sync on logout
                     if (syncInterval) {
                         clearInterval(syncInterval);
                         syncInterval = undefined;
                     }
-                    // Clear UI state on logout
                     calendarEvents = [];
                     await loadActiveWorkspaceData();
                 } else if (event === 'TOKEN_REFRESHED') {
-                    // Session refreshed, continue working
                 }
             });
             
-            // Store subscription for cleanup
             (window as any).__authSubscription = subscription;
         })();
 
         const handleBeforeUnload = () => {
-            // Flush database save synchronously to ensure current state is saved
             db.flushDatabaseSave().catch(e => {
                 console.warn('Failed to flush database save on unload:', e);
             });
-            // Try to sync to Supabase (fire and forget, as beforeunload is synchronous)
             if (isLoggedIn) {
                 ensureSupabaseLoaded().then(() => {
                     sync.pushToSupabase().catch(e => {
@@ -1566,16 +1425,12 @@
         };
         
         const handlePageHide = async (e: PageTransitionEvent) => {
-            // pagehide event allows async operations and is more reliable
-            // Flush database save
             try {
                 await db.flushDatabaseSave();
             } catch (e) {
                 console.warn('Failed to flush database save on page hide:', e);
             }
             
-            // Explicitly sync to Supabase after all updates are saved
-            // This ensures changes are synced even if the debounced sync didn't fire
             if (isLoggedIn) {
                 try {
                     await ensureSupabaseLoaded();
@@ -1599,7 +1454,6 @@
             if (timer) clearInterval(timer);
             cleanupResizeListeners();
             
-            // Cleanup auth subscription
             if ((window as any).__authSubscription) {
                 (window as any).__authSubscription.unsubscribe();
                 delete (window as any).__authSubscription;
@@ -1622,7 +1476,6 @@
         }
 
         await ensureSupabaseLoaded();
-        // Sync current account data to Supabase before logout
         if (isLoggedIn) {
             try {
                 await db.flushDatabaseSave();
@@ -1631,20 +1484,16 @@
                 console.error('[logout] Failed to sync before logout:', error);
             }
         }
-        // Save current account data to localStorage before logout
         await saveAccountDataToLocalStorage();
         
         const result = await auth.signOut();
         if (result.success) {
             isLoggedIn = false;
             currentUserId = null;
-            // Clear stored user ID
             if (browser) {
                 localStorage.removeItem('neuronotes_current_user_id');
             }
-            // Clear UI state on logout
             calendarEvents = [];
-            // Reload workspace data (will load from local DB)
             await loadActiveWorkspaceData();
         }
     }
@@ -1679,7 +1528,6 @@
         isLoggedIn={isLoggedIn}
         onClose={() => showBackupModal = false}
         onRestore={async () => {
-            // Reload UI state from database after restore
             const loadedWorkspaces = await db.getAllWorkspaces();
             if (loadedWorkspaces.length > 0) {
                 workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -1697,10 +1545,8 @@
                     activeWorkspaceId = workspaces[0].id;
                 }
                 
-                // Save the active workspace setting
                 await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
                                 } else {
-                // No workspaces after restore - create default
                                     const defaultWorkspace: Workspace = {
                                         id: generateUUID(),
                                         name: 'My Workspace',
@@ -1712,7 +1558,6 @@
                 await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
                                 }
                                 
-            // Reload active workspace data to update UI (this will update notes, folders, calendar, kanban)
             if (activeWorkspaceId) {
                                 await loadActiveWorkspaceData();
             }
@@ -1771,7 +1616,6 @@
             }
             
             if (savePanelSelection) {
-                // Save panel preferences
                 try {
                     await db.putSetting({ 
                         key: 'panelPreferences', 
@@ -1781,13 +1625,11 @@
                     console.error('Failed to save panel preferences:', e);
                 }
             } else {
-                // Clear saved preferences and reset to defaults
                 try {
                     const existing = await db.getSettingByKey('panelPreferences');
                     if (existing) {
                         await db.putSetting({ key: 'panelPreferences', value: '' });
                     }
-                    // Reset to default (all panels visible)
                     showNotes = true;
                     showCalendar = true;
                     showKanban = true;

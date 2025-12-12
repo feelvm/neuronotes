@@ -4,7 +4,7 @@ import * as sync from './sync';
 import type { Workspace, Folder, Note, CalendarEvent, Kanban } from '../db_types';
 
 /**
- * Migrate all local data to Supabase on first login
+ * Migrates all local data to Supabase on first login
  */
 export async function migrateLocalDataToSupabase(): Promise<{
   success: boolean;
@@ -35,16 +35,13 @@ export async function migrateLocalDataToSupabase(): Promise<{
   }
 
   try {
-    // Check if user already has data in Supabase
     const { data: existingWorkspaces } = await supabase
       .from('workspaces')
       .select('id')
       .eq('user_id', userId)
       .limit(1);
 
-    // If user already has data, don't migrate (they might have synced from another device)
     if (existingWorkspaces && existingWorkspaces.length > 0) {
-      // Instead, do a full sync to merge data
       const syncResult = await sync.fullSync();
       return {
         success: syncResult.success,
@@ -53,7 +50,6 @@ export async function migrateLocalDataToSupabase(): Promise<{
       };
     }
 
-    // Get all local data
     const workspaces = await db.getAllWorkspaces();
     const folders: Folder[] = [];
     const notes: Note[] = [];
@@ -76,7 +72,6 @@ export async function migrateLocalDataToSupabase(): Promise<{
       }
     }
 
-    // Push all data to Supabase
     const pushResult = await sync.pushToSupabase();
 
     if (!pushResult.success) {
@@ -107,7 +102,7 @@ export async function migrateLocalDataToSupabase(): Promise<{
 }
 
 /**
- * Check if migration is needed
+ * Checks if migration is needed
  */
 export async function needsMigration(): Promise<boolean> {
   if (!isSupabaseConfigured() || !supabase) return false;
@@ -115,7 +110,6 @@ export async function needsMigration(): Promise<boolean> {
   const userId = (await supabase.auth.getUser()).data.user?.id;
   if (!userId) return false;
 
-  // Check if user has local data but no Supabase data
   const localWorkspaces = await db.getAllWorkspaces();
   if (localWorkspaces.length === 0) return false;
 

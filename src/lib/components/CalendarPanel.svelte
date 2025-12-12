@@ -24,7 +24,6 @@
     export let onSyncIfLoggedIn: () => Promise<void>;
     export let onLoadActiveWorkspaceData: () => Promise<void>;
 
-    // Icons
     const GlobeIcon = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M8 0C3.58 0 0 3.58 0 8C0 12.42 3.58 16 8 16C12.42 16 16 12.42 16 8C16 3.58 12.42 0 8 0ZM7 14.93C4.05 14.44 1.56 11.95 1.07 9H3.09C3.57 10.84 5.16 12.43 7 12.91V14.93ZM7 11.93C5.84 11.6 4.4 10.16 4.07 9H7V11.93ZM7 8H4.07C4.4 6.84 5.84 5.4 7 5.07V8ZM7 4.09C5.16 4.57 3.57 6.16 3.09 8H1.07C1.56 5.05 4.05 2.56 7 2.07V4.09ZM9 2.07C11.95 2.56 14.44 5.05 14.93 8H12.91C12.43 6.16 10.84 4.57 9 4.09V2.07ZM9 5.07C10.16 5.4 11.6 6.84 11.93 8H9V5.07ZM9 9H11.93C11.6 10.16 10.16 11.6 9 11.93V9ZM9 12.91C10.84 12.43 12.43 10.84 12.91 9H14.93C14.44 11.95 11.95 14.44 9 14.93V12.91Z" fill="currentColor"/>
     </svg>`;
@@ -37,7 +36,6 @@
         <path d="M17 2L21 6M21 6L17 10M21 6H7.8C6.11984 6 5.27976 6 4.63803 6.32698C4.07354 6.6146 3.6146 7.07354 3.32698 7.63803C3 8.27976 3 9.11984 3 10.8V11M3 18H16.2C17.8802 18 18.7202 18 19.362 17.673C19.9265 17.3854 20.3854 16.9265 20.673 16.362C21 15.7202 21 14.8802 21 13.2V13M3 18L7 22M3 18L7 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>`;
 
-    // State
     let calendarEvents: CalendarEvent[] = [];
     let isCalendarLoaded = false;
     let useCommonCalendar = false;
@@ -68,7 +66,6 @@
           })()
         : [];
 
-    // Memoization for eventsByDay to prevent unnecessary recalculations
     let cachedEventsByDay: Record<string, CalendarEvent[]> = {};
     let cachedWeekDaysKey = '';
     let cachedEventsKey = '';
@@ -79,16 +76,13 @@
             return {};
         }
 
-        // Create cache keys based on inputs
         const weekDaysKey = weekDays.map(d => ymd(d)).join(',');
         const eventsKey = calendarEvents.map(e => `${e.id}:${e.date}:${e.repeat || 'none'}`).join(',');
 
-        // Return cached result if inputs haven't changed
         if (weekDaysKey === cachedWeekDaysKey && eventsKey === cachedEventsKey) {
             return cachedEventsByDay;
         }
 
-        // Recalculate only when inputs actually change
         const occurrences: Record<string, CalendarEvent[]> = {};
         const viewStartDate = weekDays[0];
         const viewEndDate = weekDays[6];
@@ -121,7 +115,6 @@
             });
         }
 
-        // Update cache
         cachedEventsByDay = occurrences;
         cachedWeekDaysKey = weekDaysKey;
         cachedEventsKey = eventsKey;
@@ -192,7 +185,6 @@
     let newEventColor = '#8C7AE6';
     let showRepeatOptions = false;
     
-    // Event editing state
     let editingEventId: string | null = null;
     let editingEventDate: string | null = null;
     let editingEventTitle = '';
@@ -418,7 +410,6 @@
             calendarEvents = [...calendarEvents, newEvent];
             await onSyncIfLoggedIn();
             
-            // Reset form
             newEventTitle = '';
             newEventTime = '';
             newEventRepeat = 'none';
@@ -621,7 +612,6 @@
         }
     }
 
-    // Load calendar mode setting
     onMount(async () => {
         if (browser) {
             const setting = await db.getSettingByKey('useCommonCalendar');
@@ -631,12 +621,10 @@
         }
     });
 
-    // Load events when not minimized
     $: if (browser && !isMinimized && !isCalendarLoaded && activeWorkspaceId) {
         loadCalendarEvents();
     }
 
-    // Update today date/time
     $: if (browser) {
         today = new Date();
         todayDateString = `${DAY_NAMES_LONG[today.getDay()]}, ${dmy(today)}`;
@@ -645,7 +633,6 @@
         todayTimeString = `${hours}:${minutes}`;
     }
 
-    // Reset loaded flag when workspace changes
     $: if (activeWorkspaceId) {
         isCalendarLoaded = false;
     }

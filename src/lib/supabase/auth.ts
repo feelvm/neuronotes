@@ -9,7 +9,7 @@ export interface AuthResult {
 }
 
 /**
- * Sign up a new user with email and password
+ * Signs up a new user with email and password
  */
 export async function signUp(email: string, password: string): Promise<AuthResult> {
   if (!isSupabaseConfigured() || !supabase) {
@@ -46,7 +46,7 @@ export async function signUp(email: string, password: string): Promise<AuthResul
 }
 
 /**
- * Sign in an existing user with email and password
+ * Signs in an existing user with email and password
  */
 export async function signIn(email: string, password: string, rememberMe: boolean = false): Promise<AuthResult> {
   if (!isSupabaseConfigured() || !supabase) {
@@ -69,9 +69,6 @@ export async function signIn(email: string, password: string, rememberMe: boolea
       };
     }
 
-    // If rememberMe is false, session will expire when browser closes
-    // Supabase handles this automatically via localStorage persistence
-
     return {
       success: true,
       user: data.user ?? undefined,
@@ -86,7 +83,7 @@ export async function signIn(email: string, password: string, rememberMe: boolea
 }
 
 /**
- * Sign out the current user
+ * Signs out the current user
  */
 export async function signOut(): Promise<{ success: boolean; error?: string }> {
   if (!isSupabaseConfigured() || !supabase) {
@@ -118,7 +115,7 @@ export async function signOut(): Promise<{ success: boolean; error?: string }> {
 }
 
 /**
- * Get the current session
+ * Gets the current session
  */
 export async function getSession(): Promise<Session | null> {
   if (!isSupabaseConfigured() || !supabase) {
@@ -129,7 +126,7 @@ export async function getSession(): Promise<Session | null> {
 }
 
 /**
- * Get the current user
+ * Gets the current user
  */
 export async function getUser(): Promise<User | null> {
   if (!isSupabaseConfigured() || !supabase) {
@@ -140,7 +137,7 @@ export async function getUser(): Promise<User | null> {
 }
 
 /**
- * Listen to auth state changes
+ * Listens to auth state changes
  */
 export function onAuthStateChange(
   callback: (event: string, session: Session | null) => void
@@ -154,7 +151,7 @@ export function onAuthStateChange(
 }
 
 /**
- * Check if user is authenticated
+ * Checks if user is authenticated
  */
 export async function isAuthenticated(): Promise<boolean> {
   const session = await getSession();
@@ -162,7 +159,7 @@ export async function isAuthenticated(): Promise<boolean> {
 }
 
 /**
- * Get current user ID
+ * Gets current user ID
  */
 export async function getUserId(): Promise<string | null> {
   const user = await getUser();
@@ -170,7 +167,7 @@ export async function getUserId(): Promise<string | null> {
 }
 
 /**
- * Sign in with Google OAuth
+ * Signs in with Google OAuth
  */
 export async function signInWithGoogle(): Promise<{ success: boolean; error?: string }> {
   if (!isSupabaseConfigured() || !supabase) {
@@ -181,7 +178,6 @@ export async function signInWithGoogle(): Promise<{ success: boolean; error?: st
   }
   
   try {
-    // Get the current origin for redirect
     const redirectTo = `${window.location.origin}${window.location.pathname}`;
     
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -202,8 +198,6 @@ export async function signInWithGoogle(): Promise<{ success: boolean; error?: st
       };
     }
 
-    // OAuth redirects to Google, so we don't get a session immediately
-    // The session will be detected when the user returns via detectSessionInUrl
     return {
       success: true,
     };

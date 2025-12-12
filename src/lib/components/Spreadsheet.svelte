@@ -3,11 +3,8 @@
     import type { Spreadsheet as SpreadsheetData, SpreadsheetCell } from "$lib/db_types";
     import { debounce } from "$lib/utils/debounce";
 
-	/** The main spreadsheet data object. */
 	export let spreadsheetData: SpreadsheetData;
-	/** The currently focused cell, for single-cell context. */
 	export let selectedCell: { row: number; col: number } | null = null;
-	/** The multi-cell selection area. */
 	export let selection: {
 		start: { row: number; col: number };
 		end: { row: number; col: number };
@@ -18,12 +15,10 @@
 	const MIN_WIDTH = 40;
 	const MIN_HEIGHT = 25;
 
-	/** Efficient deep clone using structuredClone with fallback for older browsers */
 	function deepClone<T>(obj: T): T {
 		if (typeof structuredClone !== 'undefined') {
 			return structuredClone(obj);
 		}
-		// Fallback for older browsers
 		return JSON.parse(JSON.stringify(obj));
 	}
 
@@ -50,13 +45,11 @@
 		maxCol: number;
 	} | null = null;
 
-	// Cache for formula optimization
 	let cachedFormulaCells: { row: number; col: number }[] | null = null;
-	let formulaDependencies: Map<string, Set<string>> = new Map(); // formula cell key -> set of referenced cell keys
+	let formulaDependencies: Map<string, Set<string>> = new Map();
 	let needsFormulaCacheRebuild = true;
 	let clipboardMode: "cut" | "copy" | null = null;
 	
-	// Cache for position calculations
 	let cachedRowPositions: number[] = [];
 	let cachedColPositions: number[] = [];
 	let cachedRowCount = 0;
@@ -72,28 +65,25 @@
 	};
 
 	type SpreadsheetHistoryEntry = {
-		// Use incremental snapshots: store full state only every N entries, otherwise store deltas
-		data?: SpreadsheetData; // Full snapshot (only for checkpoints)
-		changes?: CellChange[]; // Incremental changes (delta)
+		data?: SpreadsheetData;
+		changes?: CellChange[];
 		timestamp: number;
 	};
 
 	let history: SpreadsheetHistoryEntry[] = [];
 	let historyIndex = -1;
 	const MAX_HISTORY = 50;
-	const CHECKPOINT_INTERVAL = 10; // Create full snapshot every 10 entries
+	const CHECKPOINT_INTERVAL = 10;
 	let lastSavedCellValue: string | null = null;
 	let hasSavedHistoryForCurrentEdit = false;
-	let lastHistorySnapshot: SpreadsheetData | null = null; // Cache of last full snapshot
+	let lastHistorySnapshot: SpreadsheetData | null = null;
 	
-	// Initialize lastHistorySnapshot on mount
 	onMount(() => {
 		if (spreadsheetData?.data) {
 			lastHistorySnapshot = deepClone(spreadsheetData);
 		}
 	});
 
-	/** Memoized calculation of the current multi-cell selection area. */
 	$: selectionArea = (() => {
 		if (!selection) return null;
 		const minRow = Math.min(selection.start.row, selection.end.row);
@@ -110,12 +100,10 @@
 		};
 	})();
 
-	/** Pre-calculates the vertical position of each row for performant overlay rendering. */
 	$: rowPositions = (() => {
 		const rowCount = spreadsheetData.data.length;
 		const rowHeights = spreadsheetData.rowHeights || {};
 		
-		// Check if we need to recalculate
 		const needsRecalc = 
 			rowCount !== cachedRowCount ||
 			JSON.stringify(rowHeights) !== JSON.stringify(cachedRowHeights);
@@ -124,15 +112,13 @@
 			return cachedRowPositions;
 		}
 		
-		// Recalculate
 		const positions = [0];
 		let currentPos = 0;
 		for (let i = 0; i < rowCount; i++) {
-			currentPos += (rowHeights[i] || MIN_HEIGHT) + 1; // +1 for border
+			currentPos += (rowHeights[i] || MIN_HEIGHT) + 1;
 			positions.push(currentPos);
 		}
 		
-		// Update cache
 		cachedRowPositions = positions;
 		cachedRowCount = rowCount;
 		cachedRowHeights = { ...rowHeights };
@@ -140,14 +126,12 @@
 		return positions;
 	})();
 
-	/** Pre-calculates the horizontal position of each column for performant overlay rendering. */
 	$: colPositions = (() => {
 		if (!spreadsheetData.data[0]) return [0];
 		
 		const colCount = spreadsheetData.data[0].length;
 		const colWidths = spreadsheetData.colWidths || {};
 		
-		// Check if we need to recalculate
 		const needsRecalc = 
 			colCount !== cachedColCount ||
 			JSON.stringify(colWidths) !== JSON.stringify(cachedColWidths);
@@ -156,15 +140,13 @@
 			return cachedColPositions;
 		}
 		
-		// Recalculate
 		const positions = [0];
 		let currentPos = 0;
 		for (let i = 0; i < colCount; i++) {
-			currentPos += (colWidths[i] || 100) + 1; // +1 for border
+			currentPos += (colWidths[i] || 100) + 1;
 			positions.push(currentPos);
 		}
 		
-		// Update cache
 		cachedColPositions = positions;
 		cachedColCount = colCount;
 		cachedColWidths = { ...colWidths };
@@ -172,12 +154,10 @@
 		return positions;
 	})();
 
-	/** Generates the CSS `grid-template-columns` value from column widths. */
 	$: gridTemplateColumns = Object.values(spreadsheetData.colWidths)
 		.map((w) => `${w}px`)
 		.join(" ");
 
-	/** Checks if a given cell coordinate is within the current selection area. */
 	function isInSelection(row: number, col: number) {
 		if (!selectionArea) return false;
 		return (
@@ -188,7 +168,6 @@
 		);
 	}
 
-	/** Converts a 0-indexed column number to its spreadsheet name (e.g., 0 -> A, 1 -> B). */
 	function getColName(n: number) {
 		let name = "";
 		while (n >= 0) {
@@ -198,7 +177,6 @@
 		return name;
 	}
 
-	/** Calculates the total height of a potentially merged cell. */
 	function calculateMergedHeight(cell: SpreadsheetCell, rowIndex: number) {
 		const rowspan = cell.rowspan || 1;
 		if (rowspan <= 1) {
@@ -287,12 +265,6 @@
 
 	type CellStyleKey = keyof NonNullable<SpreadsheetCell["style"]>;
 
-	/**
-	 * Applies a given CSS style to all cells in the current selection.
-	 * @public
-	 * @param style The style property to change (e.g., 'fontWeight').
-	 * @param value The value for the style (e.g., 'bold').
-	 */
 	export function applyStyle(style: CellStyleKey, value: string | undefined) {
 		if (!selectionArea) return;
 		const { minRow, maxRow, minCol, maxCol } = selectionArea;
@@ -317,10 +289,6 @@
 		dispatch("update");
 	}
 
-	/**
-	 * Toggles merging for the current selection.
-	 * @public
-	 */
 	export function toggleMerge() {
 		if (!selectionArea) return;
 
@@ -381,15 +349,11 @@
 		dispatch("update");
 	}, 300);
 
-	// Track the last saved state to prevent duplicate saves
 	let lastSavedStateHash: string | null = null;
 	
-	// Debounced history save for rapid typing - saves after user stops typing
 	const debouncedSaveHistory = debounce(() => {
-		// Create a simple hash of the current state to detect if it changed
 		if (spreadsheetData?.data) {
 			const currentHash = JSON.stringify(spreadsheetData.data);
-			// Only save if the state actually changed
 			if (currentHash !== lastSavedStateHash) {
 				saveHistory();
 				lastSavedStateHash = currentHash;
@@ -400,29 +364,23 @@
 	function saveHistory() {
 		if (!spreadsheetData?.data) return;
 		
-		// Update the hash of the saved state
 		lastSavedStateHash = JSON.stringify(spreadsheetData.data);
 		
 		history = history.slice(0, historyIndex + 1);
 		
-		// Determine if we should create a checkpoint (full snapshot)
 		const shouldCreateCheckpoint = 
 			history.length === 0 || 
 			history.length % CHECKPOINT_INTERVAL === 0 ||
 			!lastHistorySnapshot;
 		
 		if (shouldCreateCheckpoint) {
-			// Create full snapshot
 			const snapshot = deepClone(spreadsheetData);
 			lastHistorySnapshot = snapshot;
 			history.push({ data: snapshot, timestamp: Date.now() });
 		} else {
-			// Create incremental snapshot (delta)
-			// Find the last checkpoint and calculate changes
 			let baseSnapshot: SpreadsheetData | null = lastHistorySnapshot;
 			let baseIndex = history.length - 1;
 			
-			// Find the last checkpoint
 			while (baseIndex >= 0 && !history[baseIndex].data) {
 				baseIndex--;
 			}
@@ -432,19 +390,15 @@
 			}
 			
 			if (baseSnapshot && baseSnapshot.data) {
-				// Calculate changes since last checkpoint
 				const changes: CellChange[] = [];
 				const baseData = baseSnapshot.data;
 				const currentData = spreadsheetData.data;
 				
-				// Compare all cells (for simplicity, we compare the entire grid)
-				// In a more optimized version, we'd track which cells changed
 				for (let r = 0; r < currentData.length; r++) {
 					for (let c = 0; c < currentData[0].length; c++) {
 						const oldCell = baseData[r]?.[c];
 						const newCell = currentData[r][c];
 						
-						// Simple comparison - in production, use deep equality check
 						if (JSON.stringify(oldCell) !== JSON.stringify(newCell)) {
 							changes.push({
 								row: r,
@@ -456,15 +410,12 @@
 					}
 				}
 				
-				// Only save if there are changes
 				if (changes.length > 0) {
 					history.push({ changes, timestamp: Date.now() });
 				} else {
-					// No changes, don't add to history
 					return;
 				}
 			} else {
-				// Fallback: create full snapshot if we can't find a base
 				const snapshot = deepClone(spreadsheetData);
 				lastHistorySnapshot = snapshot;
 				history.push({ data: snapshot, timestamp: Date.now() });
@@ -475,7 +426,6 @@
 		if (history.length > MAX_HISTORY) {
 			history.shift();
 			historyIndex--;
-			// Rebuild checkpoint cache if needed
 			if (history.length > 0 && !history[0].data) {
 				lastHistorySnapshot = null;
 			}
@@ -484,11 +434,8 @@
 
 	function restoreFromHistory(entry: SpreadsheetHistoryEntry): SpreadsheetData | null {
 		if (entry.data) {
-			// Full snapshot - use directly
 			return deepClone(entry.data);
 		} else if (entry.changes) {
-			// Incremental snapshot - need to find base and apply changes
-			// Find the most recent checkpoint before this entry
 			const entryIndex = history.indexOf(entry);
 			let baseIndex = entryIndex - 1;
 			while (baseIndex >= 0 && !history[baseIndex].data) {
@@ -499,7 +446,6 @@
 				const baseSnapshot = history[baseIndex].data;
 				if (baseSnapshot) {
 					const base = deepClone(baseSnapshot);
-					// Apply all changes from checkpoint to target entry
 					for (let i = baseIndex + 1; i <= entryIndex; i++) {
 						if (history[i]?.changes) {
 							for (const change of history[i].changes!) {
@@ -518,35 +464,24 @@
 	}
 
 	function undo() {
-		// Ensure any pending history saves are flushed before undo
-		// This saves the current state if it's different from the last entry
 		const beforeFlushLength = history.length;
 		debouncedSaveHistory.flush();
 		const afterFlushLength = history.length;
 		
-		// If a new entry was added, historyIndex was updated by saveHistory to point to it
-		// We need to go back one to get to the previous state
-		// If no new entry was added, the current state already matches the last entry
 		if (afterFlushLength > beforeFlushLength) {
-			// New entry was added, we're now at that entry (historyIndex points to it)
-			// Go back one to get to the previous state
 			if (historyIndex > 0) {
 				historyIndex--;
 			}
 		} else if (historyIndex >= 0) {
-			// No new entry, but we still need to go back one from current position
 			if (historyIndex > 0) {
 				historyIndex--;
 			} else {
-				// We're at index 0, can't go back further
 				return;
 			}
 		} else {
-			// No history, can't undo
 			return;
 		}
 		
-		// Restore the state at the new historyIndex
 		const previousState = history[historyIndex];
 		if (previousState) {
 			const restored = restoreFromHistory(previousState);
@@ -560,14 +495,12 @@
 				needsFormulaCacheRebuild = true;
 				recalculateSheet();
 				dispatch("update");
-				// Reset the flag so next edit will save immediately
 				hasSavedHistoryForCurrentEdit = false;
 			}
 		}
 	}
 
 	function redo() {
-		// Ensure any pending history saves are flushed before redo
 		debouncedSaveHistory.flush();
 		if (historyIndex < history.length - 1 && history.length > 0) {
 			historyIndex++;
@@ -589,19 +522,12 @@
 		}
 	}
 
-	/**
-	 * Gets a unique key for a cell position
-	 */
 	function getCellKey(row: number, col: number): string {
 		return `${row},${col}`;
 	}
 
-	/**
-	 * Extracts all cell references from a formula string
-	 */
 	function extractCellReferences(formula: string): Set<string> {
 		const refs = new Set<string>();
-		// Match cell references like A1, B2, etc.
 		const cellRefPattern = /[A-Z]+\d+/gi;
 		const matches = formula.match(cellRefPattern);
 		if (matches) {
@@ -612,7 +538,6 @@
 				}
 			}
 		}
-		// Also check for ranges in SUM/AVG functions (e.g., A1:B2)
 		const rangePattern = /([A-Z]+\d+):([A-Z]+\d+)/gi;
 		const rangeMatches = formula.matchAll(rangePattern);
 		for (const match of rangeMatches) {
@@ -633,9 +558,6 @@
 		return refs;
 	}
 
-	/**
-	 * Rebuilds the formula cache and dependency map
-	 */
 	function rebuildFormulaCache() {
 		if (!spreadsheetData?.data) return;
 		
@@ -657,23 +579,15 @@
 		needsFormulaCacheRebuild = false;
 	}
 
-	/**
-	 * Recalculates formula cells, optimized to only recalculate affected formulas.
-	 * It iterates multiple times to resolve dependencies (e.g., C1=B1, B1=A1).
-	 * The loop has a fixed limit to prevent infinite loops from circular references.
-	 */
 	function recalculateSheet(changedCells?: Set<string>) {
 		if (!spreadsheetData?.data) return;
 
-		// Rebuild cache if needed
 		if (needsFormulaCacheRebuild || !cachedFormulaCells) {
 			rebuildFormulaCache();
 		}
 
 		if (!cachedFormulaCells) return;
 
-		// If no changed cells specified, recalculate all formulas (full recalculation)
-		// This happens on initial load, undo/redo, or when cache is rebuilt
 		if (!changedCells || changedCells.size === 0) {
 			for (let i = 0; i < 10; i++) {
 				let changed = false;
@@ -690,7 +604,6 @@
 			return;
 		}
 
-		// Update computedValue for non-formula cells that changed, and collect formula cells that changed
 		const changedFormulaCells = new Set<string>();
 		for (const changedCellKey of changedCells) {
 			const [rowStr, colStr] = changedCellKey.split(',');
@@ -699,17 +612,14 @@
 			if (row >= 0 && row < spreadsheetData.data.length && 
 			    col >= 0 && col < spreadsheetData.data[0].length) {
 				const cell = spreadsheetData.data[row][col];
-				// If it's a formula, we need to recalculate it
 				if (typeof cell.value === "string" && cell.value.startsWith("=")) {
 					changedFormulaCells.add(changedCellKey);
 				} else {
-					// If it's not a formula, update computedValue to match value
 					cell.computedValue = cell.value;
 				}
 			}
 		}
 
-		// Find formulas that depend on changed cells (including the changed formula cells themselves)
 		const formulasToRecalculate = new Set<string>(changedFormulaCells);
 		for (const [formulaKey, dependencies] of formulaDependencies.entries()) {
 			for (const changedCell of changedCells) {
@@ -720,10 +630,8 @@
 			}
 		}
 
-		// If no formulas to recalculate, we're done (but we already updated non-formula cells above)
 		if (formulasToRecalculate.size === 0) return;
 
-		// Recalculate affected formulas iteratively to handle dependencies
 		for (let i = 0; i < 10; i++) {
 			let changed = false;
 			for (const formulaKey of formulasToRecalculate) {
@@ -735,16 +643,14 @@
 				if (cell.computedValue !== newValue) {
 					cell.computedValue = newValue;
 					changed = true;
-					// If this formula's value changed, add it to changed cells for next iteration
 					changedCells.add(formulaKey);
 				}
 			}
 			if (!changed) break;
 			
-			// Check if any newly changed formulas have dependencies we need to recalculate
 			const newFormulasToCheck = new Set<string>();
 			for (const [formulaKey, dependencies] of formulaDependencies.entries()) {
-				if (formulasToRecalculate.has(formulaKey)) continue; // Already recalculating
+				if (formulasToRecalculate.has(formulaKey)) continue;
 				for (const changedCell of changedCells) {
 					if (dependencies.has(changedCell)) {
 						newFormulasToCheck.add(formulaKey);
@@ -752,22 +658,15 @@
 					}
 				}
 			}
-			// Add newly affected formulas to the recalculation set
 			for (const key of newFormulasToCheck) {
 				formulasToRecalculate.add(key);
 			}
 		}
 	}
 
-	/**
-	 * Evaluates a single formula string (e.g., "=A1+B1").
-	 * @param formula The full formula string, including the leading "=".
-	 * @param evaluating A Set to track the call stack and prevent circular references.
-	 * @returns The computed value as a string, or an error string.
-	 */
 	function evaluateFormula(formula: string, evaluating: Set<string>): string {
 		if (evaluating.has(formula)) {
-			return "#REF!"; // Circular reference detected
+			return "#REF!";
 		}
 		evaluating.add(formula);
 
@@ -787,10 +686,6 @@
 		return evaluateSimpleMath(expression.trim());
 	}
 
-	/**
-	 * Handles the SUM() function logic for ranges and individual cells.
-	 * @returns The calculated sum as a string.
-	 */
 	function handleSumFunction(argsStr: string): string {
 		const args = argsStr.split(",");
 		let sum = 0;
@@ -825,10 +720,6 @@
 		return sum.toString();
 	}
 
-	/**
-	 * Handles the AVG() function logic for ranges and individual cells.
-	 * @returns The calculated average as a string.
-	 */
 	function handleAvgFunction(argsStr: string): string {
 		const args = argsStr.split(",");
 		let sum = 0;
@@ -873,11 +764,6 @@
 		return average.toString();
 	}
 
-	/**
-	 * Evaluates a generic mathematical expression, resolving cell references first.
-	 * Uses a safer evaluation method than eval() or new Function()
-	 * @returns The result as a string, or "#ERROR!".
-	 */
 	function evaluateSimpleMath(expression: string): string {
 		const resolvedExpression = expression.replace(/[A-Z]+\d+/gi, (match) => {
 			const coords = parseCellReference(match);
@@ -906,10 +792,6 @@
 		}
 	}
 
-	/**
-	 * Manually evaluates a mathematical expression without using Function constructor
-	 * Supports: +, -, *, /, parentheses
-	 */
 	function evaluateExpression(expr: string): number {
 		expr = expr.replace(/\s/g, '');
 		
@@ -999,10 +881,6 @@
 		}
 	}
 
-	/**
-	 * Parses a spreadsheet reference string (e.g., "A1") into coordinates.
-	 * @returns A coordinate object or null if parsing fails.
-	 */
 	function parseCellReference(
 		ref: string,
 	): { row: number; col: number } | null {
@@ -1011,7 +889,7 @@
 
 		const [, colName, rowNum] = match;
 		const col = getColIndexFromName(colName.toUpperCase());
-		const row = parseInt(rowNum, 10) - 1; // to 0-indexed
+		const row = parseInt(rowNum, 10) - 1;
 
 		if (
 			row >= 0 &&
@@ -1030,10 +908,9 @@
 			result *= 26;
 			result += name.charCodeAt(i) - "A".charCodeAt(0) + 1;
 		}
-		return result - 1; // to 0-indexed
+		return result - 1;
 	}
 
-	/** Safely gets the numeric value of a cell for calculations. */
 	function getCellValueForCalculation(cell: SpreadsheetCell): number {
 		const num = parseFloat(cell.computedValue || cell.value);
 		return isNaN(num) ? 0 : num;
@@ -1124,7 +1001,6 @@
 		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
 			e.preventDefault();
 			e.stopPropagation();
-			// Flush pending debounced saves so undo works immediately
 			debouncedSaveHistory.flush();
 			undo();
 			return;
@@ -1132,7 +1008,6 @@
 		if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
 			e.preventDefault();
 			e.stopPropagation();
-			// Flush pending debounced saves so redo works immediately
 			debouncedSaveHistory.flush();
 			redo();
 			return;
@@ -1218,9 +1093,7 @@
 		editingCell = { row: rowIndex, col: colIndex };
 		
 		if (cellChanged) {
-			// Flush any pending debounced saves before switching cells
 			debouncedSaveHistory.flush();
-			// Save the state before switching to new cell (establishes baseline for new cell)
 			hasSavedHistoryForCurrentEdit = false;
 			saveHistory();
 			hasSavedHistoryForCurrentEdit = true;
@@ -1234,13 +1107,11 @@
 	});
 
 	onDestroy(() => {
-		// Cleanup all possible event listeners to prevent memory leaks
 		window.removeEventListener("mousemove", handleMouseMove);
 		window.removeEventListener("mouseup", handleMouseUp);
 		window.removeEventListener("mouseover", handleCellMouseOver);
 		window.removeEventListener("mouseup", handleCellMouseUp);
 		
-		// Reset state to ensure handlers don't run after destruction
 		colBeingResized = null;
 		rowBeingResized = null;
 		isSelecting = false;
@@ -1332,30 +1203,19 @@
 									: cell.computedValue}
 								on:input={(e) => {
 									const newValue = (e.target as HTMLInputElement).value;
-									// Ensure oldValue is always a string to avoid runtime errors
 									const oldValue = typeof cell.value === "string" ? cell.value : "";
 									const wasDeletion = newValue.length < oldValue.length;
 									
-									// Save history strategy:
-									// - First change: save immediately to establish baseline (before typing starts)
-									// - Deletions: save immediately (important for undo)
-									// - Subsequent typing: use debounced save (only one pending at a time)
 									if (!hasSavedHistoryForCurrentEdit) {
-										// First change - save the state BEFORE this edit
-										// This establishes the baseline we can undo to
 										saveHistory();
 										hasSavedHistoryForCurrentEdit = true;
 									}
 									
-									// For deletions, save immediately (important for undo)
-									// For typing, use debounced save
 									if (wasDeletion) {
-										// Cancel any pending debounced save and save immediately
 										debouncedSaveHistory.flush();
 										saveHistory();
-										hasSavedHistoryForCurrentEdit = false; // Reset so next change saves baseline
+										hasSavedHistoryForCurrentEdit = false;
 									} else {
-										// Continue typing - use debounced save (will save after user stops typing)
 										debouncedSaveHistory();
 									}
 									
@@ -1364,12 +1224,10 @@
 									
 									cell.value = newValue;
 									
-									// Mark cache for rebuild if formula was added/removed
 									if (wasFormula !== isFormula) {
 										needsFormulaCacheRebuild = true;
 									}
 									
-									// Track changed cell for optimized recalculation
 									const changedCell = new Set<string>([getCellKey(rowIndex, colIndex)]);
 									recalculateSheet(changedCell);
 									spreadsheetData = spreadsheetData;
@@ -1377,9 +1235,7 @@
 								}}
 								on:blur={(e) => {
 									const newValue = (e.target as HTMLInputElement).value;
-									// Flush any pending debounced saves - this will save the final state
 									debouncedSaveHistory.flush();
-									// Don't save again here - the flush already saved if needed
 									lastSavedCellValue = null;
 									hasSavedHistoryForCurrentEdit = false;
 									editingCell = null;

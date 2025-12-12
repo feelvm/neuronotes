@@ -45,14 +45,12 @@
 
     function handleWorkspaceWheel(event: WheelEvent) {
         if (!workspaceTabsEl) return;
-        // Convert vertical wheel scrolling into horizontal scrolling while hovering tabs
         if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
             event.preventDefault();
             workspaceTabsEl.scrollBy({ left: event.deltaY, behavior: 'auto' });
         }
     }
 
-    // Settings dropdown positioning
     function settingsDropdown(node: HTMLElement) {
         function updatePosition() {
             const settingsBtn = document.querySelector('.settings-btn') as HTMLElement;
@@ -87,13 +85,11 @@
         };
     }
 
-    // Focus action for inputs
     function focus(node: HTMLElement) {
         node.focus();
         return { destroy() {} };
     }
 
-    // Get display text for auth button
     $: displayText = isLoggedIn && userEmail 
         ? userEmail.split('@')[0] 
         : 'local';

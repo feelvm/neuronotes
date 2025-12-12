@@ -1,7 +1,6 @@
 import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from './db_types';
 import { debounce } from './utils/debounce';
 
-// sql.js exports Database as a property of the default export
 type SqlJsDatabase = ReturnType<Awaited<ReturnType<typeof import('sql.js')['default']>>['Database']>;
 
 let db: SqlJsDatabase | null = null;
@@ -36,7 +35,6 @@ export async function init(): Promise<void> {
 
   initPromise = (async () => {
     try {
-      // Dynamic import to defer loading sql.js and its WASM file
       const sqlJsModule = await import('sql.js');
       SQL = await sqlJsModule.default({
         locateFile: (file: string) => {
@@ -83,13 +81,10 @@ export async function init(): Promise<void> {
         }
       };
 
-      // Debounce saves to avoid excessive localStorage writes
-      // Saves immediately on beforeunload, otherwise debounced by 1 second
       debouncedSave = debounce(saveDb, 1000);
 
       if (typeof window !== 'undefined') {
-        window.addEventListener('beforeunload', saveDb); // Immediate save on page unload
-        // Periodic save as backup (every 10 seconds instead of 5)
+        window.addEventListener('beforeunload', saveDb);
         setInterval(saveDb, 10000);
       }
     } catch (error) {
@@ -101,16 +96,10 @@ export async function init(): Promise<void> {
   return initPromise;
 }
 
-// Export function to flush pending database saves
 export function flushDatabaseSave(): void {
   if (debouncedSave) {
-    // flush() returns a Promise but we don't need to await it here
-    // since this is called synchronously and we do an immediate save below
-    debouncedSave.flush().catch(() => {
-      // Ignore errors, we'll do immediate save below
-    });
+    debouncedSave.flush().catch(() => {});
   }
-  // Also do an immediate save to ensure data is persisted
   if (db) {
     try {
       const storageKey = getStorageKey();
@@ -143,7 +132,6 @@ export async function execute(sql: string, params: any[] = []): Promise<void> {
     stmt.bind(params);
     stmt.step();
     stmt.free();
-    // Trigger debounced save instead of immediate save
     if (debouncedSave) {
       debouncedSave();
     }
@@ -184,7 +172,7 @@ export async function getAllWorkspaces(): Promise<Workspace[]> {
 export async function putWorkspace(workspace: Workspace): Promise<void> {
   await execute(
     'INSERT OR REPLACE INTO workspaces (id, name, "order") VALUES (?, ?, ?)',
-    [workspace.id, workspace.name, workspace.order ?? 0] // Default to 0 if undefined
+    [workspace.id, workspace.name, workspace.order ?? 0]
   );
 }
 
@@ -208,7 +196,7 @@ export async function getFoldersByWorkspaceId(workspaceId: string): Promise<Fold
 export async function putFolder(folder: Folder): Promise<void> {
   await execute(
     'INSERT OR REPLACE INTO folders (id, name, workspace_id, "order") VALUES (?, ?, ?, ?)',
-    [folder.id, folder.name, folder.workspaceId, folder.order ?? 0] // Default to 0 if undefined
+    [folder.id, folder.name, folder.workspaceId, folder.order ?? 0]
   );
 }
 
@@ -223,13 +211,10 @@ export async function getNotesByWorkspaceId(workspaceId: string): Promise<Note[]
   );
 
   return result.map((note) => {
-    // Ensure type is valid - default to 'text' if missing or invalid
     const noteType: 'text' | 'spreadsheet' = (note.type === 'spreadsheet' ? 'spreadsheet' : 'text');
     
-    // Parse spreadsheet JSON only if note is actually a spreadsheet type AND has spreadsheet data
     let spreadsheetJson: string | undefined = undefined;
     if (noteType === 'spreadsheet' && note.spreadsheet) {
-      // If spreadsheet is already a string, use it; otherwise stringify it
       if (typeof note.spreadsheet === 'string') {
         spreadsheetJson = note.spreadsheet;
       } else {
@@ -239,14 +224,14 @@ export async function getNotesByWorkspaceId(workspaceId: string): Promise<Note[]
     
     const mappedNote: any = {
       ...note,
-      contentHTML: note.content_html || '', // Include content from DB
+      contentHTML: note.content_html || '',
       updatedAt: note.updated_at,
       workspaceId: note.workspace_id,
       folderId: note.folder_id,
-      type: noteType, // Use validated type
-      spreadsheet: undefined, // Will be parsed from _spreadsheetJson when needed
-      _spreadsheetJson: spreadsheetJson, // Store as JSON string for lazy parsing
-      _contentLoaded: !!note.content_html // Mark as loaded if content exists
+      type: noteType,
+      spreadsheet: undefined,
+      _spreadsheetJson: spreadsheetJson,
+      _contentLoaded: !!note.content_html
     };
     return mappedNote;
   }) as Note[];
@@ -275,10 +260,6 @@ export async function putNote(note: Note): Promise<void> {
   }
 
   let contentHTML = note.contentHTML;
-  // Only try to preserve existing content if:
-  // 1. contentHTML is empty AND
-  // 2. _contentLoaded is false/undefined (meaning content wasn't explicitly loaded/set)
-  // If _contentLoaded is true, use the provided contentHTML (even if empty) - this is important for imports
   if ((!contentHTML || contentHTML === '') && (noteWithRaw._contentLoaded === false || noteWithRaw._contentLoaded === undefined)) {
     try {
       const existingContent = await getNoteContent(note.id);
@@ -302,8 +283,8 @@ export async function putNote(note: Note): Promise<void> {
       contentHTML || null,
       note.updatedAt,
       note.workspaceId,
-      note.folderId || null, // Convert undefined to null
-      note.order ?? 0, // Default to 0 if undefined
+      note.folderId || null,
+      note.order ?? 0,
       note.type || 'text',
       spreadsheetJson || null
     ]

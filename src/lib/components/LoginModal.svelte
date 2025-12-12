@@ -15,12 +15,10 @@
     export let onOpenSignup: () => void;
     export let onLoginSuccess: (userId: string) => Promise<void>;
 
-    // Supabase modules (loaded dynamically)
     let auth: typeof import('$lib/supabase/auth');
     let sync: typeof import('$lib/supabase/sync');
     let migrations: typeof import('$lib/supabase/migrations');
 
-    // Helper function to load Supabase modules if not already loaded
     async function ensureSupabaseLoaded() {
         if (!auth) {
             const authModule = await import('$lib/supabase/auth');
@@ -63,22 +61,13 @@
             if (result.success && result.user) {
                 const newUserId = result.user.id;
                 
-                // Check if we're switching to a different user
                 const previousUserId = browser ? localStorage.getItem('neuronotes_current_user_id') : null;
                 const isSwitchingUsers = previousUserId && previousUserId !== newUserId;
                 
-                // IMPORTANT: Check if migration is needed BEFORE clearing data
-                // This check must happen before clearAllLocalData() or it will always return false
-                // Flush any pending saves first to ensure we have the latest data
                 await db.flushDatabaseSave();
                 const needsMigrate = await migrations.needsMigration();
                 
-                // If switching users, the previous user's data should already be in Supabase
-                // (it should have been synced before logout or during previous session)
-                // For the new user, we need to either migrate local data or sync from Supabase
-                
                 if (needsMigrate) {
-                    // Migrate BEFORE clearing - this pushes local data to Supabase
                     const migrationResult = await migrations.migrateLocalDataToSupabase();
                     if (migrationResult.success) {
                     } else {
@@ -86,25 +75,18 @@
                     }
                 }
                 
-                // Now clear all local data before pulling new user's data
                 await db.clearAllLocalData();
                 
-                // Store new user ID
                 if (browser && newUserId) {
                     localStorage.setItem('neuronotes_current_user_id', newUserId);
                 }
                 
-                // IMPORTANT: After clearing local data, we should ONLY pull from Supabase, not push
-                // Using fullSync() would push the empty local state and delete everything from Supabase!
-                // So we use pullFromSupabase() instead to restore the user's data
                 const pullResult = await sync.pullFromSupabase();
                 if (!pullResult.success) {
                     console.error('Failed to pull data from Supabase:', pullResult.error);
                     alert(`Warning: Failed to restore your data from cloud. Error: ${pullResult.error}`);
                 } else {
-                    // Flush database to ensure all pulled data is persisted
                     await db.flushDatabaseSave();
-                    // Verify data was pulled by checking workspaces
                     const pulledWorkspaces = await db.getAllWorkspaces();
                     if (pulledWorkspaces.length === 0) {
                         console.warn('No workspaces found in Supabase for this user - data may not exist in cloud');
@@ -112,10 +94,8 @@
                     }
                 }
                 
-                // Call the parent's onLoginSuccess callback
                 await onLoginSuccess(newUserId);
                 
-                // Reset form
                 loginEmail = '';
                 loginPassword = '';
                 isEmailInvalid = false;
@@ -139,7 +119,6 @@
             if (!result.success) {
                 alert(result.error || 'Failed to sign in with Google');
             }
-            // OAuth will redirect, so we don't need to close modal here
         } catch (error) {
             console.error('Google login error:', error);
             alert(`Google login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
