@@ -1116,12 +1116,19 @@
         border: 1px solid var(--accent-purple);
         border-radius: 3px;
         padding: 2px 4px;
-        font-size: 16px;
-        transform: scale(0.6875);
-        transform-origin: left center;
+        font-size: 11px;
         color: var(--text);
         font-family: var(--font-sans);
         width: 100%;
+    }
+
+    @media (hover: none) and (pointer: coarse) {
+        .event-edit-time,
+        .event-edit-title {
+            font-size: 16px;
+            transform: scale(0.6875);
+            transform-origin: left center;
+        }
     }
 
     .event-edit-time {
@@ -1141,7 +1148,7 @@
 
     .calendar-add {
         display: flex;
-        gap: 8px;
+        gap: 4px;
         padding: 12px 16px;
         border-top: 1px solid var(--border);
         flex-wrap: nowrap;
@@ -1163,12 +1170,18 @@
         color: var(--text);
         flex-shrink: 0;
         min-width: 120px;
-        font-size: 16px;
-        transform: scale(0.75);
-        transform-origin: left center;
+        font-size: 12px;
         font-family: var(--font-sans);
         height: 32px;
         box-sizing: border-box;
+    }
+
+    @media (hover: none) and (pointer: coarse) {
+        .calendar-add input {
+            font-size: 16px;
+            transform: scale(0.75);
+            transform-origin: left center;
+        }
     }
 
     .calendar-add input::-webkit-calendar-picker-indicator {
