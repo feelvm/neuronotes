@@ -118,7 +118,12 @@ async function saveBackupBrowser(backupData: BackupData): Promise<void> {
     const backupListJson = localStorage.getItem(BACKUP_STORAGE_KEY);
     let backupList: BackupMetadata[] = [];
     if (backupListJson) {
-      backupList = JSON.parse(backupListJson);
+      try {
+        backupList = JSON.parse(backupListJson);
+      } catch (parseError) {
+        console.warn('[backup] Failed to parse backup list, starting fresh:', parseError);
+        backupList = [];
+      }
     }
     
     const backupKey = `backup_${backupData.metadata.id}`;
@@ -133,7 +138,12 @@ async function saveBackupBrowser(backupData: BackupData): Promise<void> {
       const backupListJson = localStorage.getItem(BACKUP_STORAGE_KEY);
       let backupList: BackupMetadata[] = [];
       if (backupListJson) {
-        backupList = JSON.parse(backupListJson);
+        try {
+          backupList = JSON.parse(backupListJson);
+        } catch (parseError) {
+          console.warn('[backup] Failed to parse backup list after cleanup:', parseError);
+          backupList = [];
+        }
       }
       const backupKey = `backup_${backupData.metadata.id}`;
       localStorage.setItem(backupKey, JSON.stringify(backupData));
@@ -156,7 +166,14 @@ async function getAllBackupsBrowser(): Promise<BackupData[]> {
       return [];
     }
     
-    const backupList: BackupMetadata[] = JSON.parse(backupListJson);
+    let backupList: BackupMetadata[] = [];
+    try {
+      backupList = JSON.parse(backupListJson);
+    } catch (parseError) {
+      console.warn('[backup] Failed to parse backup list:', parseError);
+      return [];
+    }
+    
     const backups: BackupData[] = [];
     
     for (const metadata of backupList) {

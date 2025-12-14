@@ -211,7 +211,14 @@
             try {
                 const jsonData = ev.dataTransfer?.getData('application/json');
                 if (jsonData) {
-                    const parsed = JSON.parse(jsonData);
+                    let parsed: unknown;
+                    try {
+                        parsed = JSON.parse(jsonData);
+                    } catch (parseError) {
+                        console.error('[KanbanPanel] Failed to parse JSON data:', parseError);
+                        alert('Invalid data format. Please try again.');
+                        return;
+                    }
                     draggedTaskInfo = {
                         colId: parsed.colId,
                         taskId: parsed.taskId
@@ -329,8 +336,9 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
-            const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const sanitizedButtonText = deleteButtonText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Escape HTML to prevent XSS (DOMPurify would require async loading)
+            const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+            const sanitizedButtonText = deleteButtonText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
             
             content.innerHTML = `
                 <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${sanitizedMessage}</div>

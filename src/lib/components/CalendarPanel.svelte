@@ -491,8 +491,9 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
-            const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const sanitizedButtonText = deleteButtonText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Escape HTML to prevent XSS (DOMPurify would require async loading)
+            const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+            const sanitizedButtonText = deleteButtonText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
             
             content.innerHTML = `
                 <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${sanitizedMessage}</div>
@@ -558,7 +559,8 @@
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
             `;
             
-            const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Escape HTML to prevent XSS (DOMPurify would require async loading)
+            const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
             
             content.innerHTML = `
                 <div style="color: var(--text); margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap;">${sanitizedMessage}</div>

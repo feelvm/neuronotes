@@ -97,7 +97,22 @@
 
         try {
             const fileContent = await file.text();
-            const parsedData = JSON.parse(fileContent);
+            let parsedData: unknown;
+            try {
+                parsedData = JSON.parse(fileContent);
+            } catch (parseError) {
+                alert('Invalid backup file format. The file is not valid JSON.');
+                target.value = '';
+                return;
+            }
+            
+            // Validate backup data structure
+            const { validateBackupData } = await import('$lib/utils/security');
+            if (!validateBackupData(parsedData)) {
+                alert('Invalid backup file structure. Please select a valid backup file.');
+                target.value = '';
+                return;
+            }
 
             const isFullBackup = parsedData.metadata && parsedData.data && parsedData.version;
             

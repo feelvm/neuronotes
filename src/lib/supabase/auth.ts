@@ -178,7 +178,24 @@ export async function signInWithGoogle(): Promise<{ success: boolean; error?: st
   }
   
   try {
-    const redirectTo = `${window.location.origin}${window.location.pathname}`;
+    // Validate redirect URL to prevent open redirect attacks
+    const redirectPath = window.location.pathname;
+    // Only allow paths starting with / to prevent protocol-relative URLs
+    const safePath = redirectPath.startsWith('/') ? redirectPath : '/';
+    const redirectTo = `${window.location.origin}${safePath}`;
+    
+    // Additional validation: ensure it's the same origin
+    try {
+      const redirectUrl = new URL(redirectTo);
+      if (redirectUrl.origin !== window.location.origin) {
+        throw new Error('Invalid redirect URL');
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: 'Invalid redirect configuration',
+      };
+    }
     
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',

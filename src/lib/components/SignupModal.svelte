@@ -2,6 +2,7 @@
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import { generateUUID } from '$lib/utils/uuid';
+    import { validatePassword as validatePasswordUtil } from '$lib/utils/security';
     import type { Workspace } from '$lib/db_types';
 
     export let open = false;
@@ -36,8 +37,11 @@
     }
 
     function validatePassword(password: string): boolean {
-        return password.length >= 8;
+        const result = validatePasswordUtil(password);
+        return result.valid;
     }
+    
+    let passwordErrors: string[] = [];
 
     function handleEmailBlur() {
         if (signupEmail && !validateEmail(signupEmail)) {
@@ -48,10 +52,13 @@
     }
 
     function handlePasswordBlur() {
-        if (signupPassword && !validatePassword(signupPassword)) {
-            isPasswordInvalid = true;
+        if (signupPassword) {
+            const validation = validatePasswordUtil(signupPassword);
+            isPasswordInvalid = !validation.valid;
+            passwordErrors = validation.errors;
         } else {
             isPasswordInvalid = false;
+            passwordErrors = [];
         }
         if (signupRepeatPassword && signupPassword !== signupRepeatPassword) {
             isPasswordMismatch = true;
@@ -79,8 +86,11 @@
             return;
         }
         
-        if (!validatePassword(signupPassword)) {
+        const passwordValidation = validatePasswordUtil(signupPassword);
+        if (!passwordValidation.valid) {
             isPasswordInvalid = true;
+            passwordErrors = passwordValidation.errors;
+            alert(`Password validation failed:\n${passwordValidation.errors.join('\n')}`);
             return;
         }
         
@@ -222,19 +232,23 @@
                             type="password"
                             class:invalid={isPasswordInvalid}
                             bind:value={signupPassword}
-                            placeholder="Enter your password (min 8 characters)"
+                            placeholder="Enter your password (min 12 characters, mixed case, numbers, special chars)"
                             required
                             on:blur={handlePasswordBlur}
                             on:input={() => {
-                                if (isPasswordInvalid && signupPassword && validatePassword(signupPassword)) {
-                                    isPasswordInvalid = false;
+                                if (signupPassword) {
+                                    const validation = validatePasswordUtil(signupPassword);
+                                    isPasswordInvalid = !validation.valid;
+                                    passwordErrors = validation.errors;
                                 }
                                 if (signupRepeatPassword && signupPassword !== signupRepeatPassword) {
                                     isPasswordMismatch = true;
                                 } else if (signupRepeatPassword && signupPassword === signupRepeatPassword) {
                                     isPasswordMismatch = false;
-                                    if (validatePassword(signupPassword)) {
-                                        isPasswordInvalid = false;
+                                    if (signupPassword) {
+                                        const validation = validatePasswordUtil(signupPassword);
+                                        isPasswordInvalid = !validation.valid;
+                                        passwordErrors = validation.errors;
                                     }
                                 }
                             }}
@@ -256,11 +270,20 @@
                                 } else {
                                     isPasswordMismatch = false;
                                 }
-                                if (signupPassword && validatePassword(signupPassword) && signupPassword === signupRepeatPassword) {
-                                    isPasswordInvalid = false;
+                                if (signupPassword && signupPassword === signupRepeatPassword) {
+                                    const validation = validatePasswordUtil(signupPassword);
+                                    isPasswordInvalid = !validation.valid;
+                                    passwordErrors = validation.errors;
                                 }
                             }}
                         />
+                        {#if isPasswordInvalid && passwordErrors.length > 0}
+                            <div style="font-size: 12px; color: var(--accent-red); margin-top: 4px;">
+                                {#each passwordErrors as error}
+                                    <div>{error}</div>
+                                {/each}
+                            </div>
+                        {/if}
                     </div>
                     <div class="login-actions">
                         <button type="submit" class="login-submit-btn">Register</button>

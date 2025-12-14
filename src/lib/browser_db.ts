@@ -46,7 +46,18 @@ export async function init(): Promise<void> {
       const savedDb = localStorage.getItem(storageKey);
       if (savedDb) {
         try {
-          const array = JSON.parse(savedDb);
+          let array: number[];
+          try {
+            array = JSON.parse(savedDb);
+            if (!Array.isArray(array)) {
+              throw new Error('Invalid database format');
+            }
+          } catch (parseError) {
+            console.warn('[browser_db] Failed to parse saved database, creating new one:', parseError);
+            db = new SQL.Database();
+            db.run(SCHEMA_SQL);
+            return;
+          }
           const uint8Array = new Uint8Array(array);
           db = new SQL.Database(uint8Array);
           db.run(SCHEMA_SQL);
@@ -302,35 +313,81 @@ export async function getCalendarEventsByWorkspaceId(
     workspaceId
   ]);
 
-  return result.map((event) => ({
-    id: event.id,
-    date: event.date,
-    title: event.title,
-    time: event.time,
-    workspaceId: event.workspace_id,
-    repeat: event.repeat || 'none',
-    repeatOn: event.repeat_on ? JSON.parse(event.repeat_on) : undefined,
-    repeatEnd: event.repeat_end,
-    exceptions: event.exceptions ? JSON.parse(event.exceptions) : [],
-    color: event.color || undefined
-  })) as CalendarEvent[];
+  return result.map((event) => {
+    let repeatOn: number[] | undefined = undefined;
+    let exceptions: string[] = [];
+    
+    if (event.repeat_on) {
+      try {
+        const parsed = JSON.parse(event.repeat_on);
+        repeatOn = Array.isArray(parsed) ? parsed : undefined;
+      } catch (e) {
+        console.warn('[browser_db] Failed to parse repeat_on:', e);
+      }
+    }
+    
+    if (event.exceptions) {
+      try {
+        const parsed = JSON.parse(event.exceptions);
+        exceptions = Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        console.warn('[browser_db] Failed to parse exceptions:', e);
+      }
+    }
+    
+    return {
+      id: event.id,
+      date: event.date,
+      title: event.title,
+      time: event.time,
+      workspaceId: event.workspace_id,
+      repeat: event.repeat || 'none',
+      repeatOn,
+      repeatEnd: event.repeat_end,
+      exceptions,
+      color: event.color || undefined
+    };
+  }) as CalendarEvent[];
 }
 
 export async function getAllCalendarEvents(): Promise<CalendarEvent[]> {
   const result = await select<any>('SELECT * FROM calendarEvents');
 
-  return result.map((event) => ({
-    id: event.id,
-    date: event.date,
-    title: event.title,
-    time: event.time,
-    workspaceId: event.workspace_id,
-    repeat: event.repeat || 'none',
-    repeatOn: event.repeat_on ? JSON.parse(event.repeat_on) : undefined,
-    repeatEnd: event.repeat_end,
-    exceptions: event.exceptions ? JSON.parse(event.exceptions) : [],
-    color: event.color || undefined
-  })) as CalendarEvent[];
+  return result.map((event) => {
+    let repeatOn: number[] | undefined = undefined;
+    let exceptions: string[] = [];
+    
+    if (event.repeat_on) {
+      try {
+        const parsed = JSON.parse(event.repeat_on);
+        repeatOn = Array.isArray(parsed) ? parsed : undefined;
+      } catch (e) {
+        console.warn('[browser_db] Failed to parse repeat_on:', e);
+      }
+    }
+    
+    if (event.exceptions) {
+      try {
+        const parsed = JSON.parse(event.exceptions);
+        exceptions = Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        console.warn('[browser_db] Failed to parse exceptions:', e);
+      }
+    }
+    
+    return {
+      id: event.id,
+      date: event.date,
+      title: event.title,
+      time: event.time,
+      workspaceId: event.workspace_id,
+      repeat: event.repeat || 'none',
+      repeatOn,
+      repeatEnd: event.repeat_end,
+      exceptions,
+      color: event.color || undefined
+    };
+  }) as CalendarEvent[];
 }
 
 export async function putCalendarEvent(event: CalendarEvent): Promise<void> {
@@ -368,9 +425,16 @@ export async function getKanbanByWorkspaceId(workspaceId: string): Promise<Kanba
   }
 
   const kanbanRow = result[0];
+  let columns: any = null;
+  try {
+    columns = JSON.parse(kanbanRow.columns);
+  } catch (e) {
+    console.error('[browser_db] Failed to parse kanban columns:', e);
+    throw new Error('Invalid kanban data format');
+  }
   return {
     workspaceId: kanbanRow.workspace_id,
-    columns: JSON.parse(kanbanRow.columns)
+    columns
   };
 }
 
@@ -393,9 +457,16 @@ export async function getSettingByKey(key: string): Promise<Setting | null> {
   }
 
   const settingRow = result[0];
+  let value: any = null;
+  try {
+    value = JSON.parse(settingRow.value);
+  } catch (e) {
+    console.warn('[browser_db] Failed to parse setting value:', e);
+    value = settingRow.value; // Fallback to raw value
+  }
   return {
     key: settingRow.key,
-    value: JSON.parse(settingRow.value)
+    value
   };
 }
 
@@ -408,10 +479,19 @@ export async function putSetting(setting: Setting): Promise<void> {
 
 export async function getAllSettings(): Promise<Setting[]> {
   const result = await select<any>('SELECT * FROM settings');
-  return result.map((row) => ({
-    key: row.key,
-    value: JSON.parse(row.value)
-  })) as Setting[];
+  return result.map((row) => {
+    let value: any = null;
+    try {
+      value = JSON.parse(row.value);
+    } catch (e) {
+      console.warn('[browser_db] Failed to parse setting value:', e);
+      value = row.value; // Fallback to raw value
+    }
+    return {
+      key: row.key,
+      value
+    };
+  }) as Setting[];
 }
 
 export async function deleteSetting(key: string): Promise<void> {
