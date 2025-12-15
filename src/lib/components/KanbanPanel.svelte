@@ -26,7 +26,8 @@
         return { destroy() {} };
     }
 
-    const debouncedPersistKanban = debounce(async () => {
+    // Save to local DB with short debounce to batch rapid changes (like dragging)
+    const debouncedSaveKanban = debounce(async () => {
         if (!activeWorkspaceId) {
             return;
         }
@@ -38,17 +39,37 @@
                 workspaceId: activeWorkspaceId,
                 columns: kanban
             });
-            await onSyncIfLoggedIn();
         } catch (error) {
             console.error('[kanban] Failed to save kanban:', error);
         }
-    }, 400);
+    }, 50); // Very short debounce to batch rapid drag operations
     
+    // Save and sync immediately (for discrete actions like create, delete, rename)
+    async function saveAndSyncKanban() {
+        if (!activeWorkspaceId || !kanban || kanban.length === 0) {
+            return;
+        }
+        try {
+            // Flush any pending debounced save first
+            await debouncedSaveKanban.flush();
+            // Ensure latest state is saved
+            await db.putKanban({
+                workspaceId: activeWorkspaceId,
+                columns: kanban
+            });
+            // Sync immediately after save
+            await onSyncIfLoggedIn();
+        } catch (error) {
+            console.error('[kanban] Failed to save and sync kanban:', error);
+        }
+    }
+    
+    // Reactive: save to DB with debounce (for drag operations)
     $: if (browser && activeWorkspaceId && kanban) {
-        debouncedPersistKanban();
+        debouncedSaveKanban();
     }
 
-    function addColumn() {
+    async function addColumn() {
         kanban = [
             ...kanban,
             {
@@ -58,13 +79,15 @@
                 isCollapsed: false
             }
         ];
+        await saveAndSyncKanban();
     }
 
-    function renameColumn(colId: string, title: string) {
+    async function renameColumn(colId: string, title: string) {
         const col = kanban.find((c) => c.id === colId);
         if (col && title.trim()) {
             col.title = title.trim();
             kanban = [...kanban];
+            await saveAndSyncKanban();
         }
         editingColumnId = null;
     }
@@ -84,20 +107,23 @@
         }
         
         kanban = kanban.filter((c) => c.id !== colId);
+        await saveAndSyncKanban();
     }
 
-    function addTask(col: Column, text: string) {
+    async function addTask(col: Column, text: string) {
         if (!text.trim()) return;
         col.tasks.push({ id: generateUUID(), text: text.trim() });
         kanban = [...kanban];
+        await saveAndSyncKanban();
     }
 
-    function renameTask(colId: string, taskId: string, text: string) {
+    async function renameTask(colId: string, taskId: string, text: string) {
         const col = kanban.find((c) => c.id === colId);
         const task = col?.tasks.find((t) => t.id === taskId);
         if (task && text.trim()) {
             task.text = text.trim();
             kanban = [...kanban];
+            await saveAndSyncKanban();
         }
         editingTaskId = null;
     }
@@ -113,6 +139,7 @@
         
         col.tasks = col.tasks.filter((t) => t.id !== taskId);
         kanban = [...kanban];
+        await saveAndSyncKanban();
     }
 
     function toggleColumnCollapse(colId: string) {
@@ -204,16 +231,16 @@
         }
     }
 
-    function onColumnDrop(targetColId: string, ev: DragEvent, isTaskDrop = false) {
+    async function onColumnDrop(targetColId: string, ev: DragEvent, isTaskDrop = false) {
         ev.preventDefault();
         ev.stopPropagation();
         if (!draggedTaskInfo) {
             try {
                 const jsonData = ev.dataTransfer?.getData('application/json');
                 if (jsonData) {
-                    let parsed: unknown;
+                    let parsed: { colId: string; taskId: string };
                     try {
-                        parsed = JSON.parse(jsonData);
+                        parsed = JSON.parse(jsonData) as { colId: string; taskId: string };
                     } catch (parseError) {
                         console.error('[KanbanPanel] Failed to parse JSON data:', parseError);
                         alert('Invalid data format. Please try again.');
@@ -286,6 +313,7 @@
         });
         kanban = newKanban;
         handleDragEnd();
+        await saveAndSyncKanban();
     }
 
     function handleDragEnd(ev?: DragEvent) {
