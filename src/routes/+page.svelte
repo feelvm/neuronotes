@@ -21,6 +21,7 @@
     import BackupModal from '$lib/components/BackupModal.svelte';
     import NavigationBar from '$lib/components/NavigationBar.svelte';
     import EditPanelsModal from '$lib/components/EditPanelsModal.svelte';
+    import WorkspaceModal from '$lib/components/WorkspaceModal.svelte';
     import CalendarPanel from '$lib/components/CalendarPanel.svelte';
     import KanbanPanel from '$lib/components/KanbanPanel.svelte';
     import NotesPanel from '$lib/components/NotesPanel.svelte';
@@ -258,8 +259,12 @@
         }
     }
 
-    async function addWorkspace() {
-        const name = prompt('Enter new workspace name:', 'New Workspace');
+    function addWorkspace() {
+        workspaceName = 'New Workspace';
+        showWorkspaceModal = true;
+    }
+
+    async function handleWorkspaceSubmit(name: string) {
         if (!name?.trim()) return;
         try {
             const newWorkspace: Workspace = {
@@ -526,6 +531,9 @@
     let isSignupEmailInvalid = false;
     let isPasswordMismatch = false;
     let isPasswordInvalid = false;
+    
+    let showWorkspaceModal = false;
+    let workspaceName = '';
     
     async function ensureSupabaseLoaded() {
         if (!auth) {
@@ -1640,11 +1648,18 @@
         }}
     />
 
+    <WorkspaceModal
+        open={showWorkspaceModal}
+        bind:workspaceName
+        onClose={() => showWorkspaceModal = false}
+        onSubmit={handleWorkspaceSubmit}
+    />
+
     <div
         bind:this={mainEl}
         class="main"
         class:notes-maximized={notesPanelWidth > 90}
-        class:blurred={showLoginModal || showSignupModal || showEditPanelsModal}
+        class:blurred={showLoginModal || showSignupModal || showEditPanelsModal || showWorkspaceModal}
         class:notes-only={showNotes && !showCalendar && !showKanban}
         class:calendar-only={!showNotes && showCalendar && !showKanban}
         class:kanban-only={!showNotes && !showCalendar && showKanban}
