@@ -315,6 +315,7 @@
             ...notesToDelete.map(note => db.deleteNote(note.id)),
             ...foldersToDelete.map(folder => db.deleteFolder(folder.id)),
             ...eventsToDelete.map(event => db.deleteCalendarEvent(event.id)),
+            db.deleteKanban(id),
             db.deleteWorkspace(id)
         ]);
 
@@ -322,6 +323,8 @@
         if (activeWorkspaceId === id) {
             await switchWorkspace(workspaces[0].id);
         }
+        
+        await syncIfLoggedIn();
     }
 
     function handleWorkspaceDragStart(e: DragEvent, workspaceId: string) {
