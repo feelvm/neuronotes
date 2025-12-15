@@ -296,6 +296,7 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
           });
         if (upsertError) {
           console.error(`[sync:push] Failed to upsert kanban for workspace ${workspace.id}:`, upsertError);
+          throw upsertError;
         }
       } else if (supabaseKanban) {
         const { error: deleteError } = await supabase
@@ -524,9 +525,9 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
             color: event.color || undefined,
           });
       }
-    }
+      }
 
-    for (const workspace of workspacesToCheck) {
+      for (const localEvent of localEvents) {
         if (!remoteEventIds.has(localEvent.id)) {
           await db.deleteCalendarEvent(localEvent.id);
         }
@@ -549,12 +550,15 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
       const localKanban = await db.getKanbanByWorkspaceId(workspace.id);
 
       if (kanbanData) {
+        // Always pull remote kanban data
+        // Note: In fullSync, we pull then push, so local changes will be preserved in the push step
         const columns = kanbanData.columns as any;
         await db.putKanban({
           workspaceId: kanbanData.workspace_id,
           columns: columns,
         });
       } else if (localKanban) {
+        // Remote kanban was deleted, delete local too
         await db.deleteKanban(workspace.id);
       }
     }
