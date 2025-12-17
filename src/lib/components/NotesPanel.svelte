@@ -11,6 +11,8 @@
         handlePlainTextPaste,
         linkifyEditor
     } from '$lib/utils/textFormatting';
+    import { convertToWebP, blobToDataUrl } from '$lib/utils/image';
+    import { uploadNoteImageWebP, deleteNoteImage } from '$lib/supabase/storage';
     import type { Note, Folder, SpreadsheetCell } from '$lib/db_types';
 
     // Props
@@ -28,15 +30,47 @@
 
     let DOMPurify: any;
     
-    // Helper function to sanitize HTML while preserving link attributes
+    // Helper function to sanitize HTML while preserving link, checkbox, and image attributes
     function sanitizeHTML(html: string): string {
         if (!browser || !DOMPurify) return html;
-        // Configure DOMPurify to allow target and rel on anchor tags
+        // Configure DOMPurify to allow target and rel on anchor tags, checkbox attributes, and safe image attributes
         // Use KEEP_CONTENT to preserve all content
         return DOMPurify.sanitize(html, {
             ADD_ATTR: ['target', 'rel'],
-            ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'style'],
-            ALLOWED_TAGS: ['a', 'p', 'br', 'strong', 'em', 'u', 'span', 'div', 'ul', 'ol', 'li', 'input', 'b', 'i']
+            ALLOWED_ATTR: [
+                'href',
+                'target',
+                'rel',
+                'class',
+                'style',
+                'src',
+                'alt',
+                'width',
+                'height',
+                'data-image-path',
+                'data-image-src',
+                'data-rotation',
+                // Allow checkbox-related attributes so they keep working after sanitization
+                'type',
+                'checked'
+            ],
+            ALLOWED_TAGS: [
+                'a',
+                'p',
+                'br',
+                'strong',
+                'em',
+                'u',
+                'span',
+                'div',
+                'ul',
+                'ol',
+                'li',
+                'input',
+                'b',
+                'i',
+                'img'
+            ]
         });
     }
 
@@ -68,6 +102,9 @@
         start: { row: number; col: number };
         end: { row: number; col: number };
     } | null = null;
+    let imageFileInput: HTMLInputElement;
+    let isInsertingImage = false;
+    let imageInsertError: string | null = null;
 
     type DisplayItem = (Note & { displayType: 'note' }) | (Folder & { displayType: 'folder' });
     let displayList: DisplayItem[] = [];
@@ -126,6 +163,339 @@
         }
     }
     
+    /**
+     * Initialize drag/resize/rotate behavior for any image wrappers
+     * present in the current editor content.
+     */
+    function initializeImageInteractions() {
+        if (!browser || !editorDiv) return;
+
+        // Helper to visually mark a single image as active (show handles)
+        function setActiveWrapper(active: HTMLElement | null) {
+            const all = editorDiv.querySelectorAll<HTMLElement>('.note-image-wrapper');
+            all.forEach((w) => {
+                if (active && w === active) {
+                    w.classList.add('is-active');
+                } else {
+                    w.classList.remove('is-active');
+                }
+            });
+        }
+
+        // Install a one-time handler to clear active image when clicking elsewhere
+        const editorAny = editorDiv as any;
+        if (!editorAny._imageClickHandlerInstalled) {
+            editorDiv.addEventListener('mousedown', (event: MouseEvent) => {
+                const target = event.target as HTMLElement;
+                if (target.closest('.note-image-wrapper')) {
+                    // Clicked on an image wrapper or its handles - let their handlers decide
+                    return;
+                }
+                setActiveWrapper(null);
+            });
+            editorAny._imageClickHandlerInstalled = true;
+        }
+
+        const wrappers = editorDiv.querySelectorAll<HTMLElement>('.note-image-wrapper');
+        wrappers.forEach((wrapper) => {
+            // Ensure base styles are present even if they were stripped/modified
+            wrapper.setAttribute('contenteditable', 'false');
+            wrapper.style.position = wrapper.style.position || 'absolute';
+            wrapper.style.transformOrigin = 'center center';
+            
+            const img = wrapper.querySelector<HTMLImageElement>('img');
+            if (img) {
+                img.draggable = false;
+                img.style.width = '100%';
+                img.style.height = '100%';
+                img.style.objectFit = 'contain';
+                img.style.pointerEvents = 'none';
+            }
+            
+            // Dragging
+            let isDraggingImage = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            let startLeft = 0;
+            let startTop = 0;
+            
+            function onMouseMoveDrag(e: MouseEvent) {
+                if (!isDraggingImage) return;
+                e.preventDefault();
+                
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                
+                const editorBounds = editorDiv.getBoundingClientRect();
+                const wrapperBounds = wrapper.getBoundingClientRect();
+                
+                let newLeft = startLeft + dx;
+                let newTop = startTop + dy;
+                
+                const maxLeft = editorBounds.width - wrapperBounds.width;
+                const maxTop = editorBounds.height - wrapperBounds.height;
+                
+                newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+                newTop = Math.max(0, Math.min(newTop, maxTop));
+                
+                wrapper.style.left = `${newLeft}px`;
+                wrapper.style.top = `${newTop}px`;
+            }
+            
+            function stopDragging() {
+                if (!isDraggingImage) return;
+                isDraggingImage = false;
+                window.removeEventListener('mousemove', onMouseMoveDrag);
+                window.removeEventListener('mouseup', stopDragging);
+                
+                if (currentNote && editorDiv && browser) {
+                    currentNote.contentHTML = editorDiv.innerHTML;
+                    debouncedUpdateNote(currentNote);
+                }
+            }
+            
+            wrapper.onmousedown = (e: MouseEvent) => {
+                const target = e.target as HTMLElement;
+                // If a handle was clicked, let its own handler manage events
+                if (
+                    target.closest('.image-resize-handle') || 
+                    target.closest('.image-rotate-handle') ||
+                    target.closest('.image-delete-handle')
+                ) {
+                    return;
+                }
+                
+                if (!editorDiv.contains(wrapper)) return;
+                
+                e.preventDefault();
+                e.stopPropagation();
+
+                // Mark this image as active so its handles show
+                setActiveWrapper(wrapper);
+                
+                const wrapperBounds = wrapper.getBoundingClientRect();
+                const editorBounds = editorDiv.getBoundingClientRect();
+                
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                startLeft = wrapperBounds.left - editorBounds.left;
+                startTop = wrapperBounds.top - editorBounds.top;
+                isDraggingImage = true;
+                
+                window.addEventListener('mousemove', onMouseMoveDrag);
+                window.addEventListener('mouseup', stopDragging);
+            };
+            
+            // Resize from bottom-right corner
+            let isResizing = false;
+            let resizeStartX = 0;
+            let resizeStartY = 0;
+            let startWidth = 0;
+            let startHeight = 0;
+            let startLeftResize = 0;
+            let startTopResize = 0;
+            
+            const resizeHandle =
+                wrapper.querySelector<HTMLElement>('.image-resize-handle') ||
+                (() => {
+                    const h = document.createElement('div');
+                    h.className = 'image-handle image-resize-handle';
+                    wrapper.appendChild(h);
+                    return h;
+                })();
+            
+            function onMouseMoveResize(e: MouseEvent) {
+                if (!isResizing) return;
+                e.preventDefault();
+                
+                const dx = e.clientX - resizeStartX;
+                const dy = e.clientY - resizeStartY;
+                
+                const editorBounds = editorDiv.getBoundingClientRect();
+                
+                let newWidth = Math.max(40, startWidth + dx);
+                let newHeight = Math.max(40, startHeight + dy);
+                
+                // Constrain within editor bounds
+                const maxWidth = editorBounds.width - startLeftResize;
+                const maxHeight = editorBounds.height - startTopResize;
+                
+                newWidth = Math.min(newWidth, maxWidth);
+                newHeight = Math.min(newHeight, maxHeight);
+                
+                wrapper.style.width = `${newWidth}px`;
+                wrapper.style.height = `${newHeight}px`;
+            }
+            
+            function stopResizing() {
+                if (!isResizing) return;
+                isResizing = false;
+                window.removeEventListener('mousemove', onMouseMoveResize);
+                window.removeEventListener('mouseup', stopResizing);
+                
+                if (currentNote && editorDiv && browser) {
+                    currentNote.contentHTML = editorDiv.innerHTML;
+                    debouncedUpdateNote(currentNote);
+                }
+            }
+            
+            resizeHandle.onmousedown = (e: MouseEvent) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                // Ensure this image is active when resizing
+                setActiveWrapper(wrapper);
+                
+                const bounds = wrapper.getBoundingClientRect();
+                const editorBounds = editorDiv.getBoundingClientRect();
+                
+                resizeStartX = e.clientX;
+                resizeStartY = e.clientY;
+                startWidth = bounds.width;
+                startHeight = bounds.height;
+                startLeftResize = bounds.left - editorBounds.left;
+                startTopResize = bounds.top - editorBounds.top;
+                isResizing = true;
+                
+                window.addEventListener('mousemove', onMouseMoveResize);
+                window.addEventListener('mouseup', stopResizing);
+            };
+            
+            // Rotation from top-center handle
+            let isRotating = false;
+            let rotationStartAngle = 0;
+            let initialRotation = parseFloat(wrapper.dataset.rotation || '0') || 0;
+            
+            const rotateHandle =
+                wrapper.querySelector<HTMLElement>('.image-rotate-handle') ||
+                (() => {
+                    const h = document.createElement('div');
+                    h.className = 'image-handle image-rotate-handle';
+                    wrapper.appendChild(h);
+                    return h;
+                })();
+            
+            function getAngle(e: MouseEvent) {
+                const bounds = wrapper.getBoundingClientRect();
+                const centerX = bounds.left + bounds.width / 2;
+                const centerY = bounds.top + bounds.height / 2;
+                return Math.atan2(e.clientY - centerY, e.clientX - centerX);
+            }
+            
+            function onMouseMoveRotate(e: MouseEvent) {
+                if (!isRotating) return;
+                e.preventDefault();
+                
+                const angle = getAngle(e);
+                const delta = angle - rotationStartAngle;
+                const degrees = (initialRotation + (delta * 180) / Math.PI) % 360;
+                
+                wrapper.dataset.rotation = degrees.toString();
+                wrapper.style.transform = `rotate(${degrees}deg)`;
+            }
+            
+            function stopRotating() {
+                if (!isRotating) return;
+                isRotating = false;
+                window.removeEventListener('mousemove', onMouseMoveRotate);
+                window.removeEventListener('mouseup', stopRotating);
+                
+                if (currentNote && editorDiv && browser) {
+                    currentNote.contentHTML = editorDiv.innerHTML;
+                    debouncedUpdateNote(currentNote);
+                }
+            }
+            
+            rotateHandle.onmousedown = (e: MouseEvent) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                // Ensure this image is active when rotating
+                setActiveWrapper(wrapper);
+                
+                rotationStartAngle = getAngle(e);
+                initialRotation = parseFloat(wrapper.dataset.rotation || '0') || 0;
+                isRotating = true;
+                
+                window.addEventListener('mousemove', onMouseMoveRotate);
+                window.addEventListener('mouseup', stopRotating);
+            };
+
+            // Delete handle (top-right "X")
+            const deleteHandle =
+                wrapper.querySelector<HTMLElement>('.image-delete-handle') ||
+                (() => {
+                    const h = document.createElement('div');
+                    h.className = 'image-handle image-delete-handle';
+                    h.textContent = '×';
+                    wrapper.appendChild(h);
+                    return h;
+                })();
+
+            deleteHandle.onmousedown = async (e: MouseEvent) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                if (!editorDiv.contains(wrapper)) return;
+
+                // Ask for confirmation, same UX as other deletions
+                const confirmed = await showDeleteDialog(
+                    'Delete this image from the note?',
+                    'Delete image'
+                );
+                if (!confirmed) {
+                    return;
+                }
+
+                // Attempt to delete the underlying storage object, if any
+                const imagePath = wrapper.dataset.imagePath;
+                if (imagePath) {
+                    deleteNoteImage(imagePath).catch((err) => {
+                        console.warn('[notes] Failed to delete image from storage', imagePath, err);
+                    });
+                }
+
+                wrapper.remove();
+
+                if (currentNote && editorDiv && browser) {
+                    currentNote.contentHTML = editorDiv.innerHTML;
+                    debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
+                    debouncedUpdateNote(currentNote);
+                }
+
+                // Clear active state once deleted
+                setActiveWrapper(null);
+            };
+        });
+    }
+    
+    /**
+     * Ensure any checkbox inputs in the editor behave correctly after
+     * sanitization or HTML string assignment.
+     */
+    function initializeCheckboxInteractions() {
+        if (!browser || !editorDiv) return;
+
+        const checkboxes = editorDiv.querySelectorAll<HTMLInputElement>('input.note-checkbox');
+        checkboxes.forEach((checkbox) => {
+            // If DOMPurify stripped the type attribute from saved content,
+            // force it back to a real checkbox so it can be clicked.
+            if (checkbox.type !== 'checkbox') {
+                checkbox.type = 'checkbox';
+            }
+
+            // Avoid attaching duplicate listeners
+            if ((checkbox as any)._neuronotesCheckboxInit) return;
+            (checkbox as any)._neuronotesCheckboxInit = true;
+
+            checkbox.addEventListener('change', () => {
+                if (currentNote) {
+                    debouncedUpdateNote(currentNote);
+                }
+            });
+        });
+    }
+    
     // Update editor content only when note changes (not during typing)
     $: if (editorDiv && selectedNoteId && (selectedNoteId !== previousNoteId || (editorDiv.innerHTML === '' && !isMinimized))) {
         const note = notes.find((n) => n.id === selectedNoteId);
@@ -153,6 +523,9 @@
                                 if (editorDiv && browser) {
                                     try {
                                         linkifyEditor(editorDiv);
+                                        // Initialize interactions for existing content
+                                        initializeImageInteractions();
+                                        initializeCheckboxInteractions();
                                         // Update note content with linkified version
                                         updateNoteContent(noteId, editorDiv.innerHTML);
                                     } catch (err) {
@@ -180,6 +553,8 @@
                         if (editorDiv && browser) {
                             try {
                                 linkifyEditor(editorDiv);
+                                initializeImageInteractions();
+                                initializeCheckboxInteractions();
                                 // Update note content with linkified version
                                 updateNoteContent(note.id, editorDiv.innerHTML);
                             } catch (err) {
@@ -194,6 +569,8 @@
                         if (editorDiv && browser) {
                             try {
                                 linkifyEditor(editorDiv);
+                                initializeImageInteractions();
+                                initializeCheckboxInteractions();
                                 // Update note content with linkified version
                                 updateNoteContent(note.id, editorDiv.innerHTML);
                             } catch (err) {
@@ -579,6 +956,8 @@
                 currentNote.contentHTML = sanitized;
                 if (editorDiv) {
                     editorDiv.innerHTML = sanitized;
+                    initializeImageInteractions();
+                    initializeCheckboxInteractions();
                 }
                 debouncedUpdateNote(currentNote);
                 return true;
@@ -602,6 +981,8 @@
                 currentNote.contentHTML = sanitized;
                 if (editorDiv) {
                     editorDiv.innerHTML = sanitized;
+                    initializeImageInteractions();
+                    initializeCheckboxInteractions();
                 }
                 debouncedUpdateNote(currentNote);
                 return true;
@@ -1071,6 +1452,110 @@
         }
     }
 
+    async function insertImageFromFile(file: File) {
+        if (!browser || !editorDiv || !currentNote || currentNote.type !== 'text') return;
+
+        isInsertingImage = true;
+        imageInsertError = null;
+
+        try {
+            const { blob, width, height } = await convertToWebP(file, {
+                quality: 0.8,
+                maxWidth: 1600,
+                maxHeight: 1600
+            });
+
+            let src: string;
+            let imagePath: string | null = null;
+
+            try {
+                const uploadResult = await uploadNoteImageWebP(currentNote.id, blob);
+                src = uploadResult.publicUrl;
+                imagePath = uploadResult.path;
+            } catch (error) {
+                console.warn('[notes] Failed to upload image to Supabase, falling back to data URL:', error);
+                src = await blobToDataUrl(blob);
+            }
+
+            const maxDisplaySize = 260;
+            const scale = Math.min(1, maxDisplaySize / Math.max(width, height));
+            const displayWidth = Math.round(width * scale);
+            const displayHeight = Math.round(height * scale);
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'note-image-wrapper';
+            wrapper.setAttribute('contenteditable', 'false');
+            wrapper.dataset.imageSrc = src;
+            if (imagePath) {
+                wrapper.dataset.imagePath = imagePath;
+            }
+            wrapper.dataset.rotation = '0';
+            wrapper.style.left = '20px';
+            wrapper.style.top = '20px';
+            wrapper.style.width = `${displayWidth}px`;
+            wrapper.style.height = `${displayHeight}px`;
+
+            const img = document.createElement('img');
+            img.src = src;
+            img.alt = 'Note image';
+            img.draggable = false;
+            wrapper.appendChild(img);
+
+            editorDiv.appendChild(wrapper);
+
+            // Wire up drag/resize/rotate
+            initializeImageInteractions();
+
+            currentNote.contentHTML = editorDiv.innerHTML;
+            debouncedSaveNoteHistory(currentNote.id, editorDiv.innerHTML);
+            debouncedUpdateNote(currentNote);
+        } catch (error) {
+            console.error('[notes] Failed to insert image into note:', error);
+            imageInsertError = 'Failed to insert image';
+        } finally {
+            isInsertingImage = false;
+        }
+    }
+
+    async function handleImagePaste(event: ClipboardEvent): Promise<boolean> {
+        if (!browser) return false;
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.type && item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (!file) continue;
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                await insertImageFromFile(file);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function openImageFilePicker() {
+        if (!imageFileInput || !browser || !currentNote || currentNote.type !== 'text') return;
+        imageFileInput.value = '';
+        imageFileInput.click();
+    }
+
+    async function handleImageFileChange(event: Event) {
+        const input = event.target as HTMLInputElement;
+        if (!input.files || input.files.length === 0) return;
+
+        const file = input.files[0];
+        await insertImageFromFile(file);
+
+        // Reset the input so the same file can be chosen again if needed
+        input.value = '';
+    }
+
     function insertCheckbox() {
         if (!editorDiv) return;
         editorDiv.focus();
@@ -1416,6 +1901,21 @@
                     >
                     <button
                         class="toolbar-btn"
+                        on:click={openImageFilePicker}
+                        on:mousedown={(e) => e.preventDefault()}
+                        title="Insert image">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M14.2647 15.9377L12.5473 14.2346C11.758 13.4519 11.3633 13.0605 10.9089 12.9137C10.5092 12.7845 10.079 12.7845 9.67922 12.9137C9.22485 13.0605 8.83017 13.4519 8.04082 14.2346L4.04193 18.2622M14.2647 15.9377L14.606 15.5991C15.412 14.7999 15.8149 14.4003 16.2773 14.2545C16.6839 14.1262 17.1208 14.1312 17.5244 14.2688C17.9832 14.4253 18.3769 14.834 19.1642 15.6515L20 16.5001M14.2647 15.9377L18.22 19.9628M18.22 19.9628C17.8703 20 17.4213 20 16.8 20H7.2C6.07989 20 5.51984 20 5.09202 19.782C4.7157 19.5903 4.40973 19.2843 4.21799 18.908C4.12583 18.7271 4.07264 18.5226 4.04193 18.2622M18.22 19.9628C18.5007 19.9329 18.7175 19.8791 18.908 19.782C19.2843 19.5903 19.5903 19.2843 19.782 18.908C20 18.4802 20 17.9201 20 16.8V13M11 4H7.2C6.07989 4 5.51984 4 5.09202 4.21799C4.7157 4.40973 4.40973 4.71569 4.21799 5.09202C4 5.51984 4 6.0799 4 7.2V16.8C4 17.4466 4 17.9066 4.04193 18.2622M18 9V6M18 6V3M18 6H21M18 6H15"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            />
+                        </svg>
+                    </button>
+                    <button
+                        class="toolbar-btn"
                         on:click={() => applyFormatCommand('justifyLeft')}
                         on:mousedown={(e) => e.preventDefault()}
                         title="Align left">◧</button
@@ -1482,6 +1982,13 @@
                 </div>
             {/if}
         </div>
+        <input
+            type="file"
+            accept="image/*"
+            bind:this={imageFileInput}
+            on:change={handleImageFileChange}
+            style="display: none;"
+        />
     {/if}
 
     {#if !isMinimized}
@@ -1782,9 +2289,23 @@
                                             }
                                         }
                                     }}
-                                    on:paste={(e) => {
-                                        // Handle paste and then linkify
-                                        const result = handlePlainTextPaste(e);
+                                    on:paste={async (e) => {
+                                        // First, try to handle image paste (from clipboard)
+                                        if (await handleImagePaste(e as ClipboardEvent)) {
+                                            if (editorDiv && currentNote && browser) {
+                                                try {
+                                                    linkifyEditor(editorDiv);
+                                                    currentNote.contentHTML = editorDiv.innerHTML;
+                                                    debouncedUpdateNote(currentNote);
+                                                } catch (err) {
+                                                    console.warn('Linkify error after image paste:', err);
+                                                }
+                                            }
+                                            return;
+                                        }
+
+                                        // Fallback: handle plain text paste and then linkify
+                                        const result = handlePlainTextPaste(e as ClipboardEvent);
                                         if (result && editorDiv && currentNote && browser) {
                                             // Linkify after paste completes
                                             setTimeout(() => {
@@ -2276,6 +2797,7 @@
         border: 1px solid var(--border);
         transition: border-color 0.2s;
         overflow-wrap: break-word;
+        position: relative;
     }
 
     .contenteditable:focus {
@@ -2324,6 +2846,76 @@
     
     :global(.contenteditable a:hover) {
         color: #6bb3ff !important;
+    }
+
+    /* Draggable / resizable / rotatable images inside notes */
+    :global(.contenteditable .note-image-wrapper) {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        background: transparent;
+        cursor: move;
+        padding: 0;
+        /* Allow resize/rotate/delete handles to extend outside the image box */
+        overflow: visible;
+    }
+
+    :global(.contenteditable .note-image-wrapper.is-active) {
+        border-color: rgba(255, 255, 255, 0.3);
+        background: rgba(0, 0, 0, 0.1);
+    }
+
+    :global(.contenteditable .note-image-wrapper img) {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        pointer-events: none;
+    }
+
+    :global(.contenteditable .note-image-wrapper .image-handle) {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent-red);
+        border: 2px solid #fff;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+        z-index: 2;
+        display: none;
+    }
+
+    :global(.contenteditable .note-image-wrapper.is-active .image-handle) {
+        display: flex;
+    }
+
+    :global(.contenteditable .note-image-wrapper .image-resize-handle) {
+        right: -6px;
+        bottom: -6px;
+        cursor: se-resize;
+    }
+
+    :global(.contenteditable .note-image-wrapper .image-rotate-handle) {
+        top: -18px;
+        left: 50%;
+        transform: translateX(-50%);
+        cursor: grab;
+    }
+
+    :global(.contenteditable .note-image-wrapper .image-delete-handle) {
+        top: -6px;
+        right: -6px;
+        width: 16px;
+        height: 16px;
+        align-items: center;
+        justify-content: center;
+        background: #ff4d4f;
+        border-radius: 50%;
+        font-size: 12px;
+        font-weight: bold;
+        color: #fff;
+        cursor: pointer;
     }
 
     .spreadsheet-wrapper {

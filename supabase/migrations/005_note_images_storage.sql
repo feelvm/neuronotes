@@ -1,0 +1,33 @@
+-- NOTE:
+-- Supabase's `storage.objects` table is system-managed and cannot be altered
+-- or have policies created from user migrations (you must be the table owner).
+-- Attempting to do so results in: `must be owner of table objects`.
+--
+-- For that reason, this migration is intentionally left empty.
+--
+-- To enable image uploads for notes, configure Storage via the Supabase UI:
+--
+-- 1) In the Supabase dashboard, go to Storage → Create bucket:
+--      - ID: `note-images`
+--      - Public: enabled (or private if you prefer to restrict access)
+--
+-- 2) In that bucket's "Policies" tab, create policies using the visual editor:
+--      - Policy 1 (read):
+--          * Name: Public read note images
+--          * Operations: SELECT
+--          * Target: `note-images` bucket
+--          * Condition: `bucket_id = 'note-images'`
+--          * Apply to: Anyone (including unauthenticated)
+--
+--      - Policy 2 (upload):
+--          * Name: Authenticated upload note images
+--          * Operations: INSERT
+--          * Target: `note-images` bucket
+--          * Condition: `bucket_id = 'note-images'`
+--          * Apply to: Authenticated users
+--
+--      - (Optional) add UPDATE/DELETE policies if you want users to manage
+--        their own images.
+--
+-- The application code expects a bucket called `note-images` and uses
+-- Supabase Storage public URLs to render images inside notes.
