@@ -24,6 +24,7 @@ export type SpreadsheetCell = {
   colspan?: number;
   merged?: boolean;
   computedValue?: string;
+  currency?: 'EUR' | 'USD' | 'CZK' | 'GBP' | 'CNY' | 'JPY';
 };
 
 export type Spreadsheet = {

@@ -289,6 +289,25 @@
 		dispatch("update");
 	}
 
+	export function applyCurrencyFormat(currency: 'EUR' | 'USD' | 'CZK' | 'GBP' | 'CNY' | 'JPY' | undefined) {
+		if (!selectionArea) return;
+		const { minRow, maxRow, minCol, maxCol } = selectionArea;
+
+		for (let r = minRow; r <= maxRow; r++) {
+			for (let c = minCol; c <= maxCol; c++) {
+				const cell = spreadsheetData.data[r][c];
+				if (currency) {
+					cell.currency = currency;
+				} else {
+					delete cell.currency;
+				}
+			}
+		}
+
+		spreadsheetData = spreadsheetData;
+		dispatch("update");
+	}
+
 	export function toggleMerge() {
 		if (!selectionArea) return;
 
@@ -1194,75 +1213,80 @@
 							on:mousedown={() => handleCellMouseDown(rowIndex, colIndex)}
 							on:dblclick={() => handleCellFocus(rowIndex, colIndex)}
 						>
-							<input
-								type="text"
-								class="cell"
-								value={editingCell?.row === rowIndex &&
-								editingCell.col === colIndex
-									? cell.value
-									: cell.computedValue}
-								on:input={(e) => {
-									const newValue = (e.target as HTMLInputElement).value;
-									const oldValue = typeof cell.value === "string" ? cell.value : "";
-									const wasDeletion = newValue.length < oldValue.length;
-									
-									if (!hasSavedHistoryForCurrentEdit) {
-										saveHistory();
-										hasSavedHistoryForCurrentEdit = true;
-									}
-									
-									if (wasDeletion) {
+							<div class="cell-container">
+								<input
+									type="text"
+									class="cell"
+									value={editingCell?.row === rowIndex &&
+									editingCell.col === colIndex
+										? cell.value
+										: cell.computedValue}
+									on:input={(e) => {
+										const newValue = (e.target as HTMLInputElement).value;
+										const oldValue = typeof cell.value === "string" ? cell.value : "";
+										const wasDeletion = newValue.length < oldValue.length;
+										
+										if (!hasSavedHistoryForCurrentEdit) {
+											saveHistory();
+											hasSavedHistoryForCurrentEdit = true;
+										}
+										
+										if (wasDeletion) {
+											debouncedSaveHistory.flush();
+											saveHistory();
+											hasSavedHistoryForCurrentEdit = false;
+										} else {
+											debouncedSaveHistory();
+										}
+										
+										const wasFormula = typeof cell.value === "string" && cell.value.startsWith("=");
+										const isFormula = newValue.startsWith("=");
+										
+										cell.value = newValue;
+										
+										if (wasFormula !== isFormula) {
+											needsFormulaCacheRebuild = true;
+										}
+										
+										const changedCell = new Set<string>([getCellKey(rowIndex, colIndex)]);
+										recalculateSheet(changedCell);
+										spreadsheetData = spreadsheetData;
+										dispatch("update");
+									}}
+									on:blur={(e) => {
+										const newValue = (e.target as HTMLInputElement).value;
 										debouncedSaveHistory.flush();
-										saveHistory();
+										lastSavedCellValue = null;
 										hasSavedHistoryForCurrentEdit = false;
-									} else {
-										debouncedSaveHistory();
-									}
-									
-									const wasFormula = typeof cell.value === "string" && cell.value.startsWith("=");
-									const isFormula = newValue.startsWith("=");
-									
-									cell.value = newValue;
-									
-									if (wasFormula !== isFormula) {
-										needsFormulaCacheRebuild = true;
-									}
-									
-									const changedCell = new Set<string>([getCellKey(rowIndex, colIndex)]);
-									recalculateSheet(changedCell);
-									spreadsheetData = spreadsheetData;
-									dispatch("update");
-								}}
-								on:blur={(e) => {
-									const newValue = (e.target as HTMLInputElement).value;
-									debouncedSaveHistory.flush();
-									lastSavedCellValue = null;
-									hasSavedHistoryForCurrentEdit = false;
-									editingCell = null;
-								}}
-								on:focus={(e) => {
-									const currentValue = (e.target as HTMLInputElement).value;
-									lastSavedCellValue = currentValue;
-									handleCellFocus(rowIndex, colIndex);
-								}}
-								on:keydown={(e) => {
-									if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
-										e.preventDefault();
-										e.stopPropagation();
-										undo();
-										return false;
-									} else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
-										e.preventDefault();
-										e.stopPropagation();
-										redo();
-										return false;
-									}
-								}}
-								style="font-weight: {cell.style
-									?.fontWeight}; font-style: {cell.style
-									?.fontStyle}; text-align: {cell.style
-									?.textAlign};"
-							/>
+										editingCell = null;
+									}}
+									on:focus={(e) => {
+										const currentValue = (e.target as HTMLInputElement).value;
+										lastSavedCellValue = currentValue;
+										handleCellFocus(rowIndex, colIndex);
+									}}
+									on:keydown={(e) => {
+										if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+											e.preventDefault();
+											e.stopPropagation();
+											undo();
+											return false;
+										} else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+											e.preventDefault();
+											e.stopPropagation();
+											redo();
+											return false;
+										}
+									}}
+									style="font-weight: {cell.style
+										?.fontWeight}; font-style: {cell.style
+										?.fontStyle}; text-align: {cell.style
+										?.textAlign}; padding-right: {cell.currency ? '32px' : '4px'};"
+								/>
+								{#if cell.currency}
+									<span class="currency-suffix">{cell.currency}</span>
+								{/if}
+							</div>
 						</div>
 					{/if}
 				{/each}
@@ -1359,6 +1383,22 @@
     border-right: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
     overflow: hidden;
+  }
+  .cell-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  .currency-suffix {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 12px;
+    pointer-events: none;
+    user-select: none;
+    z-index: 1;
   }
   .cell-wrapper.selected:not(:focus-within) {
     z-index: 2;

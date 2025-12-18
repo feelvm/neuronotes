@@ -98,6 +98,9 @@
     let spreadsheetComponentInstance: any;
     let isSpreadsheetLoaded = false;
     let selectedSheetCell: { row: number; col: number } | null = null;
+    let showCurrencyDropdown = false;
+    let currencyDropdownJustOpened = false;
+    let currencyDropdownWrapper: HTMLElement;
     let sheetSelection: {
         start: { row: number; col: number };
         end: { row: number; col: number };
@@ -1725,6 +1728,29 @@
             updateMobileVisibility();
             window.addEventListener('resize', updateMobileVisibility);
 
+            // Close currency dropdown when clicking outside
+            // Temporarily disabled to debug
+            /*
+            const handleClickOutside = (e: MouseEvent) => {
+                // Skip if dropdown was just opened by button click
+                if (currencyDropdownJustOpened) {
+                    currencyDropdownJustOpened = false;
+                    return;
+                }
+                // Use setTimeout to allow the click event to complete first
+                setTimeout(() => {
+                    // Only close if dropdown is actually open
+                    if (!showCurrencyDropdown) return;
+                    const target = e.target as HTMLElement;
+                    if (!target.closest('.currency-dropdown-wrapper')) {
+                        showCurrencyDropdown = false;
+                    }
+                }, 100);
+            };
+            window.addEventListener('click', handleClickOutside);
+            (window as any).__currencyDropdownClickHandler = handleClickOutside;
+            */
+
             // Listen for selection changes to update formatting state
             const handleSelectionChange = () => {
                 if (editorDiv && document.activeElement === editorDiv) {
@@ -1737,6 +1763,10 @@
             (window as any).__notesPanelSelectionCleanup = () => {
                 document.removeEventListener('selectionchange', handleSelectionChange);
                 window.removeEventListener('resize', updateMobileVisibility);
+                if ((window as any).__currencyDropdownClickHandler) {
+                    window.removeEventListener('click', (window as any).__currencyDropdownClickHandler, true);
+                    delete (window as any).__currencyDropdownClickHandler;
+                }
             };
         }
     });
@@ -1979,6 +2009,89 @@
                         on:mousedown={(e) => e.preventDefault()}
                         title="Merge/Unmerge Cells">⧉</button
                     >
+                    <div class="currency-dropdown-wrapper" bind:this={currencyDropdownWrapper}>
+                        <button
+                            class="toolbar-btn currency-btn"
+                            type="button"
+                            on:click|stopPropagation={async (e) => {
+                                console.log('Currency button clicked');
+                                currencyDropdownJustOpened = true;
+                                showCurrencyDropdown = !showCurrencyDropdown;
+                                console.log('showCurrencyDropdown:', showCurrencyDropdown);
+                                if (showCurrencyDropdown && currencyDropdownWrapper) {
+                                    await tick();
+                                    const buttonRect = currencyDropdownWrapper.getBoundingClientRect();
+                                    const dropdown = currencyDropdownWrapper.querySelector('.currency-dropdown') as HTMLElement;
+                                    if (dropdown) {
+                                        dropdown.style.top = `${buttonRect.bottom + 4}px`;
+                                        dropdown.style.left = `${buttonRect.left}px`;
+                                        console.log('Dropdown positioned at:', dropdown.style.top, dropdown.style.left);
+                                    }
+                                }
+                            }}
+                            title="Currency Format">$</button
+                        >
+                        {#if showCurrencyDropdown}
+                            <div class="currency-dropdown" on:click|stopPropagation>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat('EUR');
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >EUR</button>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat('USD');
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >USD</button>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat('CZK');
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >CZK</button>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat('GBP');
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >GBP</button>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat('CNY');
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >CNY</button>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat('JPY');
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >JPY</button>
+                                <button
+                                    class="currency-option"
+                                    on:click={() => {
+                                        spreadsheetComponentInstance.applyCurrencyFormat(undefined);
+                                        showCurrencyDropdown = false;
+                                    }}
+                                    on:mousedown={(e) => e.preventDefault()}
+                                >Remove</button>
+                            </div>
+                        {/if}
+                    </div>
                 </div>
             {/if}
         </div>
@@ -2605,7 +2718,9 @@
         flex-shrink: 0;
         flex-wrap: nowrap;
         min-height: 48px;
-        max-height: 48px;
+        max-height: none;
+        overflow: visible !important;
+        position: relative;
     }
 
     .panel-header .spacer {
@@ -2955,6 +3070,8 @@
         padding-top: 0;
         padding-bottom: 0;
         position: relative;
+        overflow: visible;
+        z-index: 1000;
     }
 
     .format-toolbar {
@@ -2964,10 +3081,12 @@
         justify-content: center;
         flex-wrap: nowrap;
         overflow-x: auto;
+        overflow-y: visible;
         scrollbar-width: none;
         -ms-overflow-style: none;
         padding-left: 40px;
         padding-right: 40px;
+        position: relative;
     }
 
     .format-toolbar::-webkit-scrollbar {
@@ -3025,6 +3144,49 @@
         width: 32px;
         height: 32px;
         flex-shrink: 0;
+    }
+
+    .currency-dropdown-wrapper {
+        position: relative;
+        overflow: visible;
+        z-index: 10001;
+        display: inline-block;
+    }
+    
+    .currency-btn {
+        pointer-events: auto !important;
+        cursor: pointer !important;
+    }
+
+    .currency-dropdown {
+        position: fixed;
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 99999;
+        min-width: 100px;
+        overflow: hidden;
+        display: block !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+    }
+
+    .currency-option {
+        display: block;
+        width: 100%;
+        padding: 8px 12px;
+        background: none;
+        border: none;
+        color: var(--text);
+        font-size: 14px;
+        text-align: left;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .currency-option:hover {
+        background-color: var(--panel-bg-darker);
     }
 
     .font-size-controls {
