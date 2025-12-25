@@ -46,10 +46,20 @@ function toTimestamp(isoString: string): number {
   return new Date(isoString).getTime();
 }
 
+// Flag to track if pushToSupabase is being called from fullSync (safe) or directly (unsafe)
+let isPushingFromFullSync = false;
+
 /**
  * Pushes all local data to Supabase
+ * WARNING: This should only be called from fullSync() to ensure pull happens first.
+ * Direct calls can overwrite newer data in the database.
  */
 export async function pushToSupabase(): Promise<{ success: boolean; error?: string }> {
+  // Safety check: warn if called directly (not from fullSync)
+  if (!isPushingFromFullSync) {
+    console.warn('[sync] WARNING: pushToSupabase() called directly without pull first. This can overwrite newer data. Use fullSync() instead.');
+  }
+  
   if (!isSupabaseConfigured() || !supabase) {
     return { success: false, error: 'Supabase is not configured' };
   }
@@ -155,9 +165,10 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
       
       for (const note of notes) {
         const remoteUpdatedAt = remoteNotesMap.get(note.id);
-        const isRecentEdit = (Date.now() - note.updatedAt) < 5000;
         
-        if (remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt && !isRecentEdit) {
+        // If remote version exists and is newer, skip pushing to avoid overwriting newer data
+        // This prevents data loss when another device has made more recent changes
+        if (remoteUpdatedAt !== undefined && remoteUpdatedAt > note.updatedAt) {
           continue;
         }
         
@@ -312,7 +323,10 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
 
     const allSettings = await db.getAllSettings();
     for (const setting of allSettings) {
-      if (!setting.key.includes(':')) {
+      // Exclude local-only settings from sync:
+      // - Settings with ':' are per-workspace (e.g., selectedNoteId:workspaceId)
+      // - activeWorkspaceId is per-device preference, shouldn't sync across devices
+      if (!setting.key.includes(':') && setting.key !== 'activeWorkspaceId') {
         await supabase
           .from('settings')
           .upsert({
@@ -572,10 +586,14 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
 
     if (settings) {
       for (const setting of settings) {
-        await db.putSetting({
-          key: setting.key,
-          value: setting.value,
-        });
+        // Exclude activeWorkspaceId from sync - it's a per-device preference
+        // Each device should maintain its own active workspace
+        if (setting.key !== 'activeWorkspaceId') {
+          await db.putSetting({
+            key: setting.key,
+            value: setting.value,
+          });
+        }
       }
     }
 
@@ -590,6 +608,7 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
 
 /**
  * Full sync: pull then push to handle conflicts and ensure deletions are synced
+ * This is the SAFE way to sync - always pulls first to get latest data, then pushes local changes.
  */
 export async function fullSync(): Promise<{ success: boolean; error?: string }> {
   const pullResult = await pullFromSupabase();
@@ -597,8 +616,14 @@ export async function fullSync(): Promise<{ success: boolean; error?: string }> 
     return pullResult;
   }
 
-  const pushResult = await pushToSupabase();
-  return pushResult;
+  // Set flag to indicate push is being called from fullSync (safe)
+  isPushingFromFullSync = true;
+  try {
+    const pushResult = await pushToSupabase();
+    return pushResult;
+  } finally {
+    isPushingFromFullSync = false;
+  }
 }
 
 /**
@@ -606,5 +631,273 @@ export async function fullSync(): Promise<{ success: boolean; error?: string }> 
  */
 export function getSyncStatus(): SyncStatus {
   return { ...syncStatus };
+}
+
+/**
+ * Realtime subscription channels
+ */
+let realtimeChannels: any[] = [];
+
+/**
+ * Sets up realtime subscriptions for all tables
+ * Returns a cleanup function to unsubscribe
+ */
+export async function setupRealtimeSubscriptions(
+  onDataChange: () => Promise<void>
+): Promise<{ success: boolean; error?: string; unsubscribe: () => void }> {
+  if (!isSupabaseConfigured() || !supabase) {
+    return { success: false, error: 'Supabase is not configured', unsubscribe: () => {} };
+  }
+
+  const userId = (await supabase.auth.getUser()).data.user?.id;
+  if (!userId) {
+    return { success: false, error: 'Not authenticated', unsubscribe: () => {} };
+  }
+
+  // Clean up any existing subscriptions
+  cleanupRealtimeSubscriptions();
+
+  try {
+    // Helper to handle individual row changes
+    const handleChange = async (payload: any, tableName: string) => {
+      console.log(`[realtime] Received ${payload.eventType} event for ${tableName}:`, payload);
+      
+      // Only process changes for the current user
+      if (payload.new?.user_id !== userId && payload.old?.user_id !== userId) {
+        return;
+      }
+
+      try {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const row = payload.new;
+          
+          switch (tableName) {
+            case 'workspaces':
+              await db.putWorkspace({
+                id: row.id,
+                name: row.name,
+                order: row.order,
+              });
+              break;
+            
+            case 'folders':
+              await db.putFolder({
+                id: row.id,
+                name: row.name,
+                workspaceId: row.workspace_id,
+                order: row.order,
+              });
+              break;
+            
+            case 'notes':
+              // For notes, we need to fetch content_html from note_content if available
+              let contentHTML = row.content_html || '';
+              
+              try {
+                const { data: contentData } = await supabase
+                  .from('note_content')
+                  .select('content_html')
+                  .eq('note_id', row.id)
+                  .eq('user_id', userId)
+                  .maybeSingle();
+                
+                if (contentData?.content_html) {
+                  contentHTML = contentData.content_html;
+                }
+              } catch (err) {
+                console.warn(`[realtime] Error fetching note_content for note ${row.id}:`, err);
+              }
+
+              let spreadsheetData: any = undefined;
+              if (row.type === 'spreadsheet' && row.spreadsheet) {
+                if (typeof row.spreadsheet === 'string') {
+                  spreadsheetData = row.spreadsheet;
+                } else {
+                  spreadsheetData = JSON.stringify(row.spreadsheet);
+                }
+              }
+
+              const noteType: 'text' | 'spreadsheet' = row.type === 'spreadsheet' && spreadsheetData ? 'spreadsheet' : 'text';
+              const remoteUpdatedAt = row.updated_at ? toTimestamp(row.updated_at) : Date.now();
+
+              // Check if local version is newer - if so, skip to avoid overwriting
+              const localNotes = await db.getNotesByWorkspaceId(row.workspace_id);
+              const localNote = localNotes.find(n => n.id === row.id);
+              if (localNote && localNote.updatedAt > remoteUpdatedAt) {
+                return; // Local is newer, skip
+              }
+
+              await db.putNote({
+                id: row.id,
+                title: row.title,
+                contentHTML: contentHTML,
+                updatedAt: remoteUpdatedAt,
+                workspaceId: row.workspace_id,
+                folderId: row.folder_id ?? null,
+                order: row.order,
+                type: noteType,
+                spreadsheet: noteType === 'spreadsheet' ? spreadsheetData : undefined,
+              });
+              break;
+            
+            case 'note_content':
+              // Update the note's content when note_content changes
+              const { data: noteData } = await supabase
+                .from('notes')
+                .select('*')
+                .eq('id', row.note_id)
+                .eq('user_id', userId)
+                .maybeSingle();
+              
+              if (noteData) {
+                const remoteUpdatedAt = noteData.updated_at ? toTimestamp(noteData.updated_at) : Date.now();
+                const localNotes = await db.getNotesByWorkspaceId(noteData.workspace_id);
+                const localNote = localNotes.find(n => n.id === row.note_id);
+                
+                if (!localNote || localNote.updatedAt <= remoteUpdatedAt) {
+                  let spreadsheetData: any = undefined;
+                  if (noteData.type === 'spreadsheet' && noteData.spreadsheet) {
+                    if (typeof noteData.spreadsheet === 'string') {
+                      spreadsheetData = noteData.spreadsheet;
+                    } else {
+                      spreadsheetData = JSON.stringify(noteData.spreadsheet);
+                    }
+                  }
+
+                  const noteType: 'text' | 'spreadsheet' = noteData.type === 'spreadsheet' && spreadsheetData ? 'spreadsheet' : 'text';
+                  
+                  await db.putNote({
+                    id: noteData.id,
+                    title: noteData.title,
+                    contentHTML: row.content_html || '',
+                    updatedAt: remoteUpdatedAt,
+                    workspaceId: noteData.workspace_id,
+                    folderId: noteData.folder_id ?? null,
+                    order: noteData.order,
+                    type: noteType,
+                    spreadsheet: noteType === 'spreadsheet' ? spreadsheetData : undefined,
+                  });
+                }
+              }
+              break;
+            
+            case 'calendar_events':
+              await db.putCalendarEvent({
+                id: row.id,
+                date: row.date,
+                title: row.title,
+                time: row.time || undefined,
+                workspaceId: row.workspace_id,
+                repeat: row.repeat as any,
+                repeatOn: row.repeat_on || undefined,
+                repeatEnd: row.repeat_end || undefined,
+                exceptions: row.exceptions || undefined,
+                color: row.color || undefined,
+              });
+              break;
+            
+            case 'kanban':
+              const columns = row.columns as any;
+              await db.putKanban({
+                workspaceId: row.workspace_id,
+                columns: columns,
+              });
+              break;
+            
+            case 'settings':
+              // Exclude activeWorkspaceId from sync - it's a per-device preference
+              if (row.key !== 'activeWorkspaceId' && !row.key.includes(':')) {
+                await db.putSetting({
+                  key: row.key,
+                  value: row.value,
+                });
+              }
+              break;
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const row = payload.old;
+          
+          switch (tableName) {
+            case 'workspaces':
+              await db.deleteWorkspace(row.id);
+              break;
+            case 'folders':
+              await db.deleteFolder(row.id);
+              break;
+            case 'notes':
+              await db.deleteNote(row.id);
+              break;
+            case 'calendar_events':
+              await db.deleteCalendarEvent(row.id);
+              break;
+            case 'kanban':
+              await db.deleteKanban(row.workspace_id);
+              break;
+            case 'settings':
+              // Note: Settings deletion is less common, but handle it if needed
+              break;
+          }
+        }
+
+        // Notify that data changed - reload UI
+        await onDataChange();
+      } catch (error) {
+        console.error(`[realtime] Error handling ${tableName} change:`, error);
+      }
+    };
+
+    // Subscribe to all tables
+    const tables = ['workspaces', 'folders', 'notes', 'note_content', 'calendar_events', 'kanban', 'settings'];
+    
+    for (const table of tables) {
+      const channel = supabase
+        .channel(`${table}-changes`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: table,
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => handleChange(payload, table)
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log(`[realtime] Subscribed to ${table} changes`);
+          } else if (status === 'CHANNEL_ERROR') {
+            console.error(`[realtime] Error subscribing to ${table}:`, status);
+          } else if (status === 'TIMED_OUT') {
+            console.warn(`[realtime] Timeout subscribing to ${table}`);
+          } else if (status === 'CLOSED') {
+            console.log(`[realtime] Channel closed for ${table}`);
+          }
+        });
+
+      realtimeChannels.push(channel);
+    }
+
+    console.log(`[realtime] Set up subscriptions for ${tables.length} tables`);
+    return {
+      success: true,
+      unsubscribe: cleanupRealtimeSubscriptions,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    cleanupRealtimeSubscriptions();
+    return { success: false, error: errorMessage, unsubscribe: () => {} };
+  }
+}
+
+/**
+ * Cleans up all realtime subscriptions
+ */
+export function cleanupRealtimeSubscriptions(): void {
+  for (const channel of realtimeChannels) {
+    if (channel) {
+      supabase?.removeChannel(channel);
+    }
+  }
+  realtimeChannels = [];
 }
 

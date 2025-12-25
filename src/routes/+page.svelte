@@ -259,7 +259,7 @@
         }
     }
 
-    function addWorkspace() {
+    async function addWorkspace() {
         workspaceName = 'New Workspace';
         showWorkspaceModal = true;
     }
@@ -554,9 +554,10 @@
                 await db.flushDatabaseSave();
                 
                 await ensureSupabaseLoaded();
-                const result = await sync.pushToSupabase();
+                // Use fullSync to pull first, then push - prevents overwriting newer data
+                const result = await sync.fullSync();
                 if (!result.success) {
-                    console.error('Sync push failed:', result.error);
+                    console.error('Sync failed:', result.error);
                 }
             } catch (error) {
                 console.error('Sync failed:', error);
@@ -564,30 +565,33 @@
         }
     }
     
-    let syncInterval: ReturnType<typeof setInterval> | undefined;
-    const setupPeriodicSync = () => {
-        if (syncInterval) {
-            clearInterval(syncInterval);
-            syncInterval = undefined;
+    let realtimeUnsubscribe: (() => void) | undefined;
+    const setupRealtimeSync = async () => {
+        // Clean up existing subscription
+        if (realtimeUnsubscribe) {
+            realtimeUnsubscribe();
+            realtimeUnsubscribe = undefined;
         }
+        
         if (isLoggedIn) {
-            syncInterval = setInterval(async () => {
-                if (isLoggedIn) {
-                    try {
-                        await ensureSupabaseLoaded();
-                        // Use fullSync to sync both directions with conflict resolution
-                        // Conflict resolution ensures we don't overwrite newer changes
-                        const result = await sync.fullSync();
-                        if (result.success && activeWorkspaceId) {
-                            // Reload UI after successful sync to show changes from other devices
-                            await loadActiveWorkspaceData();
-                        }
-                    } catch (error) {
-                        console.error('Periodic sync failed:', error);
-                        // Don't block if sync fails
+            try {
+                await ensureSupabaseLoaded();
+                // Set up realtime subscriptions for instant updates
+                const result = await sync.setupRealtimeSubscriptions(async () => {
+                    // Reload UI when data changes from other devices
+                    if (activeWorkspaceId) {
+                        await loadActiveWorkspaceData();
                     }
+                });
+                
+                if (result.success) {
+                    realtimeUnsubscribe = result.unsubscribe;
+                } else {
+                    console.error('Failed to set up realtime subscriptions:', result.error);
                 }
-            }, 30000); // Every 30 seconds
+            } catch (error) {
+                console.error('Failed to set up realtime subscriptions:', error);
+            }
         }
     };
 
@@ -621,7 +625,7 @@
         
         await loadActiveWorkspaceData();
         
-        setupPeriodicSync();
+        await setupRealtimeSync();
     }
     
     async function saveAccountDataToLocalStorage(): Promise<void> {
@@ -758,7 +762,8 @@
             if (isLoggedIn) {
                 try {
                     await ensureSupabaseLoaded();
-                    await sync.pushToSupabase();
+                    // Use fullSync to pull first, then push - prevents overwriting newer data
+                    await sync.fullSync();
                 } catch (syncError) {
                     console.warn('Failed to sync imported data to Supabase:', syncError);
                 }
@@ -1274,7 +1279,6 @@
                             console.error('[onMount] Failed to pull data:', pullResult.error);
                         } else {
                             await db.flushDatabaseSave();
-                            const pulledWorkspaces = await db.getAllWorkspaces();
                         }
                     }
                     
@@ -1282,13 +1286,22 @@
                     if (loadedWorkspaces.length > 0) {
                         workspaces = loadedWorkspaces.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
                         const lastActive = await db.getSettingByKey('activeWorkspaceId');
-                        activeWorkspaceId =
-                            workspaces.find((w) => w.id === lastActive?.value)?.id ?? workspaces[0].id;
+                        // Restore active workspace - ensure the saved value is a valid workspace ID
+                        const savedWorkspaceId = lastActive?.value;
+                        const foundWorkspace = savedWorkspaceId 
+                            ? workspaces.find((w) => w.id === savedWorkspaceId)
+                            : null;
+                        activeWorkspaceId = foundWorkspace?.id ?? (workspaces[0]?.id ?? '');
+                        
+                        // Save the restored workspace ID to ensure it's persisted
+                        if (activeWorkspaceId) {
+                            await db.putSetting({ key: 'activeWorkspaceId', value: activeWorkspaceId });
+                        }
                         await loadActiveWorkspaceData();
                     }
                     
-                    setupPeriodicSync();
-                }, 0);
+                    await setupRealtimeSync();
+                });
             } else {
                 await loadActiveWorkspaceData();
             }
@@ -1307,7 +1320,7 @@
             timer = setInterval(updateDateTimeDisplay, 60 * 1000);
             
             if (isLoggedIn) {
-                setupPeriodicSync();
+                await setupRealtimeSync();
             }
 
             
@@ -1386,13 +1399,14 @@
                     }
                     await loadActiveWorkspaceData();
                     
-                    setupPeriodicSync();
+                    await setupRealtimeSync();
                 } else if (event === 'SIGNED_OUT') {
                     if (isLoggedIn && previousUserId) {
                         try {
                             await db.flushDatabaseSave();
                             await ensureSupabaseLoaded();
-                            await sync.pushToSupabase();
+                            // Use fullSync to ensure we don't overwrite newer data before logout
+                            await sync.fullSync();
                         } catch (error) {
                             console.error('[SIGNED_OUT] Failed to sync before logout:', error);
                         }
@@ -1407,9 +1421,9 @@
                     if (browser) {
                         localStorage.removeItem('neuronotes_current_user_id');
                     }
-                    if (syncInterval) {
-                        clearInterval(syncInterval);
-                        syncInterval = undefined;
+                    if (realtimeUnsubscribe) {
+                        realtimeUnsubscribe();
+                        realtimeUnsubscribe = undefined;
                     }
                     calendarEvents = [];
                     await loadActiveWorkspaceData();
@@ -1426,7 +1440,9 @@
             });
             if (isLoggedIn) {
                 ensureSupabaseLoaded().then(() => {
-                    sync.pushToSupabase().catch(e => {
+                    // Use fullSync to ensure pull happens first - critical to prevent data loss
+                    // Even in beforeunload, we must pull first to avoid overwriting newer data
+                    sync.fullSync().catch(e => {
                         console.warn('Failed to sync to Supabase on beforeunload:', e);
                     });
                 }).catch(e => {
@@ -1445,7 +1461,8 @@
             if (isLoggedIn) {
                 try {
                     await ensureSupabaseLoaded();
-                    const syncResult = await sync.pushToSupabase();
+                    // Use fullSync to pull first, then push - prevents overwriting newer data
+                    const syncResult = await sync.fullSync();
                     if (syncResult.success) {
                     } else {
                         console.warn('Failed to sync to Supabase on page hide:', syncResult.error);
@@ -1464,6 +1481,12 @@
         return () => {
             if (timer) clearInterval(timer);
             cleanupResizeListeners();
+            
+            // Clean up realtime subscriptions
+            if (realtimeUnsubscribe) {
+                realtimeUnsubscribe();
+                realtimeUnsubscribe = undefined;
+            }
             
             if ((window as any).__authSubscription) {
                 (window as any).__authSubscription.unsubscribe();
@@ -1490,12 +1513,19 @@
         if (isLoggedIn) {
             try {
                 await db.flushDatabaseSave();
-                await sync.pushToSupabase();
+                // Use fullSync to pull first, then push - prevents overwriting newer data
+                await sync.fullSync();
             } catch (error) {
                 console.error('[logout] Failed to sync before logout:', error);
             }
         }
         await saveAccountDataToLocalStorage();
+        
+        // Clean up realtime subscriptions before logout
+        if (realtimeUnsubscribe) {
+            realtimeUnsubscribe();
+            realtimeUnsubscribe = undefined;
+        }
         
         const result = await auth.signOut();
         if (result.success) {

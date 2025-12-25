@@ -1068,7 +1068,8 @@
     }
 
     const debouncedUpdateNote = debounce(updateNote, 400);
-    const debouncedSyncIfLoggedIn = debounce(onSyncIfLoggedIn, 1000);
+    // Reduced debounce from 1000ms to 500ms for faster sync - prevents data loss
+    const debouncedSyncIfLoggedIn = debounce(onSyncIfLoggedIn, 500);
 
     async function openFolder(folderId: string) {
         debouncedUpdateNote.flush();
@@ -1463,9 +1464,13 @@
 
         try {
             const { blob, width, height } = await convertToWebP(file, {
-                quality: 0.8,
-                maxWidth: 1600,
-                maxHeight: 1600
+                quality: 0.75,
+                maxWidth: 1200,
+                maxHeight: 1200,
+                adaptiveQuality: true,
+                minQuality: 0.65,
+                maxQuality: 0.8,
+                skipIfSmall: 200 * 1024 // Skip compression for files under 200KB
             });
 
             let src: string;
@@ -1681,28 +1686,15 @@
                 loadedNotes.find((n) => n.id === selectedNoteSetting?.value)?.id ??
                 loadedNotes.find((n) => n.folderId === null)?.id ??
                 '';
-            selectedNoteId = initialSelectedId;
-
+            // Restore selected note - use selectNote() to properly open it
             if (initialSelectedId) {
-                const note = loadedNotes.find((n) => n.id === initialSelectedId);
-                if (note && note.contentHTML === '') {
-                    try {
-                        const rawContent = await db.getNoteContent(initialSelectedId);
-                        if (rawContent) {
-                            note.contentHTML = (browser && DOMPurify) 
-                                ? DOMPurify.sanitize(rawContent)
-                                : rawContent;
-                        }
-                        const noteWithMeta = note as any;
-                        noteWithMeta._contentLoaded = true;
-                        notes = [...notes];
-                    } catch (e) {
-                        console.error('Failed to load initial note content:', e);
-                    }
-                }
-                if (note && note.type === 'spreadsheet') {
-                    await loadSpreadsheetComponent();
-                }
+                // Clear selectedNoteId first so selectNote() will properly load the note
+                // (selectNote returns early if id matches selectedNoteId)
+                selectedNoteId = '';
+                // Call selectNote to properly load and open the note with all its content
+                await selectNote(initialSelectedId);
+            } else {
+                selectedNoteId = '';
             }
         } catch (e) {
             console.error('Failed to load notes data:', e);

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, tick } from 'svelte';
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import { generateUUID } from '$lib/utils/uuid';

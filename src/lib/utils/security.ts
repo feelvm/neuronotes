@@ -36,6 +36,13 @@ export interface BackupDataStructure {
     kanban?: unknown[];
     settings?: unknown[];
   };
+  // Support for legacy format with top-level properties
+  workspaces?: unknown[];
+  folders?: unknown[];
+  notes?: unknown[];
+  calendarEvents?: unknown[];
+  kanban?: unknown[];
+  settings?: unknown[];
 }
 
 export function validateBackupData(data: unknown): data is BackupDataStructure {

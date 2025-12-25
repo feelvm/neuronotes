@@ -3,7 +3,7 @@
     import * as backup from '$lib/backup';
     import * as db from '$lib/db';
     import { generateUUID } from '$lib/utils/uuid';
-    import type { Workspace } from '$lib/db_types';
+    import type { Workspace, Folder, Note, CalendarEvent, Kanban, Setting } from '$lib/db_types';
 
     export let open = false;
     export let isLoggedIn = false;
@@ -132,7 +132,7 @@
                         type: 'manual',
                         description: `Imported from: ${file.name}`
                     },
-                    data: parsedData.data
+                    data: parsedData.data as backup.BackupData['data']
                 };
                 const jsonData = JSON.stringify(backupDataToSave);
                 backupDataToSave.metadata.size = new Blob([jsonData]).size;
@@ -149,12 +149,12 @@
                         description: `Imported from: ${file.name}`
                     },
                     data: {
-                        workspaces: parsedData.workspaces || [],
-                        folders: parsedData.folders || [],
-                        notes: parsedData.notes || [],
-                        calendarEvents: parsedData.calendarEvents || [],
-                        kanban: parsedData.kanban || [],
-                        settings: parsedData.settings || []
+                        workspaces: (parsedData.workspaces || []) as Workspace[],
+                        folders: (parsedData.folders || []) as Folder[],
+                        notes: (parsedData.notes || []) as Note[],
+                        calendarEvents: (parsedData.calendarEvents || []) as CalendarEvent[],
+                        kanban: (parsedData.kanban || []) as Kanban[],
+                        settings: (parsedData.settings || []) as Setting[]
                     }
                 };
                 const jsonData = JSON.stringify(backupDataToSave);
@@ -217,7 +217,8 @@
             if (isLoggedIn && sync) {
                 try {
                     await ensureSupabaseLoaded();
-                    await sync.pushToSupabase();
+                    // Use fullSync to pull first, then push - prevents overwriting newer data
+                    await sync.fullSync();
                 } catch (syncError) {
                     console.warn('Failed to sync restored data to Supabase:', syncError);
                 }

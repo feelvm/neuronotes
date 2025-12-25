@@ -72,7 +72,8 @@ export async function migrateLocalDataToSupabase(): Promise<{
       }
     }
 
-    const pushResult = await sync.pushToSupabase();
+    // Use fullSync to ensure pull happens first (even if nothing to pull in migration scenario)
+    const pushResult = await sync.fullSync();
 
     if (!pushResult.success) {
       return {

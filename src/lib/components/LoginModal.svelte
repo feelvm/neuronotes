@@ -1,8 +1,6 @@
 <script lang="ts">
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
-    import { generateUUID } from '$lib/utils/uuid';
-    import type { Workspace } from '$lib/db_types';
 
     export let open = false;
     export let loginEmail = '';
