@@ -1751,10 +1751,89 @@
             };
             document.addEventListener('selectionchange', handleSelectionChange);
 
+            // Throttle Realtime updates to prevent UI lag from rapid changes
+            let lastUpdateTime = 0;
+            const UPDATE_THROTTLE_MS = 100; // Minimum 100ms between updates
+            
+            // Listen for Realtime updates
+            const handleRealtimeUpdate = async (event: CustomEvent) => {
+                const { tableName, changedId } = event.detail;
+                console.log(`[NotesPanel] Realtime update: ${tableName} - ${changedId}`);
+                
+                // Throttle rapid updates
+                const now = Date.now();
+                if (now - lastUpdateTime < UPDATE_THROTTLE_MS) {
+                    // Queue this update to process after throttle period
+                    setTimeout(() => handleRealtimeUpdate(event), UPDATE_THROTTLE_MS - (now - lastUpdateTime));
+                    return;
+                }
+                lastUpdateTime = now;
+                
+                // Reload notes data when notes, folders, or workspaces are updated
+                if (tableName === 'notes' || tableName === 'note_content' || tableName === 'folders' || tableName === 'workspaces') {
+                    // Check if the updated note is currently selected
+                    const isSelectedNote = selectedNoteId === changedId;
+                    const isCurrentlyEditing = isSelectedNote && 
+                        editorDiv && 
+                        document.activeElement === editorDiv;
+                    
+                    if (isSelectedNote && tableName === 'notes') {
+                        // This is the currently selected note - update it carefully
+                        try {
+                            const updatedNotes = await db.getNotesByWorkspaceId(activeWorkspaceId!);
+                            const updatedNote = updatedNotes.find(n => n.id === changedId);
+                            if (updatedNote) {
+                                const noteIndex = notes.findIndex(n => n.id === changedId);
+                                if (noteIndex !== -1) {
+                                    const currentNote = notes[noteIndex];
+                                    
+                                    if (isCurrentlyEditing) {
+                                        // User is actively typing - update metadata but preserve editor content
+                                        notes[noteIndex] = {
+                                            ...updatedNote,
+                                            contentHTML: currentNote.contentHTML // Keep current editor content
+                                        };
+                                        notes = [...notes];
+                                        console.log(`[NotesPanel] Note ${changedId} updated from Realtime (preserving editor content - user is typing)`);
+                                    } else {
+                                        // User is not actively typing - update both note and editor
+                                        notes[noteIndex] = updatedNote;
+                                        notes = [...notes];
+                                        
+                                        // Update the editor content if it's a text note
+                                        if (updatedNote.type === 'text' && editorDiv) {
+                                            const sanitized = (browser && DOMPurify) 
+                                                ? sanitizeHTML(updatedNote.contentHTML || '')
+                                                : (updatedNote.contentHTML || '');
+                                            editorDiv.innerHTML = sanitized;
+                                            // Update note history
+                                            if (updatedNote.contentHTML && !noteHistory.has(changedId)) {
+                                                saveNoteHistory(changedId, updatedNote.contentHTML);
+                                            }
+                                        }
+                                        console.log(`[NotesPanel] Note ${changedId} updated from Realtime (updated editor content)`);
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Failed to update note from Realtime:', e);
+                            // Fallback to full reload
+                            await loadNotesData();
+                        }
+                    } else {
+                        // Not the selected note, or different table - safe to reload
+                        await loadNotesData();
+                    }
+                }
+            };
+            
+            window.addEventListener('realtime-note-update', handleRealtimeUpdate as EventListener);
+            
             // Store cleanup function
             (window as any).__notesPanelSelectionCleanup = () => {
                 document.removeEventListener('selectionchange', handleSelectionChange);
                 window.removeEventListener('resize', updateMobileVisibility);
+                window.removeEventListener('realtime-note-update', handleRealtimeUpdate as EventListener);
                 if ((window as any).__currencyDropdownClickHandler) {
                     window.removeEventListener('click', (window as any).__currencyDropdownClickHandler, true);
                     delete (window as any).__currencyDropdownClickHandler;

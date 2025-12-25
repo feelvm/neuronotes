@@ -577,9 +577,19 @@
             try {
                 await ensureSupabaseLoaded();
                 // Set up realtime subscriptions for instant updates
-                const result = await sync.setupRealtimeSubscriptions(async () => {
+                const result = await sync.setupRealtimeSubscriptions(async (tableName?: string, changedId?: string) => {
                     // Reload UI when data changes from other devices
                     if (activeWorkspaceId) {
+                        // If notes were updated, we need to reload the notes list
+                        if (tableName === 'notes' || tableName === 'note_content' || tableName === 'folders' || tableName === 'workspaces') {
+                            // Trigger a reload of notes by calling the NotesPanel's load function
+                            // We'll do this by dispatching a custom event that NotesPanel can listen to
+                            if (browser) {
+                                window.dispatchEvent(new CustomEvent('realtime-note-update', { 
+                                    detail: { tableName, changedId } 
+                                }));
+                            }
+                        }
                         await loadActiveWorkspaceData();
                     }
                 });

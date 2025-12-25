@@ -643,7 +643,7 @@ let realtimeChannels: any[] = [];
  * Returns a cleanup function to unsubscribe
  */
 export async function setupRealtimeSubscriptions(
-  onDataChange: () => Promise<void>
+  onDataChange: (tableName?: string, changedId?: string) => Promise<void>
 ): Promise<{ success: boolean; error?: string; unsubscribe: () => void }> {
   if (!isSupabaseConfigured() || !supabase) {
     return { success: false, error: 'Supabase is not configured', unsubscribe: () => {} };
@@ -840,7 +840,8 @@ export async function setupRealtimeSubscriptions(
         }
 
         // Notify that data changed - reload UI
-        await onDataChange();
+        // Pass the table name and changed ID so the UI can update more intelligently
+        await onDataChange(tableName, payload.new?.id || payload.old?.id);
       } catch (error) {
         console.error(`[realtime] Error handling ${tableName} change:`, error);
       }
