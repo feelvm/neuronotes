@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, tick } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import { generateUUID } from '$lib/utils/uuid';
@@ -45,6 +45,9 @@
     let currentDayViewDate = new Date(today);
     let todayDateString = 'Calendar';
     let todayTimeString = '';
+    let todayHours = '';
+    let todayMinutes = '';
+    let timeUpdateInterval: ReturnType<typeof setInterval> | undefined;
 
     $: weekDays = browser
         ? (() => {
@@ -620,6 +623,23 @@
             if (setting?.value) {
                 useCommonCalendar = setting.value;
             }
+            
+            // Update time immediately
+            updateDateTimeDisplay();
+            
+            // Schedule first update at the next minute boundary for precise timing
+            const msUntilNextMinute = getTimeUntilNextMinute();
+            setTimeout(() => {
+                updateDateTimeDisplay();
+                // Then update every minute
+                timeUpdateInterval = setInterval(updateDateTimeDisplay, 60 * 1000);
+            }, msUntilNextMinute);
+        }
+    });
+    
+    onDestroy(() => {
+        if (timeUpdateInterval) {
+            clearInterval(timeUpdateInterval);
         }
     });
 
@@ -627,12 +647,47 @@
         loadCalendarEvents();
     }
 
-    $: if (browser) {
+    function updateDateTimeDisplay() {
+        if (!browser) return;
+        
+        const previousDate = today ? ymd(today) : null;
+        const previousToday = today ? new Date(today) : null;
         today = new Date();
+        const currentDate = ymd(today);
+        
         todayDateString = `${DAY_NAMES_LONG[today.getDay()]}, ${dmy(today)}`;
-        const hours = String(today.getHours()).padStart(2, '0');
-        const minutes = String(today.getMinutes()).padStart(2, '0');
-        todayTimeString = `${hours}:${minutes}`;
+        todayHours = String(today.getHours()).padStart(2, '0');
+        todayMinutes = String(today.getMinutes()).padStart(2, '0');
+        todayTimeString = `${todayHours}:${todayMinutes}`;
+        
+        // If the date changed (e.g., past midnight), update week start and current day view
+        if (previousDate && previousDate !== currentDate) {
+            // New day has started - update calendar view
+            // Force reactivity by creating new Date objects
+            today = new Date(); // Ensure today is a fresh object for reactivity
+            const newWeekStart = startOfWeek(today, 1);
+            const newCurrentDayViewDate = new Date(today);
+            
+            // Update weekStart and currentDayViewDate to trigger reactive updates
+            weekStart = newWeekStart;
+            currentDayViewDate = newCurrentDayViewDate;
+            
+            // Force a reactive update by reassigning (Svelte needs to detect the change)
+            weekStart = startOfWeek(today, 1);
+            currentDayViewDate = new Date(today);
+        }
+    }
+    
+    // Calculate time until next minute to sync updates precisely
+    function getTimeUntilNextMinute(): number {
+        const now = new Date();
+        const msUntilNextMinute = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds());
+        return msUntilNextMinute;
+    }
+
+    // Initialize on mount
+    $: if (browser) {
+        updateDateTimeDisplay();
     }
 
     $: if (activeWorkspaceId) {
@@ -644,7 +699,9 @@
     <div class="panel-header">
         <div class="panel-title today-header">
             <span class="date">{todayDateString}</span>
-            <span class="time">{todayTimeString}</span>
+            <span class="time">
+                {todayHours}<span class="time-separator">:</span>{todayMinutes}
+            </span>
         </div>
         <div class="spacer"></div>
         {#if browser && !isMinimized}
@@ -979,6 +1036,20 @@
         font-size: 0.9em;
         color: var(--accent-red);
         font-weight: 600;
+    }
+
+    .today-header .time-separator {
+        animation: blink 1s infinite;
+        display: inline-block;
+    }
+
+    @keyframes blink {
+        0%, 50% {
+            opacity: 1;
+        }
+        51%, 100% {
+            opacity: 0.3;
+        }
     }
 
     .calendar-controls {
