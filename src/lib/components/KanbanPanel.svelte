@@ -1,10 +1,11 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
     import { browser } from '$app/environment';
     import * as db from '$lib/db';
     import { generateUUID } from '$lib/utils/uuid';
     import { debounce } from '$lib/utils/debounce';
     import type { Column, Task } from '$lib/db_types';
+    import * as syncModule from '$lib/supabase/sync';
+    import { supabase, isSupabaseConfigured } from '$lib/supabase/client';
 
     // Props
     export let isMinimized: boolean;
@@ -50,14 +51,40 @@
             return;
         }
         try {
-            // Flush any pending debounced save first
+            // Flush any pending debounced save first to ensure we have the latest state
             await debouncedSaveKanban.flush();
-            // Ensure latest state is saved
+            
+            // Get a fresh copy of kanban to ensure we're saving the current state
+            // This prevents race conditions with the reactive save
+            const currentKanban = kanban;
+            
+            // Ensure latest state is saved with current timestamp
+            // Use explicit timestamp to ensure it's newer than remote
+            const now = Date.now();
+            console.log('[kanban] Saving kanban with', currentKanban.length, 'columns, timestamp:', now);
             await db.putKanban({
                 workspaceId: activeWorkspaceId,
-                columns: kanban
+                columns: currentKanban,
+                updatedAt: now
             });
-            // Sync immediately after save
+            
+            // Verify the save worked by reading it back
+            const saved = await db.getKanbanByWorkspaceId(activeWorkspaceId);
+            console.log('[kanban] Verified save - columns:', saved?.columns.length, 'updatedAt:', saved?.updatedAt);
+            
+            // If logged in, use push-first sync to preserve local changes
+            if (isSupabaseConfigured() && supabase) {
+                const user = (await supabase.auth.getUser()).data.user;
+                if (user) {
+                    // Push first to preserve our local deletion, then pull other changes
+                    console.log('[kanban] Pushing to Supabase first...');
+                    await syncModule.pushFirstSync();
+                    console.log('[kanban] Sync complete');
+                    return;
+                }
+            }
+            
+            // Fallback to regular sync if not logged in
             await onSyncIfLoggedIn();
         } catch (error) {
             console.error('[kanban] Failed to save and sync kanban:', error);
@@ -137,9 +164,22 @@
             return;
         }
         
+        console.log('[kanban] Deleting task', taskId, 'from column', col.id);
+        const taskCountBefore = col.tasks.length;
         col.tasks = col.tasks.filter((t) => t.id !== taskId);
+        const taskCountAfter = col.tasks.length;
+        console.log('[kanban] Task count:', taskCountBefore, '->', taskCountAfter);
         kanban = [...kanban];
         await saveAndSyncKanban();
+        
+        // Verify deletion persisted
+        const saved = await db.getKanbanByWorkspaceId(activeWorkspaceId);
+        const savedCol = saved?.columns.find(c => c.id === col.id);
+        const savedTaskCount = savedCol?.tasks.length || 0;
+        console.log('[kanban] After save, task count in DB:', savedTaskCount, 'expected:', taskCountAfter);
+        if (savedTaskCount !== taskCountAfter) {
+            console.error('[kanban] MISMATCH: Task count in DB does not match expected!');
+        }
     }
 
     function toggleColumnCollapse(colId: string) {
@@ -329,7 +369,15 @@
     async function loadKanbanData(force = false) {
         if ((isKanbanLoaded && !force) || !browser || !activeWorkspaceId) return;
         try {
+            console.log('[kanban] Loading kanban data for workspace', activeWorkspaceId);
             const kData = await db.getKanbanByWorkspaceId(activeWorkspaceId);
+            if (kData) {
+                console.log('[kanban] Loaded', kData.columns.length, 'columns, updatedAt:', kData.updatedAt);
+                const totalTasks = kData.columns.reduce((sum, col) => sum + col.tasks.length, 0);
+                console.log('[kanban] Total tasks:', totalTasks);
+            } else {
+                console.log('[kanban] No kanban data found');
+            }
             kanban = kData ? kData.columns : [];
             isKanbanLoaded = true;
         } catch (e) {
@@ -689,6 +737,74 @@
         flex-shrink: 0;
         transition: all 0.2s ease-in-out;
         position: relative;
+    }
+
+    @media (max-width: 900px) {
+        .kanban-panel {
+            overflow: visible !important;
+            max-height: none !important;
+            height: auto !important;
+            min-height: 300px !important;
+        }
+
+        .kanban-board {
+            padding: 8px;
+            gap: 8px;
+            overflow-x: auto !important;
+            overflow-y: visible !important;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x;
+            flex: 1 1 0 !important;
+            min-height: 200px !important;
+            max-height: none !important;
+        }
+
+        .kanban-col {
+            width: 200px;
+            min-width: 200px;
+            max-width: 220px;
+            height: auto !important;
+            max-height: none !important;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .kanban-col-header {
+            padding: 6px;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .kanban-tasks {
+            padding: 6px;
+            gap: 6px;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            -webkit-overflow-scrolling: touch;
+            flex: 1 1 0 !important;
+            min-height: 150px !important;
+            max-height: calc(100vh - 200px) !important;
+        }
+
+        .kanban-task {
+            padding: 4px;
+            font-size: 13px;
+        }
+
+        .kanban-actions {
+            padding: 8px;
+            gap: 6px;
+            flex-shrink: 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .kanban-actions input {
+            min-width: 80px !important;
+            max-width: 120px !important;
+            font-size: 16px;
+            transform: scale(0.875);
+        }
     }
 
     .kanban-col.collapsed {

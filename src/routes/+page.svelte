@@ -1719,6 +1719,7 @@
             onSyncIfLoggedIn={syncIfLoggedIn}
             onLoadActiveWorkspaceData={loadActiveWorkspaceData}
             bind:notesPanelClientWidth
+            style="height: 100%;"
         />
         {/if}
 
@@ -2258,23 +2259,46 @@
         overflow: hidden;
         display: grid;
         grid-template-columns: var(--notes-width) 24px 1fr;
+        grid-template-rows: 1fr;
         gap: 0;
         padding: 24px;
+        min-height: 0;
+        height: 100%;
+        align-items: stretch;
     }
     
     .main.notes-only {
         grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+        align-items: stretch;
+    }
+    
+    .main.notes-only > .panel {
+        min-height: 0;
+        height: 100%;
+        align-self: stretch;
     }
     
     .main.calendar-only,
     .main.kanban-only {
         grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+        align-items: stretch;
     }
     
     .main.notes-calendar,
     .main.notes-kanban {
         grid-template-columns: var(--notes-width, 50%) 1fr;
+        grid-template-rows: 1fr;
         gap: 24px;
+        align-items: stretch;
+    }
+    
+    .main.notes-calendar > .panel,
+    .main.notes-kanban > .panel {
+        min-height: 0;
+        height: 100%;
+        align-self: stretch;
     }
     
     .main.calendar-kanban {
@@ -2339,6 +2363,7 @@
         min-height: 0;
         max-width: 100%;
         max-height: 100%;
+        height: 100%;
         transition: all 0.2s ease-in-out;
         position: relative;
         z-index: 1;
@@ -2415,11 +2440,14 @@
     .notes {
         display: grid;
         grid-template-columns: 180px 1fr;
-        height: 100%;
-        transition: grid-template-columns 0.2s ease-in-out;
+        grid-template-rows: 1fr;
+        flex: 1;
         min-width: 0;
         min-height: 0;
+        max-height: 100%;
+        height: 100%;
         overflow: hidden;
+        transition: grid-template-columns 0.2s ease-in-out;
     }
 
     .note-list {
@@ -2492,29 +2520,47 @@
         box-shadow: 0 0 8px var(--accent-red);
     }
     .note-editor {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-rows: 1fr;
         min-width: 0;
         min-height: 0;
+        max-height: 100%;
         flex: 1;
         overflow: hidden;
+        height: 100%;
     }
     .note-content {
         padding: 16px;
-        flex: 1;
-        overflow: auto;
+        min-height: 0;
+        height: 100%;
+        box-sizing: border-box;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
         scrollbar-width: none;
         -ms-overflow-style: none;
     }
     .contenteditable {
-        min-height: 100%;
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
         outline: none;
         border-radius: 8px;
         padding: 12px;
+        padding-bottom: 24px;
         background: var(--panel-bg-darker);
         border: 1px solid var(--border);
         transition: border-color 0.2s;
         overflow-wrap: break-word;
+        overflow-y: auto;
+        overflow-x: hidden;
+        box-sizing: border-box;
+        position: relative;
+    }
+    
+    .contenteditable:empty::before {
+        content: '\200B';
+        display: block;
     }
     .contenteditable:focus {
         border-color: var(--accent-red);
@@ -3226,19 +3272,20 @@
 
     @media (max-width: 1200px) {
         .app {
-            overflow: hidden;
-            height: 100vh;
+            overflow: visible;
+            height: auto;
+            min-height: 100vh;
         }
         .main {
             grid-template-columns: 1fr;
-            grid-template-rows: min-content min-content;
+            grid-template-rows: minmax(420px, 1fr) 1fr;
             gap: 12px;
-            overflow-y: auto;
+            overflow-y: visible;
             overflow-x: hidden;
             scroll-behavior: smooth;
             flex: 1 1 auto;
             min-height: 0;
-            max-height: calc(100vh - 50px);
+            max-height: none;
         }
         .main::-webkit-scrollbar {
             display: none;
@@ -3271,18 +3318,33 @@
         }
     }
 
+    @media (min-width: 769px) {
+        .nav .spacer {
+            display: none !important;
+        }
+        .nav .workspace-row {
+            flex: 1 1 0% !important;
+            min-width: 0;
+            max-width: none;
+        }
+        .workspace-tabs {
+            width: 100%;
+        }
+    }
+
     @media (max-width: 768px) {
         .app {
-            overflow: hidden;
-            height: 100vh;
+            overflow: visible;
+            height: auto;
+            min-height: 100vh;
         }
         .main {
             padding: 12px;
             gap: 12px;
-            grid-template-rows: min-content min-content;
+            grid-template-rows: minmax(420px, 1fr) 1fr;
             flex: 1 1 auto;
             min-height: 0;
-            max-height: calc(100vh - 50px);
+            max-height: none;
         }
         .main::-webkit-scrollbar {
             display: none;
@@ -3315,10 +3377,15 @@
             left: 50%;
             transform: translateX(-50%);
         }
+        .nav .workspace-row {
+            flex: 1 1 0%;
+            min-width: 0;
+        }
         .workspace-tabs {
             overflow-x: auto;
             flex: 1;
             min-width: 0;
+            width: 100%;
         }
         .notes {
             grid-template-columns: 1fr;

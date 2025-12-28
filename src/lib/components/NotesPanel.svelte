@@ -1855,6 +1855,7 @@
         folders = [];
     }
 
+
     onDestroy(() => {
         // Cleanup selection change listener
         if (browser && (window as any).__notesPanelSelectionCleanup) {
@@ -1873,7 +1874,7 @@
     class="panel notes-panel"
     class:minimized={isMinimized}
     bind:clientWidth={notesPanelClientWidth}
-    style="max-width: 100%; overflow: hidden;"
+    style="max-width: 100%; overflow: hidden; height: 100%;"
 >
     <div class="panel-header">
         {#if !isMinimized}
@@ -2765,6 +2766,7 @@
         min-height: 0;
         max-width: 100%;
         max-height: 100%;
+        height: 100%;
         transition: all 0.2s ease-in-out;
         position: relative;
         z-index: 1;
@@ -2872,11 +2874,14 @@
     .notes {
         display: grid;
         grid-template-columns: 180px 1fr;
-        height: 100%;
-        transition: grid-template-columns 0.2s ease-in-out;
+        grid-template-rows: 1fr;
+        flex: 1;
         min-width: 0;
         min-height: 0;
+        max-height: 100%;
+        height: 100%;
         overflow: hidden;
+        transition: grid-template-columns 0.2s ease-in-out;
     }
 
     .note-list {
@@ -2884,6 +2889,9 @@
         overflow: auto;
         scrollbar-width: none;
         -ms-overflow-style: none;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
     }
 
     .note-list::-webkit-scrollbar {
@@ -2958,32 +2966,61 @@
     }
 
     .note-editor {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-rows: 1fr;
         min-width: 0;
         min-height: 0;
-        flex: 1;
+        max-height: 100%;
         overflow: hidden;
+        height: 100%;
+        width: 100%;
+        align-items: stretch;
+        align-content: stretch;
+        align-self: stretch;
+        position: relative;
     }
 
     .note-content {
         padding: 16px;
-        flex: 1;
-        overflow: auto;
+        min-height: 0;
+        height: 100%;
+        box-sizing: border-box;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
         scrollbar-width: none;
         -ms-overflow-style: none;
+        align-self: stretch;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
     }
 
     .contenteditable {
-        min-height: 100%;
+        flex: 1 1 0;
+        min-height: 0;
+        max-height: 100%;
+        width: 100%;
         outline: none;
         border-radius: 8px;
         padding: 12px;
+        padding-bottom: 24px;
         background: var(--panel-bg-darker);
         border: 1px solid var(--border);
         transition: border-color 0.2s;
         overflow-wrap: break-word;
+        overflow-y: auto;
+        overflow-x: hidden;
+        box-sizing: border-box;
         position: relative;
+    }
+    
+    
+    .contenteditable:empty::before {
+        content: '\200B';
+        display: block;
     }
 
     .contenteditable:focus {
@@ -3318,6 +3355,9 @@
     }
 
     @media (max-width: 768px) {
+        .panel {
+            min-height: 420px;
+        }
         .folder-item input,
         .note-item input {
             font-size: 16px !important;

@@ -1075,7 +1075,7 @@
         border-left: 1px solid var(--border);
         flex: 1;
         min-height: 0;
-        overflow: hidden;
+        overflow: visible;
     }
 
     .calendar-cell {
@@ -1087,7 +1087,8 @@
         gap: 6px;
         min-width: 0;
         transition: background-color 0.2s;
-        overflow: hidden;
+        overflow: visible;
+        min-height: auto;
     }
 
     .calendar-cell.today {
@@ -1456,6 +1457,67 @@
         .small-btn {
             padding: 4px 8px;
             font-size: 11px;
+        }
+    }
+
+    @media (max-width: 900px) {
+        .calendar-panel {
+            overflow: visible !important;
+            max-height: none !important;
+            height: auto !important;
+            min-height: 300px !important;
+        }
+
+        .calendar-grid {
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            flex: 1 1 0 !important;
+            min-height: 200px !important;
+            max-height: none !important;
+        }
+
+        .calendar-add {
+            flex-wrap: wrap;
+            padding: 8px;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .calendar-add input[type='text'] {
+            min-width: 80px !important;
+            max-width: 120px !important;
+            flex: 0 1 auto !important;
+            font-size: 16px;
+            transform: scale(0.875);
+            transform-origin: left center;
+        }
+
+        .calendar-cell {
+            padding: 6px 2px;
+            min-height: auto;
+            overflow: visible;
+        }
+
+        .event {
+            font-size: 10px;
+            padding: 3px 3px 1px 4px;
+        }
+
+        .calendar-controls {
+            gap: 4px;
+        }
+
+        .calendar-controls .small-btn {
+            padding: 4px 6px;
+            font-size: 11px;
+        }
+
+        .panel-header {
+            padding: 8px;
+        }
+
+        .calendar-panel .panel-header {
+            padding: 12px 8px;
         }
     }
 </style>

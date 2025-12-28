@@ -290,25 +290,40 @@ export async function pushToSupabase(): Promise<{ success: boolean; error?: stri
       
       const { data: supabaseKanban } = await supabase
         .from('kanban')
-        .select('workspace_id')
+        .select('workspace_id, updated_at')
         .eq('user_id', userId)
         .eq('workspace_id', workspace.id)
         .maybeSingle();
       
       if (kanbanData) {
+        const localUpdatedAt = kanbanData.updatedAt || Date.now();
+        const remoteUpdatedAt = supabaseKanban?.updated_at ? toTimestamp(supabaseKanban.updated_at) : 0;
+        
+        // If remote version exists and is newer, skip pushing to avoid overwriting newer data
+        if (remoteUpdatedAt > localUpdatedAt) {
+          continue;
+        }
+        
         const columnsToSave = deepClone(kanbanData.columns);
+        const now = Date.now();
         const { error: upsertError } = await supabase
           .from('kanban')
           .upsert({
             workspace_id: workspace.id,
             user_id: userId,
             columns: columnsToSave,
-            updated_at: toISOString(Date.now()),
+            updated_at: toISOString(now),
           });
         if (upsertError) {
           console.error(`[sync:push] Failed to upsert kanban for workspace ${workspace.id}:`, upsertError);
           throw upsertError;
         }
+        // Update local timestamp to match what we just pushed
+        await db.putKanban({
+          workspaceId: workspace.id,
+          columns: kanbanData.columns,
+          updatedAt: now,
+        });
       } else if (supabaseKanban) {
         const { error: deleteError } = await supabase
           .from('kanban')
@@ -564,13 +579,31 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
       const localKanban = await db.getKanbanByWorkspaceId(workspace.id);
 
       if (kanbanData) {
-        // Always pull remote kanban data
-        // Note: In fullSync, we pull then push, so local changes will be preserved in the push step
-        const columns = kanbanData.columns as any;
-        await db.putKanban({
-          workspaceId: kanbanData.workspace_id,
-          columns: columns,
-        });
+        const remoteUpdatedAt = kanbanData.updated_at ? toTimestamp(kanbanData.updated_at) : 0;
+        const localUpdatedAt = localKanban?.updatedAt || 0;
+        const now = Date.now();
+        
+        // Calculate time differences
+        const timeSinceLocalUpdate = now - localUpdatedAt;
+        const timeDiff = remoteUpdatedAt - localUpdatedAt;
+        
+        // Only update if:
+        // 1. Remote is significantly newer (more than 5 seconds), AND
+        // 2. Local wasn't updated very recently (more than 3 seconds ago)
+        // This prevents overwriting recent local changes (like deletions) even if remote timestamp is slightly newer
+        const shouldUpdate = timeDiff > 5000 && timeSinceLocalUpdate > 3000;
+        
+        if (shouldUpdate) {
+          console.log(`[sync:pull] Updating kanban from remote: remote=${remoteUpdatedAt}, local=${localUpdatedAt}, diff=${timeDiff}ms, localAge=${timeSinceLocalUpdate}ms`);
+          const columns = kanbanData.columns as any;
+          await db.putKanban({
+            workspaceId: kanbanData.workspace_id,
+            columns: columns,
+            updatedAt: remoteUpdatedAt,
+          });
+        } else {
+          console.log(`[sync:pull] Keeping local kanban: remote=${remoteUpdatedAt}, local=${localUpdatedAt}, diff=${timeDiff}ms, localAge=${timeSinceLocalUpdate}ms (preserving recent local changes)`);
+        }
       } else if (localKanban) {
         // Remote kanban was deleted, delete local too
         await db.deleteKanban(workspace.id);
@@ -604,6 +637,29 @@ export async function pullFromSupabase(): Promise<{ success: boolean; error?: st
     updateSyncStatus({ isSyncing: false, error: errorMessage });
     return { success: false, error: errorMessage };
   }
+}
+
+/**
+ * Push-first sync: push local changes first, then pull remote changes
+ * Use this when you just made a local change and want to preserve it
+ */
+export async function pushFirstSync(): Promise<{ success: boolean; error?: string }> {
+  // Set flag to indicate push is being called from sync (safe)
+  isPushingFromFullSync = true;
+  try {
+    const pushResult = await pushToSupabase();
+    if (!pushResult.success) {
+      return pushResult;
+    }
+  } finally {
+    isPushingFromFullSync = false;
+  }
+
+  // After pushing, we skip the pull to preserve our just-pushed changes
+  // The pull will happen on the next regular sync or page load
+  // This prevents overwriting our local changes due to timing issues
+  console.log('[sync] Push-first sync complete, skipping pull to preserve local changes');
+  return { success: true };
 }
 
 /**
@@ -796,13 +852,35 @@ export async function setupRealtimeSubscriptions(
               });
               break;
             
-            case 'kanban':
-              const columns = row.columns as any;
-              await db.putKanban({
-                workspaceId: row.workspace_id,
-                columns: columns,
-              });
+            case 'kanban': {
+              const kanbanRemoteUpdatedAt = row.updated_at ? toTimestamp(row.updated_at) : Date.now();
+              const localKanban = await db.getKanbanByWorkspaceId(row.workspace_id);
+              const localUpdatedAt = localKanban?.updatedAt || 0;
+              const now = Date.now();
+              
+              // Calculate time differences
+              const timeSinceLocalUpdate = now - localUpdatedAt;
+              const timeDiff = kanbanRemoteUpdatedAt - localUpdatedAt;
+              
+              // Only update if:
+              // 1. Remote is significantly newer (more than 5 seconds), AND
+              // 2. Local wasn't updated very recently (more than 3 seconds ago)
+              // This prevents overwriting recent local changes (like deletions) from realtime updates
+              const shouldUpdate = timeDiff > 5000 && timeSinceLocalUpdate > 3000;
+              
+              if (shouldUpdate) {
+                console.log(`[realtime] Updating kanban from remote: remote=${kanbanRemoteUpdatedAt}, local=${localUpdatedAt}, diff=${timeDiff}ms, localAge=${timeSinceLocalUpdate}ms`);
+                const columns = row.columns as any;
+                await db.putKanban({
+                  workspaceId: row.workspace_id,
+                  columns: columns,
+                  updatedAt: kanbanRemoteUpdatedAt,
+                });
+              } else {
+                console.log(`[realtime] Ignoring kanban update: remote=${kanbanRemoteUpdatedAt}, local=${localUpdatedAt}, diff=${timeDiff}ms, localAge=${timeSinceLocalUpdate}ms (preserving recent local changes)`);
+              }
               break;
+            }
             
             case 'settings':
               // Exclude activeWorkspaceId from sync - it's a per-device preference

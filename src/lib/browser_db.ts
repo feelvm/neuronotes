@@ -13,7 +13,7 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, workspace_id TEXT NOT NULL, "order" INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, content_html TEXT, updated_at INTEGER NOT NULL, workspace_id TEXT NOT NULL, folder_id TEXT, "order" INTEGER NOT NULL DEFAULT 0, type TEXT NOT NULL DEFAULT 'text', spreadsheet TEXT);
   CREATE TABLE IF NOT EXISTS calendarEvents (id TEXT PRIMARY KEY, date TEXT NOT NULL, title TEXT NOT NULL, time TEXT, workspace_id TEXT NOT NULL, repeat TEXT, repeat_on TEXT, repeat_end TEXT, exceptions TEXT, color TEXT);
-  CREATE TABLE IF NOT EXISTS kanban (workspace_id TEXT PRIMARY KEY, columns TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS kanban (workspace_id TEXT PRIMARY KEY, columns TEXT NOT NULL, updated_at INTEGER);
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 `;
 
@@ -93,6 +93,22 @@ export async function init(): Promise<void> {
       };
 
       debouncedSave = debounce(saveDb, 1000);
+
+      // Migration: Add updated_at column to kanban table if it doesn't exist
+      try {
+        const pragmaResult = db.exec("PRAGMA table_info(kanban)");
+        const columns = pragmaResult[0]?.values || [];
+        const hasUpdatedAt = columns.some((col: any) => col[1] === 'updated_at');
+        if (!hasUpdatedAt) {
+          console.log('[browser_db] Migrating kanban table: adding updated_at column');
+          db.run("ALTER TABLE kanban ADD COLUMN updated_at INTEGER");
+          // Set updated_at for existing rows to current timestamp
+          db.run("UPDATE kanban SET updated_at = ? WHERE updated_at IS NULL", [Date.now()]);
+          saveDb(); // Save the migration immediately
+        }
+      } catch (migrationError) {
+        console.warn('[browser_db] Failed to migrate kanban table:', migrationError);
+      }
 
       if (typeof window !== 'undefined') {
         window.addEventListener('beforeunload', saveDb);
@@ -434,14 +450,17 @@ export async function getKanbanByWorkspaceId(workspaceId: string): Promise<Kanba
   }
   return {
     workspaceId: kanbanRow.workspace_id,
-    columns
+    columns,
+    updatedAt: kanbanRow.updated_at || undefined
   };
 }
 
 export async function putKanban(kanban: Kanban): Promise<void> {
-  await execute('INSERT OR REPLACE INTO kanban (workspace_id, columns) VALUES (?, ?)', [
+  const updatedAt = kanban.updatedAt ?? Date.now();
+  await execute('INSERT OR REPLACE INTO kanban (workspace_id, columns, updated_at) VALUES (?, ?, ?)', [
     kanban.workspaceId,
-    JSON.stringify(kanban.columns)
+    JSON.stringify(kanban.columns),
+    updatedAt
   ]);
 }
 

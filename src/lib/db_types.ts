@@ -73,6 +73,7 @@ export type Column = {
 export type Kanban = {
   workspaceId: string;
   columns: Column[];
+  updatedAt?: number; // Timestamp for conflict resolution
 };
 
 export type Setting = {
