@@ -1,6 +1,10 @@
 <script lang="ts">
     export let open = false;
     export let workspaceName = '';
+    export let title = 'Create Workspace';
+    export let label = 'Workspace Name';
+    export let placeholder = 'Enter workspace name';
+    export let submitButtonText = 'Create';
 
     // Callbacks
     export let onClose: () => void;
@@ -24,6 +28,9 @@
             e.preventDefault();
             e.stopPropagation();
             handleSubmit();
+        } else if (e.key === ' ') {
+            // Prevent space from bubbling to overlay
+            e.stopPropagation();
         }
     }
 </script>
@@ -35,6 +42,11 @@
         tabindex="0"
         on:click={onClose}
         on:keydown={(e) => {
+            // Only handle keys if not typing in the input field
+            const target = e.target as HTMLElement;
+            if (target.tagName === 'INPUT' || target.closest('input')) {
+                return;
+            }
             if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
                 e.preventDefault();
                 onClose();
@@ -45,30 +57,30 @@
             class="login-modal" 
             role="dialog"
             aria-modal="true"
-            aria-labelledby="workspace-modal-title"
+            aria-labelledby="modal-title"
             tabindex="-1"
             on:click|stopPropagation
             on:keydown={handleKeydown}
         >
             <div class="login-modal-header">
-                <h2 id="workspace-modal-title">Create Workspace</h2>
+                <h2 id="modal-title">{title}</h2>
                 <button class="login-modal-close" on:click={onClose}>×</button>
             </div>
             <div class="login-modal-content">
                 <form on:submit|preventDefault={handleSubmit}>
                     <div class="login-field">
-                        <label for="workspace-name">Workspace Name</label>
+                        <label for="modal-name-input">{label}</label>
                         <input
-                            id="workspace-name"
+                            id="modal-name-input"
                             type="text"
                             bind:value={workspaceName}
-                            placeholder="Enter workspace name"
+                            placeholder={placeholder}
                             required
                             on:keydown={handleInputKeydown}
                         />
                     </div>
                     <div class="login-actions">
-                        <button type="submit" class="login-submit-btn">Create</button>
+                        <button type="submit" class="login-submit-btn">{submitButtonText}</button>
                         <button type="button" class="login-signup-btn" on:click={onClose}>Cancel</button>
                     </div>
                 </form>
@@ -88,7 +100,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 2000;
+        z-index: 999999 !important;
     }
 
     .login-modal {

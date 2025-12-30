@@ -13,6 +13,9 @@
     } from '$lib/utils/textFormatting';
     import { convertToWebP, blobToDataUrl } from '$lib/utils/image';
     import { uploadNoteImageWebP, deleteNoteImage } from '$lib/supabase/storage';
+    import * as syncModule from '$lib/supabase/sync';
+    import { supabase, isSupabaseConfigured } from '$lib/supabase/client';
+    import WorkspaceModal from '$lib/components/WorkspaceModal.svelte';
     import type { Note, Folder, SpreadsheetCell } from '$lib/db_types';
 
     // Props
@@ -85,6 +88,8 @@
     let editingFolderId: string | null = null;
     let editingNoteId: string | null = null;
     let isEditingHeaderName = false;
+    let showFolderModal = false;
+    let folderName = '';
     let draggedItemType: 'folder' | 'note' | null = null;
     let isDragging = false;
     let isNoteListVisible = true;
@@ -136,12 +141,14 @@
                         ...f,
                         displayType: 'folder' as const
                     }));
+                // Combine folders and notes, then sort by order to allow interleaving
                 items = [...allFolders, ...rootNotes];
             } else {
                 items = notes
                     .filter((n) => n.folderId === currentFolderId && n.workspaceId === activeWorkspaceId)
                     .map((n) => ({ ...n, displayType: 'note' as const }));
             }
+            // Sort by order to allow folders and notes to be interleaved
             displayList = items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         } else {
             displayList = [];
@@ -801,6 +808,16 @@
                 notes = [...notes, n];
             }
             await selectNote(n.id);
+            // Use push-first sync to preserve the newly created note
+            // This prevents it from being deleted during a pull-first sync
+            if (isSupabaseConfigured() && supabase) {
+                const user = (await supabase.auth.getUser()).data.user;
+                if (user) {
+                    await syncModule.pushFirstSync();
+                    return;
+                }
+            }
+            // Fallback to regular sync if not logged in
             await onSyncIfLoggedIn();
         } catch (error) {
             console.error('Failed to add note:', error);
@@ -819,19 +836,56 @@
         return { data, colWidths, rowHeights };
     }
 
-    async function addFolder() {
-        const name = prompt('Enter new folder name:', 'New Folder');
+    function addFolder() {
+        folderName = 'New Folder';
+        showFolderModal = true;
+    }
+
+    async function handleFolderSubmit(name: string) {
         if (!name?.trim()) return;
 
         try {
+            // Calculate order as last position in the mixed list (folders + notes)
+            // This allows folders to be placed anywhere, including after notes
+            const allItems = displayList.filter(item => 
+                (item.displayType === 'folder' || item.displayType === 'note')
+            );
+            const maxOrder = allItems.length > 0 
+                ? Math.max(...allItems.map(item => item.order ?? 0))
+                : -1;
+            
             const f: Folder = {
                 id: generateUUID(),
                 name: name.trim(),
                 workspaceId: activeWorkspaceId!,
-                order: displayList.length
+                order: maxOrder + 1
             };
             await db.putFolder(f);
-            folders = [...folders, f];
+            const reloadedFolders = await db.getFoldersByWorkspaceId(activeWorkspaceId!);
+            const reloadedFolder = reloadedFolders.find(folder => folder.id === f.id);
+            if (reloadedFolder) {
+                const folderIndex = folders.findIndex(folder => folder.id === f.id);
+                if (folderIndex !== -1) {
+                    folders[folderIndex] = reloadedFolder;
+                    folders = [...folders];
+                } else {
+                    folders = [...folders, reloadedFolder];
+                }
+            } else {
+                folders = [...folders, f];
+            }
+            
+            // Use push-first sync to preserve the newly created folder
+            // This prevents it from being deleted during a pull-first sync
+            if (isSupabaseConfigured() && supabase) {
+                const user = (await supabase.auth.getUser()).data.user;
+                if (user) {
+                    await syncModule.pushFirstSync();
+                    return;
+                }
+            }
+            
+            // Fallback to regular sync if not logged in
             await onSyncIfLoggedIn();
         } catch (error) {
             console.error('Failed to add folder:', error);
@@ -888,6 +942,18 @@
         }
 
         if (currentFolderId === folderId) await goBack();
+        
+        // Use push-first sync to preserve the deletion
+        // This prevents the folder from being restored during a pull-first sync
+        if (isSupabaseConfigured() && supabase) {
+            const user = (await supabase.auth.getUser()).data.user;
+            if (user) {
+                await syncModule.pushFirstSync();
+                return;
+            }
+        }
+        
+        // Fallback to regular sync if not logged in
         await onSyncIfLoggedIn();
     }
 
@@ -1146,6 +1212,7 @@
             const noteToMoveIndex = notes.findIndex((n) => n.id === draggedItem.id);
             if (noteToMoveIndex !== -1) {
                 const noteToMove = { ...notes[noteToMoveIndex] };
+                const oldFolderId = noteToMove.folderId;
                 noteToMove.folderId = targetFolder.id;
                 noteToMove.updatedAt = Date.now();
                 noteToMove.order = notes.filter((n) => n.folderId === targetFolder.id).length;
@@ -1153,6 +1220,21 @@
                 const nextNotes = [...notes];
                 nextNotes[noteToMoveIndex] = noteToMove;
                 notes = nextNotes;
+                
+                // Use push-first sync to preserve the folder change
+                // This prevents the note from being restored to its old folder during a pull-first sync
+                if (isSupabaseConfigured() && supabase) {
+                    const user = (await supabase.auth.getUser()).data.user;
+                    if (user) {
+                        await syncModule.pushFirstSync();
+                        isDragging = false;
+                        draggedItemType = null;
+                        return;
+                    }
+                }
+                
+                // Fallback to regular sync if not logged in
+                await onSyncIfLoggedIn();
             }
         }
         isDragging = false;
@@ -1175,7 +1257,12 @@
                 const noteToMove = { ...notes[noteToMoveIndex] };
                 noteToMove.folderId = null;
                 noteToMove.updatedAt = Date.now();
-                noteToMove.order = displayList.length;
+                // Calculate order as last position among root notes only
+                const rootNotes = notes.filter((n) => n.folderId === null && n.workspaceId === activeWorkspaceId);
+                const maxOrder = rootNotes.length > 0 
+                    ? Math.max(...rootNotes.map(n => n.order ?? 0))
+                    : -1;
+                noteToMove.order = maxOrder + 1;
                 await db.putNote(noteToMove);
                 const nextNotes = [...notes];
                 nextNotes[noteToMoveIndex] = noteToMove;
@@ -1229,7 +1316,8 @@
         }
         const [movedItem] = currentViewList.splice(draggedIndex, 1);
         currentViewList.splice(targetIndex, 0, movedItem);
-
+        
+        // Use unified order space so folders and notes can be interleaved
         const updates = currentViewList.map((item, index) => {
             if (item.displayType === 'folder') {
                 const folder = item as Folder & { displayType: 'folder' };
@@ -1243,6 +1331,7 @@
                     console.error('Original folder missing workspaceId:', originalFolder);
                     throw new Error(`Folder ${originalFolder.id} is missing workspaceId in original data`);
                 }
+                // Use position in mixed list for unified ordering
                 const updatedFolder: Folder = {
                     id: originalFolder.id,
                     name: originalFolder.name,
@@ -1264,6 +1353,7 @@
                     console.error('Original note missing workspaceId:', originalNote);
                     throw new Error(`Note ${originalNote.id} is missing workspaceId in original data`);
                 }
+                // Use position in mixed list for unified ordering
                 const updatedNote: Note = {
                     ...originalNote,
                     order: index
@@ -1331,6 +1421,18 @@
         folders = [...folders];
         isDragging = false;
         draggedItemType = null;
+        
+        // Sync to preserve the new order - use push-first to prevent overwriting
+        if (isSupabaseConfigured() && supabase) {
+            const user = (await supabase.auth.getUser()).data.user;
+            if (user) {
+                await syncModule.pushFirstSync();
+                return;
+            }
+        }
+        
+        // Fallback to regular sync if not logged in
+        await onSyncIfLoggedIn();
     }
 
     async function applyFormatCommand(command: string) {
@@ -2749,6 +2851,17 @@
         </div>
     {/if}
 </section>
+
+<WorkspaceModal
+    open={showFolderModal}
+    bind:workspaceName={folderName}
+    title="Create Folder"
+    label="Folder Name"
+    placeholder="Enter folder name"
+    submitButtonText="Create"
+    onClose={() => showFolderModal = false}
+    onSubmit={handleFolderSubmit}
+/>
 
 <style>
     * {
