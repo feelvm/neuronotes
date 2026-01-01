@@ -718,8 +718,11 @@ export async function setupRealtimeSubscriptions(
     const handleChange = async (payload: any, tableName: string) => {
       console.log(`[realtime] Received ${payload.eventType} event for ${tableName}:`, payload);
       
-      // Only process changes for the current user
-      if (payload.new?.user_id !== userId && payload.old?.user_id !== userId) {
+      // Verify the change is for the current user (additional safety check)
+      // The filter in the subscription should already handle this, but we check again for safety
+      const rowUserId = payload.new?.user_id || payload.old?.user_id;
+      if (rowUserId !== userId) {
+        console.warn(`[realtime] Ignoring ${tableName} change for different user: ${rowUserId} !== ${userId}`);
         return;
       }
 
@@ -930,7 +933,12 @@ export async function setupRealtimeSubscriptions(
     
     for (const table of tables) {
       const channel = supabase
-        .channel(`${table}-changes`)
+        .channel(`${table}-changes-${userId}`, {
+          config: {
+            broadcast: { self: true },
+            presence: { key: userId }
+          }
+        })
         .on(
           'postgres_changes',
           {
@@ -939,17 +947,22 @@ export async function setupRealtimeSubscriptions(
             table: table,
             filter: `user_id=eq.${userId}`,
           },
-          (payload) => handleChange(payload, table)
+          (payload) => {
+            console.log(`[realtime] Received ${payload.eventType} event for ${table}:`, payload);
+            handleChange(payload, table);
+          }
         )
-        .subscribe((status) => {
+        .subscribe((status, err) => {
           if (status === 'SUBSCRIBED') {
-            console.log(`[realtime] Subscribed to ${table} changes`);
+            console.log(`[realtime] Successfully subscribed to ${table} changes`);
           } else if (status === 'CHANNEL_ERROR') {
-            console.error(`[realtime] Error subscribing to ${table}:`, status);
+            console.error(`[realtime] Error subscribing to ${table}:`, err);
           } else if (status === 'TIMED_OUT') {
             console.warn(`[realtime] Timeout subscribing to ${table}`);
           } else if (status === 'CLOSED') {
             console.log(`[realtime] Channel closed for ${table}`);
+          } else {
+            console.log(`[realtime] Channel status for ${table}:`, status);
           }
         });
 

@@ -11,6 +11,11 @@ if (supabaseUrl && supabaseAnonKey) {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true
+    },
+    realtime: {
+      params: {
+        eventsPerSecond: 10
+      }
     }
   });
 } else if (import.meta.env.DEV) {
