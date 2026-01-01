@@ -173,6 +173,7 @@
         await saveAndSyncKanban();
         
         // Verify deletion persisted
+        if (!activeWorkspaceId) return;
         const saved = await db.getKanbanByWorkspaceId(activeWorkspaceId);
         const savedCol = saved?.columns.find(c => c.id === col.id);
         const savedTaskCount = savedCol?.tasks.length || 0;

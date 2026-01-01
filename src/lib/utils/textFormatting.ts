@@ -215,7 +215,7 @@ export function linkifyEditor(editorDiv: HTMLElement): void {
     for (let i = textNodes.length - 1; i >= 0; i--) {
         const textNode = textNodes[i];
         if (textNode.parentNode && textNode.textContent) {
-            let parent = textNode.parentNode;
+            let parent: ParentNode | null = textNode.parentNode;
             let isInsideLink = false;
             while (parent && parent !== editorDiv) {
                 if (parent instanceof Element && 

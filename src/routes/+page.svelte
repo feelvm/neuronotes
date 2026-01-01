@@ -1712,19 +1712,20 @@
         style="--notes-width: {notesPanelWidth}%; --calendar-height: {calendarPanelHeight}%; --calendar-width: {calendarPanelWidth}%"
     >
         {#if showNotes}
-        <NotesPanel
-            isMinimized={isNotesMinimized}
-            {activeWorkspaceId}
-            onToggleMinimized={toggleNotesMinimized}
-            onSyncIfLoggedIn={syncIfLoggedIn}
-            onLoadActiveWorkspaceData={loadActiveWorkspaceData}
-            bind:notesPanelClientWidth
-            style="height: 100%;"
-        />
+        <div style="height: 100%;">
+            <NotesPanel
+                isMinimized={isNotesMinimized}
+                {activeWorkspaceId}
+                onToggleMinimized={toggleNotesMinimized}
+                onSyncIfLoggedIn={syncIfLoggedIn}
+                onLoadActiveWorkspaceData={loadActiveWorkspaceData}
+                bind:notesPanelClientWidth
+            />
+        </div>
         {/if}
 
         {#if showNotes && showCalendar && showKanban}
-        <div class="resizer-wrapper vertical" class:hidden={isNotesMinimized} on:mousedown={startVerticalResize} title="Resize">
+        <div class="resizer-wrapper vertical" class:hidden={isNotesMinimized} on:mousedown={startVerticalResize} title="Resize" role="button" aria-label="Resize panels" tabindex="0">
             <div class="panel-resizer-pill">
                 <div class="dot"></div>
                 <div class="dot"></div>
@@ -1757,6 +1758,9 @@
                 class:hidden={isCalendarMinimized || isKanbanMinimized}
                 on:mousedown={startHorizontalResize}
                 title="Resize"
+                role="button"
+                aria-label="Resize panels"
+                tabindex="0"
             >
                 <div class="panel-resizer-pill">
                     <div class="dot"></div>

@@ -753,6 +753,10 @@ export async function setupRealtimeSubscriptions(
               let contentHTML = row.content_html || '';
               
               try {
+                if (!supabase) {
+                  console.warn(`[realtime] Cannot fetch note_content: supabase is null`);
+                  break;
+                }
                 const { data: contentData } = await supabase
                   .from('note_content')
                   .select('content_html')
@@ -801,6 +805,10 @@ export async function setupRealtimeSubscriptions(
             
             case 'note_content':
               // Update the note's content when note_content changes
+              if (!supabase) {
+                console.warn(`[realtime] Cannot fetch note: supabase is null`);
+                break;
+              }
               const { data: noteData } = await supabase
                 .from('notes')
                 .select('*')
