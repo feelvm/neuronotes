@@ -1784,10 +1784,22 @@
             ]);
             folders = loadedFolders.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
             notes = loadedNotes;
-            const initialSelectedId =
-                loadedNotes.find((n) => n.id === selectedNoteSetting?.value)?.id ??
-                loadedNotes.find((n) => n.folderId === null)?.id ??
-                '';
+            
+            // Find the note to restore, but only if it belongs to the current folder context
+            let initialSelectedId = '';
+            if (selectedNoteSetting?.value) {
+                const savedNote = loadedNotes.find((n) => n.id === selectedNoteSetting.value);
+                // Only restore if the note belongs to the current folder context
+                if (savedNote && savedNote.folderId === currentFolderId) {
+                    initialSelectedId = savedNote.id;
+                }
+            }
+            
+            // If no saved note matches current folder, and we're in root view, try to restore first root note
+            if (!initialSelectedId && currentFolderId === null) {
+                initialSelectedId = loadedNotes.find((n) => n.folderId === null)?.id ?? '';
+            }
+            
             // Restore selected note - use selectNote() to properly open it
             if (initialSelectedId) {
                 // Clear selectedNoteId first so selectNote() will properly load the note
