@@ -173,7 +173,6 @@
         await saveAndSyncKanban();
         
         // Verify deletion persisted
-        if (!activeWorkspaceId) return;
         const saved = await db.getKanbanByWorkspaceId(activeWorkspaceId);
         const savedCol = saved?.columns.find(c => c.id === col.id);
         const savedTaskCount = savedCol?.tasks.length || 0;
@@ -745,7 +744,7 @@
             overflow: visible !important;
             max-height: none !important;
             height: auto !important;
-            min-height: 300px !important;
+            min-height: 0 !important;
         }
 
         .kanban-board {
@@ -753,11 +752,9 @@
             gap: 8px;
             overflow-x: auto !important;
             overflow-y: visible !important;
-            -webkit-overflow-scrolling: touch;
             touch-action: pan-x;
-            flex: 1 1 0 !important;
-            min-height: 200px !important;
-            max-height: none !important;
+            flex: 0 0 auto !important;
+            min-height: 0 !important;
         }
 
         .kanban-col {
@@ -766,9 +763,14 @@
             max-width: 220px;
             height: auto !important;
             max-height: none !important;
-            min-height: 300px;
+            min-height: 200px;
             display: flex;
             flex-direction: column;
+            overflow: visible !important;
+        }
+        
+        .kanban-tasks {
+            min-height: calc(2 * (35px + 6px)) !important;
         }
 
         .kanban-col-header {
@@ -780,12 +782,10 @@
         .kanban-tasks {
             padding: 6px;
             gap: 6px;
-            overflow-y: auto !important;
-            overflow-x: hidden !important;
-            -webkit-overflow-scrolling: touch;
-            flex: 1 1 0 !important;
-            min-height: 150px !important;
-            max-height: calc(100vh - 200px) !important;
+            overflow: visible !important;
+            touch-action: manipulation !important;
+            flex: 0 0 auto !important;
+            min-height: 0 !important;
         }
 
         .kanban-task {

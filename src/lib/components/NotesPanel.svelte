@@ -1886,12 +1886,13 @@
                 // Reload notes data when notes, folders, or workspaces are updated
                 if (tableName === 'notes' || tableName === 'note_content' || tableName === 'folders' || tableName === 'workspaces') {
                     // Check if the updated note is currently selected
+                    // changedId is now the note_id for both 'notes' and 'note_content' updates
                     const isSelectedNote = selectedNoteId === changedId;
                     const isCurrentlyEditing = isSelectedNote && 
                         editorDiv && 
                         document.activeElement === editorDiv;
                     
-                    if (isSelectedNote && tableName === 'notes') {
+                    if (isSelectedNote && (tableName === 'notes' || tableName === 'note_content')) {
                         // This is the currently selected note - update it carefully
                         try {
                             const updatedNotes = await db.getNotesByWorkspaceId(activeWorkspaceId!);
@@ -1900,6 +1901,18 @@
                                 const noteIndex = notes.findIndex(n => n.id === changedId);
                                 if (noteIndex !== -1) {
                                     const currentNote = notes[noteIndex];
+                                    
+                                    // For note_content updates, also fetch the latest content
+                                    if (tableName === 'note_content' && updatedNote.type === 'text') {
+                                        try {
+                                            const latestContent = await db.getNoteContent(changedId);
+                                            if (latestContent) {
+                                                updatedNote.contentHTML = latestContent;
+                                            }
+                                        } catch (e) {
+                                            console.warn('Failed to fetch updated note content:', e);
+                                        }
+                                    }
                                     
                                     if (isCurrentlyEditing) {
                                         // User is actively typing - update metadata but preserve editor content
@@ -1919,10 +1932,25 @@
                                             const sanitized = (browser && DOMPurify) 
                                                 ? sanitizeHTML(updatedNote.contentHTML || '')
                                                 : (updatedNote.contentHTML || '');
-                                            editorDiv.innerHTML = sanitized;
-                                            // Update note history
-                                            if (updatedNote.contentHTML && !noteHistory.has(changedId)) {
-                                                saveNoteHistory(changedId, updatedNote.contentHTML);
+                                            
+                                            // Only update if content actually changed to avoid cursor position issues
+                                            if (editorDiv.innerHTML !== sanitized) {
+                                                editorDiv.innerHTML = sanitized;
+                                                
+                                                // Re-initialize interactions after content update
+                                                tick().then(() => {
+                                                    if (editorDiv && browser) {
+                                                        linkifyEditor(editorDiv);
+                                                        initializeImageInteractions();
+                                                        initializeCheckboxInteractions();
+                                                    }
+                                                    updateFormattingState();
+                                                });
+                                                
+                                                // Update note history
+                                                if (updatedNote.contentHTML && !noteHistory.has(changedId)) {
+                                                    saveNoteHistory(changedId, updatedNote.contentHTML);
+                                                }
                                             }
                                         }
                                         console.log(`[NotesPanel] Note ${changedId} updated from Realtime (updated editor content)`);

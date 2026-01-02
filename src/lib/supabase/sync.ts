@@ -753,10 +753,6 @@ export async function setupRealtimeSubscriptions(
               let contentHTML = row.content_html || '';
               
               try {
-                if (!supabase) {
-                  console.warn(`[realtime] Cannot fetch note_content: supabase is null`);
-                  break;
-                }
                 const { data: contentData } = await supabase
                   .from('note_content')
                   .select('content_html')
@@ -805,10 +801,6 @@ export async function setupRealtimeSubscriptions(
             
             case 'note_content':
               // Update the note's content when note_content changes
-              if (!supabase) {
-                console.warn(`[realtime] Cannot fetch note: supabase is null`);
-                break;
-              }
               const { data: noteData } = await supabase
                 .from('notes')
                 .select('*')
@@ -930,7 +922,12 @@ export async function setupRealtimeSubscriptions(
 
         // Notify that data changed - reload UI
         // Pass the table name and changed ID so the UI can update more intelligently
-        await onDataChange(tableName, payload.new?.id || payload.old?.id);
+        // For note_content, pass the note_id instead of the note_content row id
+        let changedId = payload.new?.id || payload.old?.id;
+        if (tableName === 'note_content') {
+          changedId = payload.new?.note_id || payload.old?.note_id || changedId;
+        }
+        await onDataChange(tableName, changedId);
       } catch (error) {
         console.error(`[realtime] Error handling ${tableName} change:`, error);
       }
