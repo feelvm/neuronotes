@@ -23,6 +23,7 @@
     export let onToggleSettingsDropdown: () => void;
     export let onShowBackupModal: () => void;
     export let onShowEditPanelsModal: () => void;
+    export let onShowPreferencesModal: () => void;
 
     import { onMount } from 'svelte';
 
@@ -215,6 +216,9 @@
                     </button>
                     <button class="settings-item" on:click={() => { onToggleSettingsDropdown(); onShowEditPanelsModal(); }}>
                         Edit Panels
+                    </button>
+                    <button class="settings-item" on:click={() => { onToggleSettingsDropdown(); onShowPreferencesModal(); }}>
+                        Preferences
                     </button>
                 </div>
             {/if}

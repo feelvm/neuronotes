@@ -21,6 +21,7 @@
     import BackupModal from '$lib/components/BackupModal.svelte';
     import NavigationBar from '$lib/components/NavigationBar.svelte';
     import EditPanelsModal from '$lib/components/EditPanelsModal.svelte';
+    import PreferencesModal from '$lib/components/PreferencesModal.svelte';
     import WorkspaceModal from '$lib/components/WorkspaceModal.svelte';
     import CalendarPanel from '$lib/components/CalendarPanel.svelte';
     import KanbanPanel from '$lib/components/KanbanPanel.svelte';
@@ -80,6 +81,7 @@
     let showCalendar = true;
     let showKanban = true;
     let showEditPanelsModal = false;
+    let showPreferencesModal = false;
     let savePanelSelection = false;
     
     $: {
@@ -1572,6 +1574,7 @@
         onToggleSettingsDropdown={() => showSettingsDropdown = !showSettingsDropdown}
         onShowBackupModal={() => showBackupModal = true}
         onShowEditPanelsModal={() => showEditPanelsModal = true}
+        onShowPreferencesModal={() => showPreferencesModal = true}
     />
 
     <BackupModal
@@ -1691,6 +1694,14 @@
         }}
     />
 
+    <PreferencesModal
+        open={showPreferencesModal}
+        onClose={() => showPreferencesModal = false}
+        onDone={() => {
+            // Preference changes will be handled here when options are added
+        }}
+    />
+
     <WorkspaceModal
         open={showWorkspaceModal}
         bind:workspaceName
@@ -1702,7 +1713,7 @@
         bind:this={mainEl}
         class="main"
         class:notes-maximized={notesPanelWidth > 90}
-        class:blurred={showLoginModal || showSignupModal || showEditPanelsModal || showWorkspaceModal}
+        class:blurred={showLoginModal || showSignupModal || showEditPanelsModal || showPreferencesModal || showWorkspaceModal}
         class:notes-only={showNotes && !showCalendar && !showKanban}
         class:calendar-only={!showNotes && showCalendar && !showKanban}
         class:kanban-only={!showNotes && !showCalendar && showKanban}

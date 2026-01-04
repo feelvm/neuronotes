@@ -2589,20 +2589,66 @@
                                         }
                                     }}
                                     on:focus={async () => {
-                                        await tick();
-                                        // Linkify any URLs when editor gains focus
-                                        if (editorDiv && browser) {
-                                            try {
-                                                linkifyEditor(editorDiv);
-                                                if (currentNote) {
-                                                    currentNote.contentHTML = editorDiv.innerHTML;
-                                                }
-                                            } catch (err) {
-                                                console.warn('Linkify error on focus:', err);
-                                            }
-                                        }
                                         updateFormattingState();
                                         updateSelectedFontSize();
+                                        
+                                        // Defer linkify operation to avoid interfering with click/focus
+                                        // Wait long enough for the click to complete and cursor to be positioned
+                                        setTimeout(() => {
+                                            if (editorDiv && browser && document.activeElement === editorDiv) {
+                                                // Save cursor position right before linkifying (after click has settled)
+                                                const selection = window.getSelection();
+                                                let savedRange: Range | null = null;
+                                                
+                                                if (selection && selection.rangeCount > 0) {
+                                                    const currentRange = selection.getRangeAt(0);
+                                                    // Only save if it's a collapsed cursor (not a selection)
+                                                    if (currentRange.collapsed) {
+                                                        savedRange = currentRange.cloneRange();
+                                                    }
+                                                }
+                                                
+                                                try {
+                                                    const contentBefore = editorDiv.innerHTML;
+                                                    linkifyEditor(editorDiv);
+                                                    const contentAfter = editorDiv.innerHTML;
+                                                    
+                                                    // Only update and restore if content actually changed
+                                                    if (contentBefore !== contentAfter) {
+                                                        if (currentNote) {
+                                                            currentNote.contentHTML = contentAfter;
+                                                        }
+                                                        
+                                                        // Restore cursor position if we saved it
+                                                        if (savedRange && selection) {
+                                                            try {
+                                                                selection.removeAllRanges();
+                                                                selection.addRange(savedRange);
+                                                            } catch (err) {
+                                                                // If range is invalid, try to place cursor at a reasonable position
+                                                                const range = document.createRange();
+                                                                if (editorDiv.childNodes.length > 0) {
+                                                                    const lastNode = editorDiv.childNodes[editorDiv.childNodes.length - 1];
+                                                                    if (lastNode.nodeType === Node.TEXT_NODE) {
+                                                                        range.setStart(lastNode, lastNode.textContent?.length || 0);
+                                                                    } else {
+                                                                        range.selectNodeContents(lastNode);
+                                                                        range.collapse(false);
+                                                                    }
+                                                                } else {
+                                                                    range.setStart(editorDiv, 0);
+                                                                }
+                                                                range.collapse(true);
+                                                                selection.removeAllRanges();
+                                                                selection.addRange(range);
+                                                            }
+                                                        }
+                                                    }
+                                                } catch (err) {
+                                                    console.warn('Linkify error on focus:', err);
+                                                }
+                                            }
+                                        }, 150);
                                     }}
                                     on:blur={() => {
                                         // Linkify URLs when editor loses focus
