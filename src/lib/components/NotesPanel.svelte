@@ -1337,6 +1337,7 @@
                     name: originalFolder.name,
                     workspaceId: workspaceId,
                     order: index
+                    // Note: folders don't have updatedAt, but we should still update them
                 };
                 return { 
                     ...updatedFolder,
@@ -1356,7 +1357,8 @@
                 // Use position in mixed list for unified ordering
                 const updatedNote: Note = {
                     ...originalNote,
-                    order: index
+                    order: index,
+                    updatedAt: Date.now() // Update timestamp to prevent realtime from overwriting
                 };
                 return { 
                     ...updatedNote,
@@ -1405,14 +1407,14 @@
             notes = notes.map((n) => {
                 const updatedNote = updatedNotes.find((un) => un.id === n.id);
                 return updatedNote && n.folderId === null 
-                    ? { ...n, order: updatedNote.order } 
+                    ? { ...n, order: updatedNote.order, updatedAt: updatedNote.updatedAt } 
                     : { ...n };
             });
         } else {
             notes = notes.map((n) => {
                 const updatedNote = updatedNotes.find((un) => un.id === n.id);
                 return updatedNote && n.folderId === currentFolderId
-                    ? { ...n, order: updatedNote.order }
+                    ? { ...n, order: updatedNote.order, updatedAt: updatedNote.updatedAt }
                     : { ...n };
             });
         }

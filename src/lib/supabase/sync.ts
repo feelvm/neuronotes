@@ -779,11 +779,13 @@ export async function setupRealtimeSubscriptions(
               const noteType: 'text' | 'spreadsheet' = row.type === 'spreadsheet' && spreadsheetData ? 'spreadsheet' : 'text';
               const remoteUpdatedAt = row.updated_at ? toTimestamp(row.updated_at) : Date.now();
 
-              // Check if local version is newer - if so, skip to avoid overwriting
+              // Check if local version is newer or equal - if so, skip to avoid overwriting
+              // This prevents flickering when we push changes and receive them back via realtime
               const localNotes = await db.getNotesByWorkspaceId(row.workspace_id);
               const localNote = localNotes.find(n => n.id === row.id);
-              if (localNote && localNote.updatedAt > remoteUpdatedAt) {
-                return; // Local is newer, skip
+              if (localNote && localNote.updatedAt >= remoteUpdatedAt) {
+                console.log(`[realtime] Skipping note update for ${row.id}: local updatedAt (${localNote.updatedAt}) >= remote (${remoteUpdatedAt})`);
+                return; // Local is newer or equal, skip
               }
 
               await db.putNote({
